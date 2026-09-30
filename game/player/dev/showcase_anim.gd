@@ -14,9 +14,10 @@ const SHOTS: Array[StringName] = [
 	&"cheer", &"wave", &"sad", &"pop", &"respawn",
 ]
 const TOUR_FRAMES := 170
+## The hero wears one item in every slot, so the shots show items following the animation.
 const LOADOUTS: Array[Dictionary] = [
-	{"primary": "#ff5a5f", "secondary": "#ffe0c2"},
-	{"primary": "#3fa9f5", "secondary": "#d6ecff"},
+	{"primary": "#e0303a", "secondary": "#fff1c1", "hat": "top_hat", "face": "round_glasses", "neck": "scarf", "back": "cape"},
+	{"primary": "#2f7fe0", "secondary": "#cde8ff", "hat": "wizard", "face": "", "neck": "", "back": ""},
 ]
 
 var hero: Player
