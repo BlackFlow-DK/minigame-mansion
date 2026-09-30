@@ -1,0 +1,27 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://ui/round/name_tag.gd" id="1_name_tag"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_dot"]
+radius = 0.09
+height = 0.18
+radial_segments = 16
+rings = 8
+
+[node name="NameTag" type="Node3D"]
+script = ExtResource("1_name_tag")
+
+[node name="Name" type="Label3D" parent="."]
+position = Vector3(0, 0.2, 0)
+pixel_size = 0.0065
+billboard = 1
+no_depth_test = true
+render_priority = 10
+outline_render_priority = 9
+font_size = 64
+outline_size = 18
+text = "Player"
+
+[node name="Dot" type="MeshInstance3D" parent="."]
+cast_shadow = 0
+mesh = SubResource("SphereMesh_dot")
