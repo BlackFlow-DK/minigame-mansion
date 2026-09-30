@@ -32,7 +32,7 @@ const ITEMS: Array[Dictionary] = [
 	{"id": "viking", "slot": "hat", "name": "Viking Helmet", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "flower_pot", "slot": "hat", "name": "Flower Pot", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "traffic_cone", "slot": "hat", "name": "Traffic Cone", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
-	{"id": "cat_ears", "slot": "hat", "name": "Cat Ears", "offset": Vector3(0.0, -0.01, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.07, 1.0, 1.05)},
+	{"id": "cat_ears", "slot": "hat", "name": "Cat Ears", "offset": Vector3(0.0, -0.01, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	# --- face (FaceSocket, between the eyes on the surface at (0, 0.68, 0.37)) ------------
 	{"id": "round_glasses", "slot": "face", "name": "Round Glasses", "offset": Vector3(0.0, 0.0, 0.005), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.04, 1.04, 1.04)},
 	{"id": "star_shades", "slot": "face", "name": "Star Shades", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
