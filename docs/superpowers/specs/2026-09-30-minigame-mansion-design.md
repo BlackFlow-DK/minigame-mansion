@@ -24,6 +24,14 @@ Blob characters: a capsule body with eyes, a player colour and one of a few hats
 - The default action is a short shove that pushes other players. A minigame may replace the action or disable jump.
 - Third-person camera fixed per minigame (arena view), so there is no camera control to learn.
 
+## Character detail and customisation (added on approval, 2026-09-30)
+
+The blob is as detailed as the style allows: body, eyes with pupils and blinking lids, mouth, cheeks, floating hands and feet, all animated in code. A wardrobe screen with a live 3D preview lets each player pick two body colours and one item per slot: hat, face (glasses, moustache), neck (scarf, bow tie) and back (cape, backpack). The choice is saved locally and shown to everyone in the game. Several agents work only on looks: the character, the cosmetics, the environments, and lighting and effects.
+
+## Build method (added on approval)
+
+One agent per system, in parallel, each in its own git worktree, all building against `docs/contract.md`. The orchestrator writes the contract, merges, and reviews.
+
 ## Minigames in v1
 
 All four use the shared controller, so they are cheap to build and immediately familiar.
