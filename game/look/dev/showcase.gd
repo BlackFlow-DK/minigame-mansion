@@ -195,7 +195,7 @@ func _build_props() -> void:
 	var pot := _add_mesh(props, _cylinder(0.75, 0.5, 24), Vector3(5.2, 0.25, 1.0), Look.CHARCOAL)
 	var lava := MeshInstance3D.new()
 	lava.mesh = _cylinder(0.62, 0.05, 24)
-	lava.position = Vector3(0, 0.25, 0)
+	lava.position = Vector3(0, 0.27, 0)
 	lava.material_override = load("res://look/materials/lava.tres")
 	pot.add_child(lava)
 	Look.apply_toon(props)

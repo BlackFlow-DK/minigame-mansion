@@ -356,7 +356,7 @@ static func _explosion(fx: FxEffect) -> void:
 	flash.scale_amount_max = 1.8
 	flash.scale_amount_curve = _curve(&"pop")
 	fx.add_emitter(flash, true)
-	var fire := _emitter(16, 1.0, _mesh(&"puff"), _lit(0.9), Color(1, 1, 1))
+	var fire := _emitter(16, 1.0, _mesh(&"puff"), _lit(0.55), Color(1, 1, 1))
 	fire.color_ramp = _gradient(&"fire")
 	fire.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	fire.emission_sphere_radius = 0.5
@@ -705,7 +705,7 @@ static func _gradient(kind: StringName) -> Gradient:
 			g.set_color(1, Color(1, 1, 1, 0))
 			g.add_point(0.5, Color(1, 1, 1, 0.8))
 		&"fire":
-			g.set_color(0, Color(1.0, 0.85, 0.45))
+			g.set_color(0, Color(1.0, 0.76, 0.36))
 			g.set_color(1, Color(0.22, 0.19, 0.23))
 			g.add_point(0.12, Color(1.0, 0.62, 0.2))
 			g.add_point(0.35, Color(0.95, 0.36, 0.14))

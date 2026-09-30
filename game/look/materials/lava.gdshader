@@ -102,7 +102,7 @@ void fragment() {
 	vec3 molten = mix(molten_color.rgb, hot_color.rgb, crest * 0.6);
 	// the glowing rim hugging each plate
 	float rim = crusted * (1.0 - smoothstep(0.02, 0.1 + aa, v.y));
-	molten = mix(molten, hot_color.rgb, rim);
+	molten = mix(molten, hot_color.rgb, rim * 0.65);
 	vec3 crust = crust_color.rgb * (0.85 + 0.3 * v.z);
 	vec3 col = mix(molten, crust, plate);
 	float glow = (1.0 - plate) * (0.75 + 0.35 * crest + 0.6 * rim);
