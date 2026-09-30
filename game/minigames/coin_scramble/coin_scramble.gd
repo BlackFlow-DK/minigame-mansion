@@ -63,6 +63,8 @@ const SPIN_KEYS: Array[Vector2] = [
 	Vector2(26.0, 1.45), Vector2(27.5, -1.45), Vector2(35.0, -1.45), Vector2(36.0, -2.0),
 ]
 const GOLD := Color(1.0, 0.8, 0.25)
+## Seconds (host, Session-scaled) between batched request_bot_rethink calls.
+const RETHINK_INTERVAL := 0.25
 const BUMPER_NOTES: Array[StringName] = [&"piano_c", &"piano_e", &"piano_g", &"piano_b"]
 
 # --- Tuning -----------------------------------------------------------------------------------
@@ -110,8 +112,9 @@ const BUMPER_NOTES: Array[StringName] = [&"piano_c", &"piano_e", &"piano_g", &"p
 @export var bumper_cooldown: float = 0.35
 
 @export_group("Test")
-## Test-only: multiplies the round clock (rain, spinner, time limit). Also multiplied by
-## Session.time_scale so Session's time-limit backstop and this clock agree.
+## Test-only: multiplies the round clock (rain, spinner, time limit). The per-peer clock
+## (spinner, time limit) also follows Session.time_scale, so it agrees with Session's
+## backstop; the host's rain uses `_host_tick`'s delta, which Session already scales.
 @export var time_scale: float = 1.0
 ## Test-only: when false the host rains no coins (tests place coins with spawn_rain_coin).
 @export var rain_enabled: bool = true
@@ -141,6 +144,10 @@ var _next_id: int = 1
 var _rain_timer: float = 0.0
 var _opening_left: int = 0
 var _rush_announced: bool = false
+## Host: the coins changed since the bots last re-planned; batched to one request per
+## RETHINK_INTERVAL so a rain burst does not spam.
+var _rethink_pending: bool = false
+var _rethink_cd: float = 0.0
 ## slot -> round time of that player's last drop (host).
 var _last_drop: Dictionary[int, float] = {}
 ## slot -> seconds until that player can be hit by the bar / a bumper again (local players).
@@ -201,8 +208,13 @@ func _host_tick(delta: float) -> void:
 		return
 	_rescue_fallen()
 	if rain_enabled:
-		_rain(delta * _clock_scale())
+		_rain(delta * time_scale)  # Session already scales _host_tick's delta
 	_collect()
+	_rethink_cd -= delta
+	if _rethink_pending and _rethink_cd <= 0.0:
+		_rethink_pending = false
+		_rethink_cd = RETHINK_INTERVAL
+		request_bot_rethink()
 	if time_limit > 0.0 and _t >= time_limit:
 		end_round()
 
@@ -375,6 +387,7 @@ func _rpc_collect(id: int, slot: int, new_count: int) -> void:
 		value = c.value
 		_pieces.erase(id)
 		c.queue_free()
+		_rethink_pending = true
 	else:
 		var p := _player(slot)
 		if p:
@@ -664,6 +677,7 @@ func _add_coin(c: Node3D) -> void:
 	piece.time_scale = _clock_scale()
 	piece.name = "Coin%d" % piece.id
 	_pieces[piece.id] = piece
+	_rethink_pending = true
 	_coins_root.add_child(piece)
 	coin_spawned.emit(piece.id)
 

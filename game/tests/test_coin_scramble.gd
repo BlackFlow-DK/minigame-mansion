@@ -304,11 +304,16 @@ func _bot_round(count: int, seed_value: int) -> void:
 		last[s] = c)
 	var bar_jumps := {}
 	var max_coins := 0
+	var frames := 0
+	var at_cap := 0
 	for i in 60 * 50:
 		if mg.is_finished():
 			break
 		await step(1, func(_f: int) -> void: brain.fill_intent(ps[0].intent, physics_delta()))
 		max_coins = maxi(max_coins, mg.coin_ids().size())
+		frames += 1
+		if mg.coin_ids().size() >= mg.coin_cap:
+			at_cap += 1
 		var a := CoinScramble.spinner_angle(mg.round_time(), mg._dir, mg._speed)
 		for p in ps:
 			var feet := p.global_position
@@ -332,5 +337,7 @@ func _bot_round(count: int, seed_value: int) -> void:
 	assert_true(total >= count * 2, "coins were collected (total %d)" % total)
 	assert_true(scores[0] > scores[scores.size() - 1], "a spread of scores %s" % str(scores))
 	assert_true(max_coins <= mg.coin_cap + 20, "floor coin count stays near the cap (max %d)" % max_coins)
-	print("  coin_scramble bots x%d: ranking %s scores %s, total %d, pickups %d, dropped %d, hits %s, bots over the bar %d, max floor coins %d" % [
-		count, str(ranking), str(scores), total, collected.size(), dropped[0], str(hits), bar_jumps.size(), max_coins])
+	var cap_share := float(at_cap) / maxf(frames, 1.0)
+	assert_true(cap_share < 0.5, "the floor does not sit at the cap (%d%% of the round)" % int(cap_share * 100.0))
+	print("  coin_scramble bots x%d: ranking %s scores %s, total %d, pickups %d, dropped %d, hits %s, bots over the bar %d, max floor coins %d, at cap %d%%" % [
+		count, str(ranking), str(scores), total, collected.size(), dropped[0], str(hits), bar_jumps.size(), max_coins, int(cap_share * 100.0)])
