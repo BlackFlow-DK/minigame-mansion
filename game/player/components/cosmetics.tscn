@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://player/components/cosmetics.gd" id="1_script"]
+
+[node name="cosmetics" type="Node3D"]
+script = ExtResource("1_script")
