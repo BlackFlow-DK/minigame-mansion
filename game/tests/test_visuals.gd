@@ -295,3 +295,25 @@ func test_remote_copy_animates_from_replicated_state() -> void:
 	r.receive_event(&"respawned", [Transform3D(Basis.IDENTITY, Vector3(2.0, 0.0, 0.0))])
 	await step(2)
 	assert_eq(vis.get_reaction(), &"respawn", "remote respawn")
+
+
+func test_look_targets_that_leave_the_tree_are_dropped() -> void:
+	var ps := spawn_arena(2)
+	var a := ps[0]
+	var b := ps[1]
+	# b stands right next to a, so it is the nearest player a glances at.
+	b.place_at(Transform3D(Basis.IDENTITY, a.global_position + Vector3(1.0, 0.0, 0.0)))
+	var target := Node3D.new()
+	add_child(target)
+	target.global_position = a.global_position + Vector3(0.0, 0.6, 3.0)
+	_vis(a).set_look_target(target)
+	await step(40)
+	# A player leaves the tree (left / stage change) and the look target is freed.
+	var holder := b.get_parent()
+	holder.remove_child(b)
+	target.free()
+	await step(40)
+	var pupil := (_vis(a).get_model_root().get_node("PupilL") as Node3D).position
+	assert_true(pupil.is_finite(), "pupils still animate")
+	holder.add_child(b)  # back for the harness teardown
+	await step(2)
