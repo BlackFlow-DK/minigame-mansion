@@ -48,6 +48,10 @@ static var quality: Quality = Quality.HIGH
 static var _quality_from_args := false
 static var _outline: ShaderMaterial
 static var _outlined: Array[WeakRef] = []
+## [source mesh, weight] -> outline-ready copy (holds both, so neither is freed while cached).
+static var _outline_meshes: Dictionary = {}
+## Prints one line per prepared mesh (size, fill, open, weight) for tuning the opt-outs.
+static var outline_debug: bool = false
 
 
 ## Current quality. The first call reads `--quality=low|high` from the user args.
@@ -105,6 +109,8 @@ static func apply_toon(root: Node3D, outline: bool = true) -> int:
 	for mi in meshes:
 		if mi.mesh == null:
 			continue
+		if outline:
+			prepare_outline(mi)
 		if mi.material_override:
 			var m := toon_from(mi.material_override, outline)
 			if m != mi.material_override:
@@ -118,6 +124,167 @@ static func apply_toon(root: Node3D, outline: bool = true) -> int:
 					mi.set_surface_override_material(s, m)
 					changed += 1
 	return changed
+
+
+## Outline weight of a mesh, from its size in metres (after the node scales above it) and its
+## mean thickness 2 * volume / area (a slab gives its thickness, a tube its radius). A hull
+## thicker than the part itself swamps it: thin parts (frames, chains, cloth, lids, cheeks),
+## tiny parts (pupils, glints) and open sheets get weight 0.
+const OUTLINE_MIN_THICKNESS := 0.02
+const OUTLINE_MIN_SIZE := 0.07
+
+## Swaps `mi.mesh` for a cached copy that carries, per vertex, the averaged ("smoothed")
+## normal of every face meeting at that position in CUSTOM0.xyz and the mesh's outline
+## weight in CUSTOM0.w. The outline pushes along that normal, so split normals (hard edges,
+## UV seams, surface borders) no longer tear the hull into spikes; weight 0 (thin, tiny,
+## open or wiry parts) collapses the hull. Meshes never prepared get no outline at all.
+## Keeps surfaces, their materials (by object, so re-tinting by material name still works)
+## and names. Idempotent; one copy per source mesh and weight. Returns the weight.
+static func prepare_outline(mi: MeshInstance3D) -> float:
+	var mesh := mi.mesh
+	if mesh == null:
+		return 0.0
+	if mesh.has_meta(&"look_outline_weight"):
+		return mesh.get_meta(&"look_outline_weight")
+	if mesh is ArrayMesh and (mesh as ArrayMesh).get_blend_shape_count() > 0:
+		return 0.0  # morphing meshes would need the smoothing redone per shape
+	var weight := _outline_weight(mi)
+	var key := [mesh, weight]
+	var baked: ArrayMesh = _outline_meshes.get(key)
+	if baked == null:
+		baked = _bake_outline_mesh(mesh, weight)
+		if baked == null:
+			return 0.0
+		_outline_meshes[key] = baked
+	mi.mesh = baked
+	return weight
+
+
+static func _outline_weight(mi: MeshInstance3D) -> float:
+	var mesh := mi.mesh
+	var size := mesh.get_aabb().size
+	var scale := Vector3.ONE
+	var n: Node = mi
+	while n is Node3D:
+		scale *= (n as Node3D).transform.basis.get_scale()
+		n = n.get_parent()
+	size *= scale
+	var big := maxf(size.x, maxf(size.y, size.z))
+	var stats := _mesh_stats(mesh)
+	var uniform := pow(absf(scale.x * scale.y * scale.z), 1.0 / 3.0)
+	var thickness: float = 2.0 * float(stats["volume"]) / maxf(float(stats["area"]), 1e-9) * uniform
+	var open: bool = stats["open"]
+	var w := 1.0
+	if thickness < OUTLINE_MIN_THICKNESS or big < OUTLINE_MIN_SIZE or open:
+		w = 0.0
+	if outline_debug:
+		print("outline: %-14s size %s thick %.3f open %s -> %.0f" % [mi.name, str(size.snapped(Vector3.ONE * 0.001)), thickness, open, w])
+	return w
+
+
+## Volume (closed meshes), area, and whether the welded surface has border edges.
+static func _mesh_stats(mesh: Mesh) -> Dictionary:
+	var volume := 0.0
+	var area := 0.0
+	var edges: Dictionary = {}
+	for s in mesh.get_surface_count():
+		if _primitive(mesh, s) != Mesh.PRIMITIVE_TRIANGLES:
+			continue
+		var arrays := mesh.surface_get_arrays(s)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		var count := idx.size() if idx.size() > 0 else verts.size()
+		var keys := PackedInt64Array()
+		keys.resize(verts.size())
+		for i in verts.size():
+			keys[i] = _pos_key(verts[i])
+		for t in range(0, count - 2, 3):
+			var a := idx[t] if idx.size() > 0 else t
+			var b := idx[t + 1] if idx.size() > 0 else t + 1
+			var c := idx[t + 2] if idx.size() > 0 else t + 2
+			volume += verts[a].dot(verts[b].cross(verts[c])) / 6.0
+			area += (verts[b] - verts[a]).cross(verts[c] - verts[a]).length() * 0.5
+			for e in [[keys[a], keys[b]], [keys[b], keys[c]], [keys[c], keys[a]]]:
+				var lo: int = mini(e[0], e[1])
+				var hi: int = maxi(e[0], e[1])
+				if lo == hi:
+					continue
+				var ek := [lo, hi]
+				edges[ek] = int(edges.get(ek, 0)) + 1
+	var border := 0
+	for k in edges:
+		if int(edges[k]) == 1:
+			border += 1
+	# a few stray border edges (tiny holes, pinched poles) do not make a sheet
+	return {"volume": absf(volume), "area": area, "open": border > maxi(8, edges.size() / 50)}
+
+
+static func _primitive(mesh: Mesh, s: int) -> Mesh.PrimitiveType:
+	if mesh is ArrayMesh:
+		return (mesh as ArrayMesh).surface_get_primitive_type(s)
+	return Mesh.PRIMITIVE_TRIANGLES  # PrimitiveMesh and friends
+
+
+static func _pos_key(v: Vector3) -> int:
+	var q := Vector3i((v * 5000.0).round())
+	return ((q.x & 0x1fffff) << 42) | ((q.y & 0x1fffff) << 21) | (q.z & 0x1fffff)
+
+
+static func _bake_outline_mesh(mesh: Mesh, weight: float) -> ArrayMesh:
+	# angle-weighted normal sums per welded position, across every surface
+	var sums: Dictionary = {}
+	var surfaces: Array = []
+	for s in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(s)
+		surfaces.append(arrays)
+		if _primitive(mesh, s) != Mesh.PRIMITIVE_TRIANGLES:
+			continue
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		var count := idx.size() if idx.size() > 0 else verts.size()
+		for t in range(0, count - 2, 3):
+			var ids := PackedInt32Array([t, t + 1, t + 2])
+			if idx.size() > 0:
+				ids = PackedInt32Array([idx[t], idx[t + 1], idx[t + 2]])
+			var p0 := verts[ids[0]]
+			var p1 := verts[ids[1]]
+			var p2 := verts[ids[2]]
+			var fn := (p2 - p0).cross(p1 - p0)  # Godot winds front faces clockwise
+			if fn.length_squared() < 1e-20:
+				continue
+			fn = fn.normalized()
+			var corners := [[p0, p1, p2], [p1, p2, p0], [p2, p0, p1]]
+			for c in 3:
+				var e1: Vector3 = corners[c][1] - corners[c][0]
+				var e2: Vector3 = corners[c][2] - corners[c][0]
+				var angle := e1.angle_to(e2)
+				var k := _pos_key(verts[ids[c]])
+				sums[k] = (sums.get(k, Vector3.ZERO) as Vector3) + fn * angle
+	var out := ArrayMesh.new()
+	var flags := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
+	for s in mesh.get_surface_count():
+		var arrays: Array = surfaces[s]
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var normals: Variant = arrays[Mesh.ARRAY_NORMAL]
+		var custom := PackedFloat32Array()
+		custom.resize(verts.size() * 4)
+		for i in verts.size():
+			var sn: Vector3 = sums.get(_pos_key(verts[i]), Vector3.ZERO)
+			if sn.length_squared() < 1e-12:
+				sn = (normals as PackedVector3Array)[i] if normals != null else Vector3.UP
+			sn = sn.normalized()
+			custom[i * 4] = sn.x
+			custom[i * 4 + 1] = sn.y
+			custom[i * 4 + 2] = sn.z
+			custom[i * 4 + 3] = weight
+		arrays[Mesh.ARRAY_CUSTOM0] = custom
+		out.add_surface_from_arrays(_primitive(mesh, s), arrays, [], {}, flags)
+		out.surface_set_material(s, mesh.surface_get_material(s))
+		if mesh is ArrayMesh:
+			out.surface_set_name(s, (mesh as ArrayMesh).surface_get_name(s))
+	out.resource_name = mesh.resource_name
+	out.set_meta(&"look_outline_weight", weight)
+	return out
 
 
 ## The toon version of `src`: `src` itself when it already is toon or should not be touched

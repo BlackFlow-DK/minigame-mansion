@@ -216,6 +216,58 @@ func test_apply_toon_keeps_surface_colours() -> void:
 	root.queue_free()
 
 
+func test_outline_mesh_is_smoothed_cached_and_opts_out_thin_parts() -> void:
+	# a hard-edged box: 24 vertices, 3 normals per corner; one shared baked copy per source
+	var box := BoxMesh.new()
+	box.size = Vector3(0.4, 0.4, 0.4)
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "PlayerPrimary"
+	box.material = mat
+	var a := MeshInstance3D.new()
+	a.mesh = box
+	var b := MeshInstance3D.new()
+	b.mesh = box
+	add_child(a)
+	add_child(b)
+	assert_eq(Look.prepare_outline(a), 1.0, "solid box outlined")
+	Look.prepare_outline(b)
+	assert_true(a.mesh != box and a.mesh == b.mesh, "one cached copy per source mesh")
+	assert_eq(Look.prepare_outline(a), 1.0, "idempotent")
+	assert_true(a.mesh.surface_get_material(0) == mat, "surface material kept (tinting by name still works)")
+	var arrays := a.mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var custom: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM0]
+	assert_eq(custom.size(), verts.size() * 4, "CUSTOM0 per vertex")
+	# every copy of a corner pushes the same way: along the corner diagonal, no tearing
+	for i in verts.size():
+		var n := Vector3(custom[i * 4], custom[i * 4 + 1], custom[i * 4 + 2])
+		var diag := verts[i].sign().normalized()
+		assert_near(n, diag, 0.01, "smoothed normal at %s" % verts[i])
+		assert_eq(custom[i * 4 + 3], 1.0, "weight")
+	# thin plate (a lid, a cheek, cloth) and tiny part (a pupil): no hull
+	var plate := MeshInstance3D.new()
+	var thin := BoxMesh.new()
+	thin.size = Vector3(0.5, 0.01, 0.5)
+	plate.mesh = thin
+	add_child(plate)
+	assert_eq(Look.prepare_outline(plate), 0.0, "thin plate opts out")
+	var dot := MeshInstance3D.new()
+	var tiny := SphereMesh.new()
+	tiny.radius = 0.02
+	tiny.height = 0.04
+	dot.mesh = tiny
+	add_child(dot)
+	assert_eq(Look.prepare_outline(dot), 0.0, "tiny part opts out")
+	# node scale counts: the same plate scaled up 10x is thick enough
+	var big := MeshInstance3D.new()
+	big.mesh = thin
+	big.scale = Vector3.ONE * 10.0
+	add_child(big)
+	assert_eq(Look.prepare_outline(big), 1.0, "scaled-up plate outlined")
+	for n: Node in [a, b, plate, dot, big]:
+		n.queue_free()
+
+
 func test_quality_switch_drops_outline_and_post() -> void:
 	var look := STAGE_LOOK.instantiate() as StageLook
 	add_child(look)

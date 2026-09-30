@@ -30,6 +30,8 @@ static func apply(root: Node3D, outline: bool = true) -> int:
 		var mi := node as MeshInstance3D
 		if mi.mesh == null:
 			continue
+		if outline:
+			Look.prepare_outline(mi)  # smoothed-normal copy of the mesh (cached per source mesh)
 		if mi.material_override:
 			var m := toon_of(mi.material_override, outline)
 			if m != mi.material_override:
