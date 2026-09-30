@@ -1,0 +1,14 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://camera/dev/camera_sandbox.gd" id="1_sandbox"]
+[ext_resource type="PackedScene" path="res://stage/stage.tscn" id="2_stage"]
+[ext_resource type="PackedScene" path="res://camera/arena_camera.tscn" id="3_camera"]
+
+[node name="CameraSandbox" type="Node3D"]
+script = ExtResource("1_sandbox")
+
+[node name="Stage" parent="." instance=ExtResource("2_stage")]
+
+[node name="ArenaCamera" parent="." instance=ExtResource("3_camera")]
+bounds_mode = 2
+bounds_radius = 10.0
