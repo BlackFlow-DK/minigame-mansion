@@ -268,6 +268,27 @@ func test_outline_mesh_is_smoothed_cached_and_opts_out_thin_parts() -> void:
 		n.queue_free()
 
 
+func test_toon_copies_are_shared_and_freeing_models_logs_nothing() -> void:
+	# The dummy renderer logs "material is null" when a material dies with its node; toon
+	# copies are cached per source material, so freeing toon'd models is silent (the harness
+	# fails this test on any engine error).
+	var blob := load("res://assets/models/character/blob.glb") as PackedScene
+	var models: Array[Node3D] = []
+	for i in 3:
+		var m := blob.instantiate() as Node3D
+		add_child(m)
+		Look.apply_toon(m)
+		models.append(m)
+	var a := models[0].find_child("PupilR", true, false) as MeshInstance3D
+	var b := models[1].find_child("PupilR", true, false) as MeshInstance3D
+	assert_true(a.get_active_material(0).has_meta(Look.TOON_META), "toon applied")
+	assert_true(a.get_active_material(0) == b.get_active_material(0), "one toon copy per source material")
+	assert_true(Look.toon_material(Look.RED) == Look.toon_material(Look.RED), "toon_material shared per colour")
+	for m in models:
+		m.queue_free()
+	await step(4)
+
+
 func test_quality_switch_drops_outline_and_post() -> void:
 	var look := STAGE_LOOK.instantiate() as StageLook
 	add_child(look)
