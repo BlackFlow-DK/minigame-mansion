@@ -1,88 +1,131 @@
 [gd_scene format=3]
 
 [ext_resource type="Script" path="res://minigames/coin_scramble/coin_scramble.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://look/stage_look.tscn" id="2_look"]
+[ext_resource type="PackedScene" path="res://camera/arena_camera.tscn" id="3_cam"]
+[ext_resource type="PackedScene" path="res://assets/models/props/vault_floor_disc.glb" id="4_floor"]
+[ext_resource type="PackedScene" path="res://assets/models/props/vault_wall_segment.glb" id="5_wall"]
+[ext_resource type="PackedScene" path="res://assets/models/props/spinner_bar.glb" id="6_spinner"]
+[ext_resource type="PackedScene" path="res://assets/models/props/bumper_post.glb" id="7_bumper"]
+[ext_resource type="PackedScene" path="res://assets/models/props/treasure_chest.glb" id="8_chest"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-
-[sub_resource type="Sky" id="Sky_main"]
-sky_material = SubResource("ProceduralSkyMaterial_sky")
-
-[sub_resource type="Environment" id="Environment_main"]
-background_mode = 2
-sky = SubResource("Sky_main")
-ambient_light_source = 3
-reflected_light_source = 2
-tonemap_mode = 2
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
-size = Vector3(20, 1, 20)
-
-[sub_resource type="BoxMesh" id="BoxMesh_ground"]
-size = Vector3(20, 1, 20)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
-albedo_color = Color(0.788, 0.635, 0.153, 1)
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_floor"]
+height = 1.0
+radius = 10.0
 
 [node name="CoinScramble" type="Node3D"]
 script = ExtResource("1_script")
 title = "Coin Scramble"
-rule_text = "Grab the most coins. Shoves make players drop theirs!"
+rule_text = "Grab the most coins in 45 s. Get shoved and you drop some!"
 time_limit = 45.0
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_main")
+[node name="StageLook" parent="." instance=ExtResource("2_look")]
+preset = 0
 
-[node name="Sun" type="DirectionalLight3D" parent="."]
-rotation = Vector3(-0.9, 0.6, 0)
-shadow_enabled = true
-
-[node name="Camera3D" type="Camera3D" parent="."]
-position = Vector3(0, 14, 12)
-rotation = Vector3(-0.8622, 0, 0)
-fov = 50.0
+[node name="ArenaCamera" parent="." instance=ExtResource("3_cam")]
 current = true
+mode = 2
+pitch_degrees = 56.0
+fixed_focus = Vector3(0, 0, 0.8)
+fixed_distance = 21.0
 
-[node name="Ground" type="StaticBody3D" parent="."]
-position = Vector3(0, -0.5, 0)
+[node name="Floor" type="StaticBody3D" parent="."]
 collision_mask = 0
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
-shape = SubResource("BoxShape3D_ground")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Floor"]
+position = Vector3(0, -0.5, 0)
+shape = SubResource("CylinderShape3D_floor")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
-mesh = SubResource("BoxMesh_ground")
-surface_material_override/0 = SubResource("StandardMaterial3D_ground")
+[node name="Model" parent="Floor" instance=ExtResource("4_floor")]
+
+[node name="Walls" type="Node3D" parent="."]
+
+[node name="Wall0" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 0.000000, 0)
+
+[node name="Wall1" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 0.785398, 0)
+
+[node name="Wall2" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 1.570796, 0)
+
+[node name="Wall3" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 2.356194, 0)
+
+[node name="Wall4" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 3.141593, 0)
+
+[node name="Wall5" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 3.926991, 0)
+
+[node name="Wall6" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 4.712389, 0)
+
+[node name="Wall7" parent="Walls" instance=ExtResource("5_wall")]
+rotation = Vector3(0, 5.497787, 0)
+
+[node name="Spinner" parent="." instance=ExtResource("6_spinner")]
+
+[node name="Bumpers" type="Node3D" parent="."]
+
+[node name="Bumper0" parent="Bumpers" instance=ExtResource("7_bumper")]
+position = Vector3(3.6770, 0, 3.6770)
+
+[node name="Bumper1" parent="Bumpers" instance=ExtResource("7_bumper")]
+position = Vector3(-3.6770, 0, 3.6770)
+
+[node name="Bumper2" parent="Bumpers" instance=ExtResource("7_bumper")]
+position = Vector3(-3.6770, 0, -3.6770)
+
+[node name="Bumper3" parent="Bumpers" instance=ExtResource("7_bumper")]
+position = Vector3(3.6770, 0, -3.6770)
+
+[node name="Chests" type="Node3D" parent="."]
+
+[node name="Chest0" parent="Chests" instance=ExtResource("8_chest")]
+position = Vector3(0.0000, 0, -8.4500)
+rotation = Vector3(0, 0.000000, 0)
+
+[node name="Chest1" parent="Chests" instance=ExtResource("8_chest")]
+position = Vector3(-6.0500, 0, -5.9000)
+rotation = Vector3(0, 0.797950, 0)
+
+[node name="Chest2" parent="Chests" instance=ExtResource("8_chest")]
+position = Vector3(6.0500, 0, -5.9000)
+rotation = Vector3(0, -0.797950, 0)
+
+[node name="Coins" type="Node3D" parent="."]
 
 [node name="Spawns" type="Node3D" parent="."]
 
 [node name="Spawn0" type="Marker3D" parent="Spawns"]
-position = Vector3(0.0000, 0, 5.0000)
-rotation = Vector3(0, 3.141593, 0)
+position = Vector3(2.6022, 0, 6.2824)
+rotation = Vector3(0, 3.534292, 0)
 
 [node name="Spawn1" type="Marker3D" parent="Spawns"]
-position = Vector3(0.0000, 0, -5.0000)
-rotation = Vector3(0, 0.000000, 0)
+position = Vector3(-2.6022, 0, -6.2824)
+rotation = Vector3(0, 6.675884, 0)
 
 [node name="Spawn2" type="Marker3D" parent="Spawns"]
-position = Vector3(5.0000, 0, 0.0000)
-rotation = Vector3(0, -1.570796, 0)
+position = Vector3(6.2824, 0, -2.6022)
+rotation = Vector3(0, 5.105088, 0)
 
 [node name="Spawn3" type="Marker3D" parent="Spawns"]
-position = Vector3(-5.0000, 0, -0.0000)
-rotation = Vector3(0, 1.570796, 0)
+position = Vector3(-6.2824, 0, 2.6022)
+rotation = Vector3(0, 8.246681, 0)
 
 [node name="Spawn4" type="Marker3D" parent="Spawns"]
-position = Vector3(3.5355, 0, 3.5355)
-rotation = Vector3(0, -2.356194, 0)
+position = Vector3(6.2824, 0, 2.6022)
+rotation = Vector3(0, 4.319690, 0)
 
 [node name="Spawn5" type="Marker3D" parent="Spawns"]
-position = Vector3(-3.5355, 0, -3.5355)
-rotation = Vector3(0, 0.785398, 0)
+position = Vector3(-6.2824, 0, -2.6022)
+rotation = Vector3(0, 7.461283, 0)
 
 [node name="Spawn6" type="Marker3D" parent="Spawns"]
-position = Vector3(3.5355, 0, -3.5355)
-rotation = Vector3(0, -0.785398, 0)
+position = Vector3(2.6022, 0, -6.2824)
+rotation = Vector3(0, 5.890486, 0)
 
 [node name="Spawn7" type="Marker3D" parent="Spawns"]
-position = Vector3(-3.5355, 0, 3.5355)
-rotation = Vector3(0, 2.356194, 0)
+position = Vector3(-2.6022, 0, 6.2824)
+rotation = Vector3(0, 9.032079, 0)
