@@ -126,12 +126,9 @@ func get_yaw() -> float:
 	return _yaw_target
 
 
-## `Look.apply_toon`, skipped headless: there (dummy renderer) toon copies of imported
-## materials log "material_get_instance_shader_parameters: material is null" errors when their
-## meshes are freed, which fails tests. Nothing is drawn headless anyway.
+## `Look.apply_toon` (shared, cached toon materials: safe headless too).
 static func toon(root: Node3D) -> void:
-	if DisplayServer.get_name() != "headless":
-		Look.apply_toon(root)
+	Look.apply_toon(root)
 
 
 func _face_towards(yaw: float) -> void:

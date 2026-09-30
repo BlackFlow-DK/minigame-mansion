@@ -4,16 +4,23 @@ extends RefCounted
 ## Owner: look and effects. Static only; never instanced.
 ##
 ##   Look.apply_toon($Model)              # soft-ramp toon + rim + outline on every surface
-##   Look.toon_material(Look.RED)         # a fresh toon material for code-built props
+##   Look.toon_material(Look.RED)         # a shared toon material for code-built props
 ##   Look.set_quality(Look.Quality.LOW)   # drops SSAO, glow, fog and outlines everywhere
 ##
-## How the toon keeps albedo: every surface keeps a StandardMaterial3D (a duplicate of its
-## own material, same resource_name, same albedo), only its shading switches to Godot's
-## toon diffuse (a smoothstep ramp whose width is the roughness), toon specular and rim.
-## So another system can still set `albedo_color` on the active material, or duplicate it
-## and recolour the copy: the look survives (the copy keeps the outline next_pass too).
-## Only a brand-new material loses it; call apply_toon again after that, it is idempotent
-## and cheap.
+## How the toon keeps albedo: every surface keeps a StandardMaterial3D (a copy of its own
+## material, same resource_name, same albedo), only its shading switches to Godot's toon
+## diffuse (a smoothstep ramp whose width is the roughness), toon specular and rim. To recolour
+## one model, duplicate its active material and set the copy (what Cosmetics does): the copy
+## keeps the toon and the outline. Only a brand-new material loses it; call apply_toon again
+## after that, it is idempotent and cheap.
+##
+## Sharing: there is ONE toon copy per source material (and one toon_material per colour),
+## cached for the session, exactly mirroring how imported materials are already shared by
+## every instance of a model. Never mutate a toon material in place; duplicate it first.
+## Why cached: a material whose last reference is the MeshInstance3D is freed together with
+## the node, and under the headless dummy renderer that logs `material_get_instance_shader_
+## parameters: Parameter "material" is null` (the RID goes before its render instance), which
+## fails tests. Cached materials outlive the nodes, and 8 players cost no extra materials.
 
 enum Quality { LOW, HIGH }
 
@@ -50,6 +57,8 @@ static var _outline: ShaderMaterial
 static var _outlined: Array[WeakRef] = []
 ## [source mesh, weight] -> outline-ready copy (holds both, so neither is freed while cached).
 static var _outline_meshes: Dictionary = {}
+## [source material, outline] -> its toon copy; [colour, roughness, outline] -> toon_material.
+static var _toon_cache: Dictionary = {}
 ## Prints one line per prepared mesh (size, fill, open, weight) for tuning the opt-outs.
 static var outline_debug: bool = false
 
@@ -297,18 +306,26 @@ static func toon_from(src: Material, outline: bool = true) -> Material:
 	var base := src as BaseMaterial3D
 	if base == null or base.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED:
 		return src
-	var m := base.duplicate() as BaseMaterial3D
-	m.resource_name = base.resource_name
-	_configure(m, outline)
+	var key := [src, outline]
+	var m: BaseMaterial3D = _toon_cache.get(key)
+	if m == null:
+		m = base.duplicate() as BaseMaterial3D
+		m.resource_name = base.resource_name
+		_configure(m, outline)
+		_toon_cache[key] = m
 	return m
 
 
-## A fresh toon material in `color` for props built in code.
+## The shared toon material in `color` for props built in code (do not mutate it; duplicate).
 static func toon_material(color: Color, roughness: float = 0.6, outline: bool = true) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.roughness = roughness
-	_configure(m, outline)
+	var key := [color, roughness, outline]
+	var m: StandardMaterial3D = _toon_cache.get(key)
+	if m == null:
+		m = StandardMaterial3D.new()
+		m.albedo_color = color
+		m.roughness = roughness
+		_configure(m, outline)
+		_toon_cache[key] = m
 	return m
 
 
