@@ -34,12 +34,12 @@ const ITEMS: Array[Dictionary] = [
 	{"id": "traffic_cone", "slot": "hat", "name": "Traffic Cone", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "cat_ears", "slot": "hat", "name": "Cat Ears", "offset": Vector3(0.0, -0.01, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	# --- face (FaceSocket, between the eyes on the surface at (0, 0.68, 0.37)) ------------
-	{"id": "round_glasses", "slot": "face", "name": "Round Glasses", "offset": Vector3(0.0, 0.0, 0.005), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.04, 1.04, 1.04)},
+	{"id": "round_glasses", "slot": "face", "name": "Round Glasses", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "star_shades", "slot": "face", "name": "Star Shades", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "monocle", "slot": "face", "name": "Monocle", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
-	{"id": "moustache", "slot": "face", "name": "Moustache", "offset": Vector3(0.0, -0.028, 0.006), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(0.78, 0.78, 0.78)},
+	{"id": "moustache", "slot": "face", "name": "Moustache", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "clown_nose", "slot": "face", "name": "Clown Nose", "offset": Vector3(0.0, -0.04, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
-	{"id": "eye_patch", "slot": "face", "name": "Eye Patch", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(0.95, 0.95, 0.95)},
+	{"id": "eye_patch", "slot": "face", "name": "Eye Patch", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	# --- neck (NeckSocket, body centre at y = 0.40 where the body radius is 0.40) ---------
 	{"id": "scarf", "slot": "neck", "name": "Scarf", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(0.95, 1.0, 0.95)},
 	{"id": "bow_tie", "slot": "neck", "name": "Bow Tie", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
@@ -47,7 +47,7 @@ const ITEMS: Array[Dictionary] = [
 	{"id": "flower_lei", "slot": "neck", "name": "Flower Lei", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(8.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "bandana", "slot": "neck", "name": "Bandana", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	# --- back (BackSocket, body surface at (0, 0.50, -0.37)) -------------------------------
-	{"id": "cape", "slot": "back", "name": "Cape", "offset": Vector3(0.0, 0.06, 0.0), "rotation": Vector3(8.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
+	{"id": "cape", "slot": "back", "name": "Cape", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "backpack", "slot": "back", "name": "Backpack", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "angel_wings", "slot": "back", "name": "Angel Wings", "offset": Vector3(0.0, 0.0, 0.0), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
 	{"id": "jetpack", "slot": "back", "name": "Jetpack", "offset": Vector3(0.0, 0.0, 0.045), "rotation": Vector3(0.0, 0.0, 0.0), "scale": Vector3(1.0, 1.0, 1.0)},
