@@ -6,7 +6,7 @@ config_version=5
 [application]
 
 config/name="Minigame Mansion"
-run/main_scene="res://dev/sandbox.tscn"
+run/main_scene="res://main/main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [autoload]
@@ -17,6 +17,15 @@ Session="*res://session/session.gd"
 Cosmetics="*res://cosmetics/cosmetics.gd"
 Fx="*res://fx/fx.gd"
 Sfx="*res://audio/sfx.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/mode=0
+window/size/resizable=true
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
 
 [input]
 
@@ -71,3 +80,4 @@ pause={
 [rendering]
 
 renderer/rendering_method="forward_plus"
+environment/defaults/default_clear_color=Color(0.13, 0.09, 0.17, 1)
