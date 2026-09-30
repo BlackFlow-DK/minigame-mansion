@@ -105,11 +105,13 @@ var _cheek: float = 1.0
 var _pupil_scale: float = 1.0
 var _blink_in: float = 2.0
 var _blink_t: float = -1.0
-var _look_target: Variant = null
+## Look target: a world point, or a node held weakly (a player that leaves must not dangle).
+var _look_point: Variant = null
+var _look_node: WeakRef = null
 var _glance: Vector2 = Vector2.ZERO
 var _glance_in: float = 0.5
 var _pupil: Vector2 = Vector2.ZERO
-var _nearest: Player = null
+var _nearest: WeakRef = null
 var _nearest_in: float = 0.0
 var _reaction: StringName = &"idle"
 
@@ -176,10 +178,12 @@ func get_emote() -> StringName:
 ## Where the eyes should look: a Node3D (followed), a world-space Vector3, or null to go
 ## back to glancing around / at the nearest other player.
 func set_look_target(target: Variant) -> void:
-	if target is Node3D or target is Vector3:
-		_look_target = target
-	else:
-		_look_target = null
+	_look_point = null
+	_look_node = null
+	if target is Vector3:
+		_look_point = target
+	elif target is Node3D and is_instance_valid(target):
+		_look_node = weakref(target)
 
 
 ## Forces the face preset `expression` (see BlobExpressions) for `seconds` (-1 = until
@@ -683,14 +687,21 @@ func _look_offset(delta: float, v_loc: Vector3) -> Vector2:
 	_nearest_in -= delta
 	if _nearest_in <= 0.0:
 		_nearest_in = 0.5
-		_nearest = _find_nearest(5.0)
-	var point: Variant = null
-	if _look_target is Vector3:
-		point = _look_target
-	elif _look_target is Node3D and is_instance_valid(_look_target):
-		point = (_look_target as Node3D).global_position
-	elif _nearest != null and is_instance_valid(_nearest) and _nearest.alive:
-		point = _nearest.global_position + Vector3.UP * 0.6
+		var found := _find_nearest(5.0)
+		_nearest = weakref(found) if found else null
+	var point: Variant = _look_point
+	if point == null and _look_node != null:
+		var node := _look_node.get_ref() as Node3D
+		if node != null and node.is_inside_tree():
+			point = node.global_position
+		elif node == null:
+			_look_node = null  # freed: back to glancing around
+	if point == null and _nearest != null:
+		var other := _nearest.get_ref() as Player
+		if other != null and other.is_inside_tree() and other.alive:
+			point = other.global_position + Vector3.UP * 0.6
+		else:
+			_nearest = null
 	var ahead := Vector2(clampf(v_loc.x * 0.003, -0.01, 0.01), 0.0)
 	if point == null or not _pivot.is_inside_tree():
 		return (_glance + ahead).limit_length(BlobRig.PUPIL_RANGE)
@@ -710,7 +721,7 @@ func _find_nearest(max_distance: float) -> Player:
 	var best_d := max_distance * max_distance
 	for child in parent.get_children():
 		var other := child as Player
-		if other == null or other == player or not other.alive:
+		if other == null or other == player or not other.alive or not other.is_inside_tree():
 			continue
 		var d := other.global_position.distance_squared_to(player.global_position)
 		if d < best_d:
