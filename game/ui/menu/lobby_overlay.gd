@@ -2,13 +2,14 @@ class_name MenuLobbyOverlay
 extends Control
 ## Lobby overlay drawn over the 3D lobby world: roster (colour, name, bot tag, host crown),
 ## host-only controls (rounds 4/8/12, add/remove bot, Start), "Waiting for host" for clients,
-## the host's LAN address(es) and Leave. Pure view: `refresh()` feeds it, signals report clicks.
+## the host's LAN address(es), Wardrobe (change your look; everyone sees it live) and Leave. Pure view: `refresh()` feeds it, signals report clicks.
 ## The middle of the screen stays clear (and click-through) for the world.
 
 signal start_pressed(rounds: int)
 signal add_bot_pressed
 signal remove_bot_pressed(slot: int)
 signal leave_pressed
+signal wardrobe_pressed
 
 const ROUND_CHOICES: Array[int] = [4, 8, 12]
 const DEFAULT_ROUNDS := 8
@@ -20,6 +21,7 @@ var is_host_view: bool = false
 var info_label: Label
 var address_label: Label
 var leave_button: Button
+var wardrobe_button: Button
 var count_label: Label
 var roster_list: VBoxContainer
 var add_bot_button: Button
@@ -58,10 +60,15 @@ func _init() -> void:
 	address_label.add_theme_color_override(&"font_color", MenuUI.PLUM)
 	address_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info_col.add_child(address_label)
+	var buttons := MenuUI.hbox(10)
+	info_col.add_child(buttons)
+	wardrobe_button = MenuUI.button("Wardrobe")
+	wardrobe_button.custom_minimum_size = Vector2(150, 0)
+	buttons.add_child(wardrobe_button)
 	leave_button = MenuUI.button("Leave", &"DangerButton")
 	leave_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	leave_button.custom_minimum_size = Vector2(140, 0)
-	info_col.add_child(leave_button)
+	buttons.add_child(leave_button)
 	var hint := MenuUI.label("Tab / Select: use this menu", &"MutedLabel")
 	hint.add_theme_font_size_override(&"font_size", 15)
 	info_col.add_child(hint)
@@ -136,6 +143,7 @@ func _init() -> void:
 	client_panel.add_child(waiting_label)
 
 	leave_button.pressed.connect(func() -> void: leave_pressed.emit())
+	wardrobe_button.pressed.connect(func() -> void: wardrobe_pressed.emit())
 	add_bot_button.pressed.connect(func() -> void: add_bot_pressed.emit())
 	start_button.pressed.connect(func() -> void:
 		if _player_count >= MIN_PLAYERS and is_host_view:
@@ -257,7 +265,7 @@ func _refresh_focus_links() -> void:
 		order.append(_remove_buttons[s])
 	order.append(add_bot_button)
 	var first_round: Button = round_buttons[ROUND_CHOICES[0]]
-	order.append_array([first_round, start_button, leave_button])
+	order.append_array([first_round, start_button, wardrobe_button, leave_button])
 	var live := MenuUI.chain_vertical(order)
 	# The rounds chips and Start share a row: left/right walks it, up/down leaves it.
 	var row: Array = []
@@ -267,7 +275,7 @@ func _refresh_focus_links() -> void:
 	var i := live.find(first_round)
 	if i >= 0 and live.size() > 1:
 		var above := live[(i - 1 + live.size()) % live.size()]
-		var below: Control = leave_button if MenuUI.focusable(leave_button) else null
+		var below: Control = wardrobe_button if MenuUI.focusable(wardrobe_button) 				else (leave_button if MenuUI.focusable(leave_button) else null)
 		MenuUI.chain_horizontal(row, above, below)
 		if MenuUI.focusable(start_button):
 			start_button.focus_neighbor_top = start_button.get_path_to(above)

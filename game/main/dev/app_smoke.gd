@@ -68,7 +68,8 @@ func _on_round_finished(ranking: Array[int], points: Dictionary) -> void:
 	var pts: Dictionary = {}
 	for s: Variant in points:
 		pts[str(s)] = points[s]
-	_rounds.append({"ranking": ranking, "points": pts})
+	_rounds.append({"ranking": ranking, "points": pts,
+		"scene": app.stage.minigame.scene_file_path if app.stage.minigame else ""})
 	_event("round_finished")
 
 
@@ -202,7 +203,8 @@ func _write() -> void:
 		"session_state": int(Session.state), "round_index": Session.round_index,
 		"scene": app.stage.minigame.scene_file_path if app.stage.minigame else "",
 		"follow_roster": app.stage.follow_roster, "load_id": app.stage.net_load_id,
-		"players": ps, "games": _games.size(), "events": _events,
+		"players": ps, "games": _games.size(), "game_ports": _games.map(func(g: Variant) -> int: return int((g as Dictionary).get("port", -1))),
+		"events": _events,
 		"rounds": _rounds, "final_scores": _final_scores, "walks_done": _walks_done, "cmds_done": _cmds_done,
 	}
 	var f := FileAccess.open(_dir.path_join(_name + ".json"), FileAccess.WRITE)
