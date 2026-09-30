@@ -1,27 +1,23 @@
 [gd_scene format=3]
 
 [ext_resource type="Script" path="res://minigames/bumper_sumo/bumper_sumo.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://look/stage_look.tscn" id="2_look"]
+[ext_resource type="PackedScene" path="res://camera/arena_camera.tscn" id="3_camera"]
+[ext_resource type="PackedScene" path="res://assets/models/props/sumo_core.glb" id="4_core"]
+[ext_resource type="PackedScene" path="res://assets/models/props/sumo_ring_1.glb" id="5_ring1"]
+[ext_resource type="PackedScene" path="res://assets/models/props/sumo_ring_2.glb" id="6_ring2"]
+[ext_resource type="PackedScene" path="res://assets/models/props/sumo_ring_3.glb" id="7_ring3"]
+[ext_resource type="Shader" path="res://look/materials/void_fade.gdshader" id="8_void"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+[sub_resource type="PlaneMesh" id="Plane_haze"]
+size = Vector2(500, 500)
 
-[sub_resource type="Sky" id="Sky_main"]
-sky_material = SubResource("ProceduralSkyMaterial_sky")
-
-[sub_resource type="Environment" id="Environment_main"]
-background_mode = 2
-sky = SubResource("Sky_main")
-ambient_light_source = 3
-reflected_light_source = 2
-tonemap_mode = 2
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
-size = Vector3(20, 1, 20)
-
-[sub_resource type="BoxMesh" id="BoxMesh_ground"]
-size = Vector3(20, 1, 20)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
-albedo_color = Color(0.310, 0.486, 0.675, 1)
+[sub_resource type="ShaderMaterial" id="Mat_haze"]
+render_priority = -1
+shader = ExtResource("8_void")
+shader_parameter/color = Color(0.5, 0.74, 1, 1)
+shader_parameter/inner_radius = 30.0
+shader_parameter/outer_radius = 240.0
 
 [node name="BumperSumo" type="Node3D"]
 script = ExtResource("1_script")
@@ -29,60 +25,87 @@ title = "Bumper Sumo"
 rule_text = "Shove everyone off the shrinking ring!"
 time_limit = 60.0
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_main")
+[node name="StageLook" parent="." instance=ExtResource("2_look")]
+preset = 1
 
-[node name="Sun" type="DirectionalLight3D" parent="."]
-rotation = Vector3(-0.9, 0.6, 0)
-shadow_enabled = true
-
-[node name="Camera3D" type="Camera3D" parent="."]
-position = Vector3(0, 14, 12)
-rotation = Vector3(-0.8622, 0, 0)
-fov = 50.0
+[node name="ArenaCamera" parent="." instance=ExtResource("3_camera")]
 current = true
+pitch_degrees = 52.0
+min_distance = 15.0
+max_distance = 30.0
+margin = 2.0
+fixed_distance = 22.0
+bounds_mode = 2
+bounds_radius = 7.5
 
-[node name="Ground" type="StaticBody3D" parent="."]
-position = Vector3(0, -0.5, 0)
+[node name="Platform" type="Node3D" parent="."]
+
+[node name="Core" type="StaticBody3D" parent="Platform"]
 collision_mask = 0
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
-shape = SubResource("BoxShape3D_ground")
+[node name="Shape" type="CollisionShape3D" parent="Platform/Core"]
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
-mesh = SubResource("BoxMesh_ground")
-surface_material_override/0 = SubResource("StandardMaterial3D_ground")
+[node name="Model" parent="Platform/Core" instance=ExtResource("4_core")]
+
+[node name="Ring1" type="StaticBody3D" parent="Platform"]
+collision_mask = 0
+
+[node name="Shape" type="CollisionShape3D" parent="Platform/Ring1"]
+
+[node name="Model" parent="Platform/Ring1" instance=ExtResource("5_ring1")]
+
+[node name="Ring2" type="StaticBody3D" parent="Platform"]
+collision_mask = 0
+
+[node name="Shape" type="CollisionShape3D" parent="Platform/Ring2"]
+
+[node name="Model" parent="Platform/Ring2" instance=ExtResource("6_ring2")]
+
+[node name="Ring3" type="StaticBody3D" parent="Platform"]
+collision_mask = 0
+
+[node name="Shape" type="CollisionShape3D" parent="Platform/Ring3"]
+
+[node name="Model" parent="Platform/Ring3" instance=ExtResource("7_ring3")]
+
+[node name="Decor" type="Node3D" parent="."]
+
+[node name="SkyHaze" type="MeshInstance3D" parent="."]
+position = Vector3(0, -40, 0)
+cast_shadow = 0
+mesh = SubResource("Plane_haze")
+surface_material_override/0 = SubResource("Mat_haze")
 
 [node name="Spawns" type="Node3D" parent="."]
 
 [node name="Spawn0" type="Marker3D" parent="Spawns"]
-position = Vector3(0.0000, 0, 5.0000)
+position = Vector3(0.0000, 0, 4.5000)
 rotation = Vector3(0, 3.141593, 0)
 
 [node name="Spawn1" type="Marker3D" parent="Spawns"]
-position = Vector3(0.0000, 0, -5.0000)
-rotation = Vector3(0, 0.000000, 0)
+position = Vector3(0.0000, 0, -4.5000)
+rotation = Vector3(0, -0.000000, 0)
 
 [node name="Spawn2" type="Marker3D" parent="Spawns"]
-position = Vector3(5.0000, 0, 0.0000)
+position = Vector3(4.5000, 0, 0.0000)
 rotation = Vector3(0, -1.570796, 0)
 
 [node name="Spawn3" type="Marker3D" parent="Spawns"]
-position = Vector3(-5.0000, 0, -0.0000)
+position = Vector3(-4.5000, 0, -0.0000)
 rotation = Vector3(0, 1.570796, 0)
 
 [node name="Spawn4" type="Marker3D" parent="Spawns"]
-position = Vector3(3.5355, 0, 3.5355)
+position = Vector3(3.1820, 0, 3.1820)
 rotation = Vector3(0, -2.356194, 0)
 
 [node name="Spawn5" type="Marker3D" parent="Spawns"]
-position = Vector3(-3.5355, 0, -3.5355)
+position = Vector3(-3.1820, 0, -3.1820)
 rotation = Vector3(0, 0.785398, 0)
 
 [node name="Spawn6" type="Marker3D" parent="Spawns"]
-position = Vector3(3.5355, 0, -3.5355)
+position = Vector3(3.1820, 0, -3.1820)
 rotation = Vector3(0, -0.785398, 0)
 
 [node name="Spawn7" type="Marker3D" parent="Spawns"]
-position = Vector3(-3.5355, 0, 3.5355)
+position = Vector3(-3.1820, 0, 3.1820)
 rotation = Vector3(0, 2.356194, 0)
