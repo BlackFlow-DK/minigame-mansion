@@ -1,0 +1,14 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://look/dev/showcase.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://look/stage_look.tscn" id="2_look"]
+
+[node name="Showcase" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="StageLook" parent="." instance=ExtResource("2_look")]
+
+[node name="Camera3D" type="Camera3D" parent="."]
+position = Vector3(0, 9.5, 11)
+fov = 50.0
+current = true
