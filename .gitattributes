@@ -1,0 +1,12 @@
+# Godot writes LF; keep it LF everywhere so Windows checkouts do not churn diffs.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+
+*.glb binary
+*.blend binary
+*.png binary
+*.jpg binary
+*.wav binary
+*.ogg binary
+*.ttf binary
+*.otf binary
