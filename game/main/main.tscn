@@ -1,0 +1,20 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://main/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://stage/stage.tscn" id="2_stage"]
+[ext_resource type="PackedScene" path="res://ui/round/round_ui.tscn" id="3_round_ui"]
+[ext_resource type="PackedScene" path="res://ui/menu/menu_root.tscn" id="4_menu"]
+[ext_resource type="Script" path="res://audio/session_sounds.gd" id="5_sounds"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="Stage" parent="." instance=ExtResource("2_stage")]
+
+[node name="RoundUI" parent="." instance=ExtResource("3_round_ui")]
+
+[node name="MenuRoot" parent="." instance=ExtResource("4_menu")]
+layer = 11
+
+[node name="SessionSounds" type="Node" parent="."]
+script = ExtResource("5_sounds")

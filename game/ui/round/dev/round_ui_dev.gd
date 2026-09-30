@@ -1,13 +1,12 @@
 extends Node3D
 ## Dev scene for the round UI: fakes Net.roster and Session data and emits the Session
-## signals itself (Session is a stub on this branch). Also attaches NameTags to the players,
-## as the orchestrator will. User args after `--`:
+## signals itself. Name tags come from the Stage (`Stage.name_tags`), as in the game.
+## User args after `--`:
 ##   --players=N   2..8 (default 4)
 ##   --phase=X     intro | hud | results | podium | all (default all: loops through every panel)
 ## Esc quits.
 
 const DEV_ARENA: PackedScene = preload("res://dev/dev_arena.tscn")
-const NAME_TAG: PackedScene = preload("res://ui/round/name_tag.tscn")
 const NAMES: Array[String] = ["Sander", "Mads", "Freja", "Bartholomew the Great", "Ida", "Oliver", "Sofie", "Karl"]
 
 @onready var stage: Stage = $Stage
@@ -34,10 +33,6 @@ func _ready() -> void:
 	minigame.title = "Coin Scramble"
 	minigame.rule_text = "Grab the most coins before time runs out. Shove to make others drop theirs!"
 	minigame.time_limit = 45.0
-	for p: Player in stage.players.values():
-		var tag := NAME_TAG.instantiate() as NameTag
-		p.add_child(tag)
-		tag.setup(p)
 	Session.current_minigame = minigame
 	Session.round_count = 8
 	Session.round_index = 2

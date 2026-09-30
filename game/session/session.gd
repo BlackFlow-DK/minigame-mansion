@@ -36,8 +36,8 @@ const PLACE_POINTS: Array[int] = [4, 3, 2, 1]
 @export var intro_time: float = 3.0
 ## Seconds of the 3-2-1 countdown (the last part of INTRO).
 @export var countdown_time: float = 3.0
-## Seconds the round results stay up.
-@export var results_time: float = 5.0
+## Seconds the round results stay up (covers the round UI's ranking + bar race, ~6.5 s).
+@export var results_time: float = 7.0
 ## Seconds on the podium before returning to the lobby.
 @export var podium_time: float = 8.0
 ## Seconds past the minigame's `time_limit` before Session finishes the round itself.
@@ -112,6 +112,13 @@ func start_session(rounds: int) -> void:
 		push_warning("Session.start_session: the minigame registry is empty")
 		return
 	_rpc_intro.rpc(0, rounds, String(round_order[0]), intro_time + countdown_time)
+
+
+## Host only: leaves the podium early (the podium's "Back to lobby" button) and returns
+## every peer to LOBBY. Ignored in any other state.
+func return_to_lobby() -> void:
+	if Net.is_host() and state == State.PODIUM:
+		_rpc_lobby.rpc()
 
 
 ## Ends any running session and returns to LOBBY (host: on every peer). Also resets the
@@ -320,6 +327,8 @@ func _on_peer_connected(peer_id: int) -> void:
 @rpc("authority", "call_local", "reliable")
 func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
 	if index == 0:
+		if Net.is_host():
+			Net.session_in_progress = true
 		scores.clear()
 		round_wins.clear()
 		for s: int in Net.roster:
@@ -334,6 +343,9 @@ func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
 	current_minigame = null
 	var stage := _stage()
 	if stage:
+		# Rounds never follow the roster (the lobby does): leavers are knocked out, and every
+		# peer must pick the same spawn points (by roster order, not by slot).
+		stage.follow_roster = false
 		if scene_override:
 			current_minigame = stage.load_minigame_scene(scene_override)
 		else:
@@ -392,6 +404,8 @@ func _rpc_podium(final_ranking: Array, totals: Dictionary, wins: Dictionary, dur
 ## Back to LOBBY: clears the stage, keeps `scores` of the last session for the lobby UI.
 @rpc("authority", "call_local", "reliable")
 func _rpc_lobby() -> void:
+	if Net.is_host():
+		Net.session_in_progress = false
 	var stage := _stage()
 	if stage:
 		stage.clear()

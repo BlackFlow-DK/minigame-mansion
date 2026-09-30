@@ -17,6 +17,10 @@ class PlayerCard extends PanelContainer:
 	var counter_shown: bool = false
 	var _style: StyleBoxFlat
 	var _blob: RoundBlobIcon
+	## The name label's width; longer names are cut with "...".
+	const NAME_WIDTH := 80.0
+	## The player's whole name (the label may show it shortened).
+	var full_name: String = ""
 	var _name: Label
 	var _score: Label
 	var _counter_pill: PanelContainer
@@ -49,11 +53,11 @@ class PlayerCard extends PanelContainer:
 		col.add_theme_constant_override(&"separation", -4)
 		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(col)
-		_name = RoundStyle.label(RoundStyle.player_name(slot), 19, RoundStyle.CREAM, 5)
+		full_name = RoundStyle.player_name(slot)
+		_name = RoundStyle.label(full_name, 19, RoundStyle.CREAM, 5)
 		_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		_name.clip_text = true
-		_name.custom_minimum_size = Vector2(80, 0)
+		_name.custom_minimum_size = Vector2(NAME_WIDTH, 0)
 		col.add_child(_name)
 
 		var line := HBoxContainer.new()
@@ -94,6 +98,24 @@ class PlayerCard extends PanelContainer:
 		_out.add_child(RoundStyle.label("OUT", 18, RoundStyle.CREAM, 4))
 		_out.visible = false
 		overlay.add_child(_out)
+
+	func _ready() -> void:
+		_fit_name()
+
+	## Shortens the name with "..." to NAME_WIDTH. Done by hand: the round font (Segoe UI
+	## Black) renders no glyph for the label's built-in ellipsis, so names were just cut.
+	func _fit_name() -> void:
+		var font := _name.get_theme_font(&"font")
+		var font_size := _name.get_theme_font_size(&"font_size")
+		var text := full_name
+		if font and font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > NAME_WIDTH:
+			while text.length() > 1 and font.get_string_size(text + "...", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > NAME_WIDTH:
+				text = text.left(-1)
+			text = text.strip_edges() + "..."
+		_name.text = text
+
+	func get_name_text() -> String:
+		return _name.text
 
 	func set_score(value: int) -> void:
 		_score.text = str(value)

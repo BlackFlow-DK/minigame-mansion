@@ -18,6 +18,9 @@ extends Node
 ## slower for low skill), which is also the perception delay for chase targets; aim error
 ## per think; a reaction delay before shoving; a per-bot personality from the seed.
 ## Deterministic for a given seed: all randomness comes from its own RandomNumberGenerator.
+##
+## Optional minigame hint: a minigame may declare `var bot_aggression_scale: float` (0..1,
+## default 1). It scales how often bots chase, and at 0 they never shove (the lobby: calm).
 
 enum State { NONE, GOAL, WANDER, CHASE, RECOVER }
 
@@ -197,7 +200,7 @@ func _think(game: Minigame, pos: Vector3) -> void:
 		_enter_recover()
 		return
 	var roll := _rng.randf()
-	if _target and roll < aggression:
+	if _target and roll < aggression * _aggression_scale(game):
 		state = State.CHASE
 	elif _rng.randf() < WANDER_CHANCE * (1.0 - skill):
 		state = State.WANDER
@@ -351,6 +354,9 @@ func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2) -> void:
 
 ## Presses action (one tick) once an enemy has been in front within range for the reaction time.
 func _want_shove(delta: float, pos: Vector3) -> bool:
+	if _aggression_scale(_game()) <= 0.0:
+		_shove_seen = 0.0
+		return false
 	if _enemy_in_front(pos):
 		_shove_seen += delta
 	else:
@@ -385,6 +391,14 @@ func _game() -> Minigame:
 		return null
 	var stage := get_tree().get_first_node_in_group(&"stage") as Stage
 	return stage.minigame if stage else null
+
+
+## The minigame's optional `bot_aggression_scale` hint (1 when it has none).
+static func _aggression_scale(game: Minigame) -> float:
+	if game == null:
+		return 1.0
+	var v: Variant = game.get(&"bot_aggression_scale")
+	return clampf(float(v), 0.0, 1.0) if v is float or v is int else 1.0
 
 
 ## Other living players in this round.

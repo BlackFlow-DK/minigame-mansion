@@ -7,8 +7,13 @@ extends PlayerComponent
 ## Bot (`player.is_bot`): if `res://bots/bot_brain.gd` exists, one instance becomes a child
 ## of this component and fills the intent: `func fill_intent(intent: PlayerIntent, delta: float) -> void`.
 ## Without a brain a bot stands still.
+## Human input is ignored while a UI control has keyboard/pad focus or a node of group
+## INPUT_BLOCKER_GROUP (the pause menu) is visible: Space / A then press the focused button
+## instead of also jumping, and the blob stays put while a menu is being used.
 
 const BOT_BRAIN_PATH := "res://bots/bot_brain.gd"
+## Visible CanvasItems in this group take the human's input away from the blob.
+const INPUT_BLOCKER_GROUP := &"blocks_player_input"
 
 ## Tests: when true the controller leaves `player.intent` alone so a test can write it.
 var scripted: bool = false
@@ -42,15 +47,36 @@ func physics_tick(delta: float) -> void:
 
 func _read_human_input() -> void:
 	var intent := player.intent
-	var raw := Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
-	intent.move = _camera_relative(raw)
 	var jump := Input.is_action_pressed(&"jump")
 	var action := Input.is_action_pressed(&"action")
+	if ui_has_input(get_viewport()):
+		# Track the held state so a press that started on a menu never becomes a jump/shove.
+		intent.clear()
+		_jump_was_held = jump
+		_action_was_held = action
+		return
+	var raw := Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
+	intent.move = _camera_relative(raw)
 	intent.jump_pressed = jump and not _jump_was_held
 	intent.jump_held = jump
 	intent.action_pressed = action and not _action_was_held
 	_jump_was_held = jump
 	_action_was_held = action
+
+
+## True while the UI owns the human's input: a visible control has focus, or a node of
+## INPUT_BLOCKER_GROUP is visible.
+static func ui_has_input(viewport: Viewport) -> bool:
+	if viewport == null:
+		return false
+	var focus := viewport.gui_get_focus_owner()
+	if focus != null and focus.is_visible_in_tree():
+		return true
+	for n: Node in viewport.get_tree().get_nodes_in_group(INPUT_BLOCKER_GROUP):
+		var ci := n as CanvasItem
+		if ci != null and ci.is_visible_in_tree():
+			return true
+	return false
 
 
 ## Maps stick/keys (x right, y down = back) to world XZ using the active camera's yaw.

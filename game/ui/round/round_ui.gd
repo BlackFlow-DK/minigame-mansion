@@ -155,6 +155,14 @@ func show_banner(text: String, seconds: float = 2.0) -> void:
 	_banner_tween.tween_callback(_banner.hide)
 
 
+## Hides every panel and the banner at once (the app left the game, e.g. to the title).
+func reset() -> void:
+	_show(View.NONE)
+	if _banner_tween and _banner_tween.is_valid():
+		_banner_tween.kill()
+	_banner.visible = false
+
+
 func is_banner_shown() -> bool:
 	return _banner.visible
 

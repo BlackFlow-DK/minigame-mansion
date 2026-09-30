@@ -116,6 +116,8 @@ const POINTS_OF_INTEREST: Array[Vector3] = [
 @export var cushion_bounce_speed: float = 9.5
 ## Cap on the bounce when a blob lands hard.
 @export var cushion_bounce_max: float = 11.0
+## Read by the bot brain: 0 = bots never chase or shove in the hall (no shoving scrum).
+@export_range(0.0, 1.0) var bot_aggression_scale: float = 0.0
 
 ## The shared look rig when it was found, else null (the fallback $Look is used).
 var shared_look: Node = null

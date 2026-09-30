@@ -5,6 +5,7 @@ extends CanvasLayer
 ##
 ##   title --Host--> lobby          (Net.host_game; falls back to Net.start_offline with a note)
 ##   title --Join--> join --(roster gains our slot)--> lobby
+##   title --Play offline--> lobby  (Net.start_offline: you + bots on this PC)
 ##   lobby --Session leaves LOBBY--> none (hidden) --Session back in LOBBY--> lobby
 ##   any --Net.server_closed--> title with a message;  Leave -> Net.leave() -> title
 ##   Esc/Start in lobby or in game: pause menu (the game keeps running)
@@ -70,6 +71,7 @@ func _ready() -> void:
 
 	title.host_pressed.connect(_on_host)
 	title.join_pressed.connect(_on_join_menu)
+	title.offline_pressed.connect(play_offline)
 	title.wardrobe_pressed.connect(open_wardrobe)
 	title.quit_pressed.connect(_quit)
 	title.name_committed.connect(_on_name_committed)
@@ -201,6 +203,16 @@ func _on_host() -> void:
 	_enter_lobby()
 
 
+## Offline game on this PC (you + bots); also the fallback when hosting fails.
+func play_offline() -> void:
+	_commit_profile()
+	title.show_message("")
+	Net.start_offline()
+	offline_game = true
+	_lobby_note = "Offline game: add bots, then press START."
+	_enter_lobby()
+
+
 func _on_join_menu() -> void:
 	_commit_profile()
 	title.show_message("")
@@ -223,7 +235,9 @@ func _load_profile() -> void:
 func _commit_profile() -> void:
 	var n := title.player_name()
 	Cosmetics.save_profile(n, _loadout)
-	Net.set_local_profile(n, _loadout)
+	# An untouched profile carries slot 0's default colours; sending it would make every
+	# such player red. Send none instead, so the host gives each player its slot's colours.
+	Net.set_local_profile(n, {} if _loadout == Cosmetics.default_loadout(0) else _loadout)
 
 
 func _on_wardrobe_closed() -> void:
@@ -358,6 +372,17 @@ func _on_server_closed() -> void:
 
 
 # --- Input -------------------------------------------------------------------------------
+
+func _input(event: InputEvent) -> void:
+	# A mouse click on a lobby button leaves it focused, which would keep the blob from moving
+	# (ControllerComponent ignores input while a control has focus): mouse users need no focus.
+	var mb := event as InputEventMouseButton
+	if mb and not mb.pressed and screen == LOBBY and not pause.visible and _focus_in(lobby):
+		# Deferred: the button acts on this release first (it may leave the lobby screen).
+		(func() -> void:
+			if screen == LOBBY and not pause.visible and _focus_in(lobby):
+				_release_focus()).call_deferred()
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if pause.visible:
