@@ -1,0 +1,12 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://ui/round/dev/round_ui_dev.gd" id="1_dev"]
+[ext_resource type="PackedScene" path="res://stage/stage.tscn" id="2_stage"]
+[ext_resource type="PackedScene" path="res://ui/round/round_ui.tscn" id="3_ui"]
+
+[node name="RoundUIDev" type="Node3D"]
+script = ExtResource("1_dev")
+
+[node name="Stage" parent="." instance=ExtResource("2_stage")]
+
+[node name="RoundUI" parent="." instance=ExtResource("3_ui")]
