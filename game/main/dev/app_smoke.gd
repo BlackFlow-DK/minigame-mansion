@@ -13,6 +13,7 @@ extends Node
 ##   addbot                  lobby overlay: + Add bot
 ##   walk <x> <z> <secs>     own player walks along (x, z)
 ##   start <rounds>          lobby overlay: pick rounds, START!
+##   first_round <id>        host: pick Session.order_seed so round 1 plays minigame <id>
 ##   podium_time <secs>      Session.podium_time
 ##   knockout <slot>         host: current minigame knock_out
 ##   back                    podium: Back to lobby
@@ -35,6 +36,9 @@ var _quitting: bool = false
 var _walk_dir: Vector2 = Vector2.ZERO
 var _walk_left: float = 0.0
 var _walks_done: int = 0
+## Per round start: did this peer's Session drive the minigame the Stage shows (so it got
+## _setup and _start), how many players it has, and the per-player tuning it applied.
+var _round_starts: Array = []
 
 @onready var app: MainApp = $Main
 
@@ -51,6 +55,7 @@ func _ready() -> void:
 	Net.server_closed.connect(func() -> void: _event("server_closed"))
 	Net.join_failed.connect(func(r: String) -> void: _event("join_failed:" + r))
 	Net.games_found.connect(func(games: Array) -> void: _games = games)
+	Session.round_started.connect(_on_round_started)
 	Session.round_finished.connect(_on_round_finished)
 	Session.session_finished.connect(_on_session_finished)
 	app.menu.screen_changed.connect(func(s: StringName) -> void: _event("screen:" + s))
@@ -64,12 +69,47 @@ func _on_players_spawned(spawned: Array[Player]) -> void:
 			c.scripted = true
 
 
+func _on_round_started() -> void:
+	var mg := app.stage.minigame
+	_round_starts.append({
+		"index": Session.round_index,
+		"cm_ok": is_instance_valid(Session.current_minigame) and Session.current_minigame == mg,
+		"players": mg.players.size() if mg else -1,
+		"scene": mg.scene_file_path if mg else "",
+		"tuning": _tuning(),
+	})
+	_event("round_started:%d" % Session.round_index)
+
+
+## slot -> shove force: minigames tune components in _setup on every peer.
+func _tuning() -> Dictionary:
+	var out: Dictionary = {}
+	for slot: int in app.stage.players:
+		var p := app.stage.players[slot]
+		var shove := p.get_component(&"shove") as ShoveComponent if is_instance_valid(p) else null
+		out[str(slot)] = snappedf(shove.force, 0.01) if shove else -1.0
+	return out
+
+
+## Host-decided minigame state every peer must agree on at the end of a round.
+func _minigame_state() -> String:
+	var mg := app.stage.minigame
+	if mg == null:
+		return ""
+	var rs: Variant = mg.get(&"ring_states")
+	if rs != null:
+		return "rings:" + str(rs)
+	return ""
+
+
 func _on_round_finished(ranking: Array[int], points: Dictionary) -> void:
 	var pts: Dictionary = {}
 	for s: Variant in points:
 		pts[str(s)] = points[s]
 	_rounds.append({"ranking": ranking, "points": pts,
-		"scene": app.stage.minigame.scene_file_path if app.stage.minigame else ""})
+		"scene": app.stage.minigame.scene_file_path if app.stage.minigame else "",
+		"cm_ok": is_instance_valid(Session.current_minigame) and Session.current_minigame == app.stage.minigame,
+		"mg_state": _minigame_state()})
 	_event("round_finished")
 
 
@@ -144,6 +184,14 @@ func _run(cmd: String) -> void:
 		"walk":
 			_walk_dir = Vector2(float(parts[1]), float(parts[2])).normalized()
 			_walk_left = float(parts[3])
+		"first_round":
+			for seed_value in 1000:
+				var rng := RandomNumberGenerator.new()
+				rng.seed = seed_value
+				if Session.build_round_order(2, rng)[0] == StringName(parts[1]):
+					Session.order_seed = seed_value
+					_event("order_seed:%d" % seed_value)
+					return
 		"start":
 			menu.lobby.selected_rounds = int(parts[1])
 			menu.lobby.start_button.pressed.emit()
@@ -205,7 +253,7 @@ func _write() -> void:
 		"follow_roster": app.stage.follow_roster, "load_id": app.stage.net_load_id,
 		"players": ps, "games": _games.size(), "game_ports": _games.map(func(g: Variant) -> int: return int((g as Dictionary).get("port", -1))),
 		"events": _events,
-		"rounds": _rounds, "final_scores": _final_scores, "walks_done": _walks_done, "cmds_done": _cmds_done,
+		"rounds": _rounds, "round_starts": _round_starts, "final_scores": _final_scores, "walks_done": _walks_done, "cmds_done": _cmds_done,
 	}
 	var f := FileAccess.open(_dir.path_join(_name + ".json"), FileAccess.WRITE)
 	if f:

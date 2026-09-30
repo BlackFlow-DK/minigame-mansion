@@ -17,6 +17,8 @@ signal screen_changed(screen: StringName)
 
 const WARDROBE_PATH := "res://ui/wardrobe/wardrobe.tscn"
 const JOIN_TIMEOUT_SEC := 12.0
+## Appended to join failures that can be a firewall block.
+const FIREWALL_HINT := " Check that both PCs allow Minigame Mansion through Windows Firewall on Private AND Public networks, and try the host's IP address (shown in the host's lobby)."
 
 const TITLE := &"title"
 const JOIN := &"join"
@@ -45,6 +47,7 @@ var _wardrobe_layer: CanvasLayer
 var _wardrobe: Node = null
 ## Screen to return to when the wardrobe closes (title, or lobby when opened in a game).
 var _wardrobe_return: StringName = TITLE
+var _first_run_name: String = ""
 
 
 func _ready() -> void:
@@ -249,7 +252,14 @@ func _on_name_committed(player_name: String) -> void:
 
 func _load_profile() -> void:
 	var p := Cosmetics.load_profile()
-	title.set_player_name(str(p.get("name", "")))
+	var n := str(p.get("name", ""))
+	if n == "" or n == Cosmetics.DEFAULT_NAME:
+		# First run (or never renamed): a friendly random name instead of everyone being
+		# "Player"; the same one for the whole run, saved with the profile on Host / Join.
+		if _first_run_name == "":
+			_first_run_name = MenuTitleScreen.random_name()
+		n = _first_run_name
+	title.set_player_name(n)
 	var l: Variant = p.get("loadout", {})
 	_loadout = l as Dictionary if l is Dictionary and not (l as Dictionary).is_empty() else Cosmetics.default_loadout(0)
 
@@ -297,14 +307,17 @@ func _on_join_failed(reason: String) -> void:
 	if screen != JOIN:
 		return
 	_join_timer.stop()
-	join.show_error("Could not join: %s" % (reason if reason.strip_edges() != "" else "the host did not accept the connection."))
+	var text := "Could not join: %s" % (reason if reason.strip_edges() != "" else "the host did not accept the connection.")
+	if reason == "timeout" or reason == "could not connect":
+		text += "." + FIREWALL_HINT
+	join.show_error(text)
 
 
 func _on_join_timeout() -> void:
 	if screen != JOIN or not join.is_connecting():
 		return
 	Net.leave()
-	join.show_error("No answer after %d seconds. Check the address, and that you are on the same network as the host." % int(JOIN_TIMEOUT_SEC))
+	join.show_error(("No answer after %d seconds. Check the address, and that you are on the same network as the host." % int(JOIN_TIMEOUT_SEC)) + FIREWALL_HINT)
 
 
 func _on_join_cancel() -> void:

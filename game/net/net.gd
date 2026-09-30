@@ -32,6 +32,9 @@ const BEACON_INTERVAL_SEC := 1.0
 const GAME_EXPIRY_SEC := 3.5
 ## ENet accepts a few more connections than slots so a joiner hears "full" instead of timing out.
 const _ENET_MAX_CLIENTS := MAX_PLAYERS + 4
+## Per-peer ENet timeout (ENetPacketPeer.set_timeout: RTT factor, min ms, max ms). The ENet
+## defaults (5-30 s) left a PC that dropped off the network standing as a frozen ghost.
+const PEER_TIMEOUT := Vector3i(32, 2000, 6000)
 
 enum Mode { OFFLINE, HOSTING, JOINING, CLIENT }
 
@@ -252,7 +255,7 @@ func set_local_profile(player_name: String, loadout: Dictionary) -> void:
 		return  # goes out with the hello (or already went; the host has the old one until then)
 	var s := local_slot()
 	if s >= 0:
-		roster[s].name = player_name
+		roster[s].name = unique_name(roster, s, player_name)
 		roster[s].loadout = loadout
 		_roster_updated()
 
@@ -282,9 +285,26 @@ func _host_add_peer(peer_id: int) -> int:
 	var s := NetProtocol.free_slot(roster, MAX_PLAYERS)
 	if s < 0:
 		return -1
-	roster[s] = PlayerInfo.new(s, peer_id, p["name"], false, _loadout_or_default(p["loadout"], s))
+	roster[s] = PlayerInfo.new(s, peer_id, unique_name(roster, s, p["name"]), false, _loadout_or_default(p["loadout"], s))
 	_roster_updated()
 	return s
+
+
+## `wanted`, or "wanted 2", "wanted 3"... so no other roster entry than `slot` has the same
+## name (case-insensitive; at most 16 characters). Friends all called "Player" stay apart.
+static func unique_name(p_roster: Dictionary[int, PlayerInfo], slot: int, wanted: String) -> String:
+	var taken: Array[String] = []
+	for s: int in p_roster:
+		if s != slot:
+			taken.append(p_roster[s].name.to_lower())
+	if not taken.has(wanted.to_lower()):
+		return wanted
+	for n in range(2, MAX_PLAYERS + 2):
+		var suffix := " %d" % n
+		var candidate := wanted.left(16 - suffix.length()).strip_edges() + suffix
+		if not taken.has(candidate.to_lower()):
+			return candidate
+	return wanted
 
 
 ## Host: a peer left; free its slot(s).
@@ -328,7 +348,7 @@ func _rpc_set_profile(player_name: Variant, loadout: Variant) -> void:
 	for s: int in roster:
 		var info := roster[s]
 		if info.peer_id == sender and not info.is_bot:
-			info.name = NetProtocol.sanitize_name(player_name, info.name)
+			info.name = unique_name(roster, s, NetProtocol.sanitize_name(player_name, info.name))
 			info.loadout = _loadout_or_default(loadout, s)
 			_roster_updated()
 			return
@@ -389,8 +409,37 @@ func _on_peer_authentication_failed(peer_id: int) -> void:
 func _on_peer_connected(peer_id: int) -> void:
 	if _mode != Mode.HOSTING:
 		return
+	_apply_timeout(peer_id)
+	if session_in_progress and not accept_late_joiners:
+		# Accepted in the handshake just before the host pressed START: no slot mid-round.
+		_pending.erase(peer_id)
+		_rpc_refused.rpc_id(peer_id, NetProtocol.REASON_IN_PROGRESS)
+		(multiplayer as SceneMultiplayer).disconnect_peer.call_deferred(peer_id)
+		return
 	if _host_add_peer(peer_id) < 0:
 		(multiplayer as SceneMultiplayer).disconnect_peer(peer_id)
+
+
+## Client: the host refused us after the handshake (a session started meanwhile).
+@rpc("authority", "call_remote", "reliable")
+func _rpc_refused(reason: Variant) -> void:
+	if _mode != Mode.CLIENT and _mode != Mode.JOINING:
+		return
+	_shutdown_peer()
+	if not roster.is_empty():
+		roster.clear()
+		roster_changed.emit()
+	join_failed.emit(str(reason))
+
+
+## Shorter ENet timeouts for `peer_id` (host: each client; client: the host, id 1).
+func _apply_timeout(peer_id: int) -> void:
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet == null:
+		return
+	var pp := enet.get_peer(peer_id)
+	if pp:
+		pp.set_timeout(PEER_TIMEOUT.x, PEER_TIMEOUT.y, PEER_TIMEOUT.z)
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
@@ -402,6 +451,7 @@ func _on_connected_to_server() -> void:
 	if _mode == Mode.JOINING:
 		_mode = Mode.CLIENT
 		_join_timer.stop()
+		_apply_timeout(1)
 
 
 func _on_server_disconnected() -> void:

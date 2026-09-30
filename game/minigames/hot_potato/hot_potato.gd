@@ -206,6 +206,14 @@ static func urgency_for(burnt: float) -> int:
 func _new_bomb() -> void:
 	var alive := _alive()
 	if alive.size() <= 1:
+		# Nobody left to pass to (e.g. the others left the game): the round is decided.
+		var ranking: Array[int] = []
+		for q in alive:
+			ranking.append(q.slot)
+		for k in range(knocked_out.size() - 1, -1, -1):
+			if not ranking.has(knocked_out[k]):
+				ranking.append(knocked_out[k])
+		finish(ranking)
 		return
 	var p := alive[rng.randi() % alive.size()]
 	var fuse := -1.0

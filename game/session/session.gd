@@ -113,6 +113,12 @@ func start_session(rounds: int) -> void:
 	if round_order.is_empty():
 		push_warning("Session.start_session: the minigame registry is empty")
 		return
+	# Before the intro RPC goes out: refuse joiners from now on, and leave lobby mode now.
+	# Turning follow_roster off sends the lobby's last manifest, which must reach clients
+	# before the intro, not after (a late lobby manifest made clients rebuild round 1's
+	# minigame without _setup/_start).
+	Net.session_in_progress = true
+	_stage().follow_roster = false
 	_rpc_intro.rpc(0, rounds, String(round_order[0]), intro_time + countdown_time)
 
 
@@ -346,7 +352,9 @@ func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
 	var stage := _stage()
 	if stage:
 		# Rounds never follow the roster (the lobby does): leavers are knocked out, and every
-		# peer must pick the same spawn points (by roster order, not by slot).
+		# peer must pick the same spawn points (by roster order, not by slot). The host
+		# already turned it off in start_session (so this sends nothing); clients got it with
+		# the lobby's last manifest, this is a local safety net.
 		stage.follow_roster = false
 		if scene_override:
 			current_minigame = stage.load_minigame_scene(scene_override)

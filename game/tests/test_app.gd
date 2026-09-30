@@ -327,3 +327,28 @@ func test_real_hot_potato() -> void:
 
 func test_real_coin_scramble() -> void:
 	await _real_round(&"coin_scramble")
+
+
+# --- Names --------------------------------------------------------------------------------------
+
+func test_host_makes_duplicate_names_unique() -> void:
+	var roster: Dictionary[int, PlayerInfo] = {}
+	roster[0] = PlayerInfo.new(0, 1, "Player", false, {})
+	roster[1] = PlayerInfo.new(1, 5, "Player 2", false, {})
+	var net_script := load("res://net/net.gd")
+	assert_eq(net_script.unique_name(roster, 2, "player"), "player 3", "case-insensitive, next free number")
+	assert_eq(net_script.unique_name(roster, 0, "Player"), "Player", "own entry does not count")
+	assert_eq(net_script.unique_name(roster, 2, "Mia"), "Mia", "free names stay")
+	roster[2] = PlayerInfo.new(2, 6, "Sixteen chars xy", false, {})
+	var long := net_script.unique_name(roster, 3, "Sixteen chars xy") as String
+	assert_true(long.length() <= 16 and long.ends_with(" 2"), "cut to 16 with the suffix: %s" % long)
+
+
+func test_first_run_name_is_friendly() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for i in 20:
+		var n := MenuTitleScreen.random_name(rng)
+		assert_true(n.length() <= 16 and n.contains(" ") and n != "Player", "friendly name: %s" % n)
+	# No saved profile in this test: the title shows a random name, not "Player".
+	assert_true(app.menu.title.name_edit.text != "Player", "title name is %s" % app.menu.title.name_edit.text)

@@ -69,7 +69,8 @@ func _init() -> void:
 	var list_holder := MenuUI.vbox(10)
 	list_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pad.add_child(list_holder)
-	empty_label = MenuUI.label("No games found yet. The host must be on the same network (Wi-Fi or cable) and have pressed Host game.", &"MutedLabel")
+	empty_label = MenuUI.label("No games found yet. The host must be on the same network (Wi-Fi or cable) and have pressed Host game. "
+			+ "Still nothing? Both PCs must allow Minigame Mansion through Windows Firewall on Private AND Public networks; or type the host's IP below.", &"MutedLabel")
 	empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	empty_label.custom_minimum_size = Vector2(600, 0)
 	list_holder.add_child(empty_label)

@@ -19,6 +19,10 @@ var alpha: float = 1.0
 @onready var _name: Label3D = $Name
 @onready var _dot: MeshInstance3D = $Dot
 var _dot_material: StandardMaterial3D
+## Name and colour last shown: re-applied when the player's roster entry changes (lobby
+## rename / wardrobe recolour reach Player.display_name / loadout through the Stage).
+var _shown_name: String = ""
+var _shown_primary: Variant = null
 
 
 func _ready() -> void:
@@ -47,6 +51,8 @@ func _process(_delta: float) -> void:
 		visible = false
 		return
 	visible = player.alive
+	if player.display_name != _shown_name or player.loadout.get("primary", "") != _shown_primary:
+		_apply()
 	global_position = player.global_position + Vector3.UP * height
 	var cam := get_viewport().get_camera_3d()
 	var a := 1.0
@@ -58,6 +64,8 @@ func _process(_delta: float) -> void:
 func _apply() -> void:
 	if not is_instance_valid(player):
 		return
+	_shown_name = player.display_name
+	_shown_primary = player.loadout.get("primary", "")
 	var color := _player_color()
 	_name.text = player.display_name if player.display_name != "" else RoundStyle.player_name(player.slot)
 	_name.outline_modulate = RoundStyle.CHARCOAL
