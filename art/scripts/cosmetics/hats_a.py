@@ -28,8 +28,9 @@ def top_hat():
     b.lathe([(0.246, -0.11), (0.250, -0.07), (0.262, 0.30), (0.258, 0.322), (0.245, 0.338),
              (0.225, 0.345)], charcoal, S)
     # brim with a rolled-up edge
+    # (the top surface rises into a collar against the crown, so no scalp shows at the joint)
     b.lathe(loop((0.235, -0.135), (0.33, -0.135), (0.372, -0.118), (0.384, -0.09), (0.372, -0.072),
-                 (0.33, -0.088), (0.26, -0.092)), charcoal, S)
+                 (0.33, -0.082), (0.288, -0.066), (0.256, -0.045), (0.235, -0.045)), charcoal, S)
     # plum band, flanged
     b.lathe(loop((0.245, -0.035), (0.270, -0.035), (0.276, -0.028), (0.276, 0.05), (0.270, 0.057),
                  (0.245, 0.057)), plum, S)

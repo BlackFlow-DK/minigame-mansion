@@ -58,15 +58,15 @@ def pirate():
     b = Builder()
     charcoal, gold, white, red = mat("charcoal"), mat("gold", 0.4), mat("white"), mat("red")
     S = 26
-    b.lathe([(0.238, -0.115), (0.246, -0.05), (0.244, 0.05), (0.235, 0.12), (0.20, 0.165), (0.12, 0.185),
-             (0.05, 0.19)], charcoal, S)
+    b.lathe([(0.240, -0.115), (0.256, -0.04), (0.266, 0.05), (0.262, 0.14), (0.238, 0.21), (0.185, 0.258),
+             (0.10, 0.282), (0.04, 0.288)], charcoal, S)
     th_c = math.radians(90)  # back corner; corners at 90, 210, 330 deg; flat wall faces the front (-Y)
 
     def top_pt(th, u):
         c = (math.cos(3 * (th - th_c)) + 1) / 2
-        r_edge = 0.285 + 0.165 * c ** 1.5
-        z_edge = 0.035 - 0.19 * c ** 0.75
-        r = 0.235 + (r_edge - 0.235) * u
+        r_edge = 0.325 + 0.15 * c ** 1.5
+        z_edge = 0.15 - 0.29 * c ** 0.75
+        r = 0.240 + (r_edge - 0.240) * u
         z = -0.09 + (z_edge + 0.09) * u ** 2.2
         return r, z
 
@@ -79,16 +79,16 @@ def pirate():
             pts.append(Vector((r * math.cos(th), r * math.sin(th), z + dz)))
         return pts
     tops = [0.0, 0.4, 0.75, 0.92, 1.0]
-    thick = 0.026
+    thick = 0.032
     rings = [ring_at(u) for u in tops]
     rings.append(ring_at(1.0, -thick * 0.5, 0.012))
     rings += [ring_at(u, -thick) for u in (1.0, 0.6, 0.0)]
     rings.append(ring_at(0.0))
     n_top = len(tops)
-    gold_iv = {n_top - 2, n_top - 1, n_top, n_top + 1}
+    gold_iv = {n_top - 1, n_top}  # thin gold edge trim only
     b.surf(rings, lambda i, j: gold if i in gold_iv else charcoal)
     # badge: gold plate with a skull and crossbones
-    bx = front_xf(-0.262, 0.085)
+    bx = front_xf(-0.313, 0.04)
     b.prism(H.rect_outline(0.19, 0.16, 0.05), -0.05, 0.006, gold, 0.006, bx)
     # crossbones
     for sx in (-1, 1):
@@ -232,8 +232,9 @@ def cat_ears():
     Rb = 0.395
     path = []
     for k in range(13):
-        a = math.radians(-62 + 124 * k / 12)
-        path.append(Vector((math.sin(a) * Rb, 0.0, H.HEAD_C + math.cos(a) * Rb)))
+        a = math.radians(-58 + 116 * k / 12)
+        rr = Rb - 0.03 * smoothstep(0.6, 1.0, abs(k - 6) / 6.0)  # ends dive into the head
+        path.append(Vector((math.sin(a) * rr, 0.0, H.HEAD_C + math.cos(a) * rr)))
     b.sweep(path, (0.044, 0.02), pink, 8, cap=True, up=(0, 0, 1))
 
     def squash(k, off):
