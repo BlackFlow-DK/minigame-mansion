@@ -53,3 +53,6 @@ func _apply(root: Node3D) -> void:
 	var cosmetics := get_node_or_null(^"/root/Cosmetics")
 	if cosmetics != null:
 		cosmetics.call(&"apply", root, player.loadout)
+	# Tinted copies and fresh items are plain materials: give them the house toon look again
+	# (idempotent and shared per material; untouched surfaces keep the toon from the visuals).
+	BlobToon.apply(root)

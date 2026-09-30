@@ -32,7 +32,7 @@ func _hold_jump(p: Player) -> Callable:
 		p.intent.jump_held = true
 
 
-func test_model_has_all_parts_sockets_and_tint() -> void:
+func test_model_has_all_parts_and_sockets() -> void:
 	var p := spawn_arena(1)[0]
 	var vis := _vis(p)
 	var root := vis.get_model_root()
@@ -50,19 +50,75 @@ func test_model_has_all_parts_sockets_and_tint() -> void:
 		if assert_true(node != null, "socket %s" % s):
 			assert_near(node.position, sockets[s], 0.001, "socket %s position" % s)
 	assert_true(vis.find_child("Placeholder", true, false) == null, "placeholder capsule is gone")
-	# Player materials: per-instance copies that keep their names, tinted from the loadout.
+
+
+## The surface of `mesh` that uses `material_name` as shown now (override or mesh material).
+func _shown(mesh: MeshInstance3D, material_name: String) -> BaseMaterial3D:
+	for i in mesh.mesh.get_surface_count():
+		var src := mesh.mesh.surface_get_material(i)
+		if src and src.resource_name == material_name:
+			return mesh.get_active_material(i) as BaseMaterial3D
+	return null
+
+
+## Every surface under `node` shows a toon material.
+func _all_toon(node: Node) -> bool:
+	var meshes: Array[Node] = node.find_children("*", "MeshInstance3D", true, false)
+	if node is MeshInstance3D:
+		meshes.append(node)
+	for n in meshes:
+		var mi := n as MeshInstance3D
+		for i in mi.mesh.get_surface_count():
+			var m := mi.get_active_material(i)
+			if m is BaseMaterial3D and not m.has_meta(Look.TOON_META):
+				return false
+	return meshes.size() > 0
+
+
+func test_cosmetics_dress_the_model_toon_shaded() -> void:
+	var p := spawn_arena(2)[0]
+	await step(2)
+	var root := _vis(p).get_model_root()
 	var body := root.get_node("Body") as MeshInstance3D
-	var seen := {}
-	for i in body.mesh.get_surface_count():
-		var mat := body.get_active_material(i) as BaseMaterial3D
-		if mat == null:
-			continue
-		seen[mat.resource_name] = true
-		if mat.resource_name == "PlayerPrimary":
-			var want := Color(str(p.loadout["primary"]))
-			assert_true(mat.albedo_color.is_equal_approx(want), "primary tint %s, got %s" % [want, mat.albedo_color])
-			assert_true(body.mesh.surface_get_material(i) != mat, "tint is a per-instance copy")
-	assert_true(seen.has("PlayerPrimary") and seen.has("PlayerSecondary"), "body keeps both player materials")
+	var primary := _shown(body, "PlayerPrimary")
+	assert_true(primary.albedo_color.is_equal_approx(Color(str(p.loadout["primary"]))), "loadout colour shown")
+	assert_true(primary.has_meta(Look.TOON_META), "tinted body is toon")
+	var hat := root.get_node_or_null("HatSocket/Cosmetic_hat")
+	if assert_true(hat != null, "default hat worn"):
+		assert_true(_all_toon(hat), "hat is toon")
+	assert_true(_all_toon(root), "whole dressed blob is toon")
+	# Wardrobe/lobby change later: new colour and new items, still toon everywhere.
+	var loadout := p.loadout.duplicate()
+	loadout["primary"] = "#26306b"
+	loadout["hat"] = "crown"
+	loadout["face"] = "round_glasses"
+	loadout["neck"] = "scarf"
+	loadout["back"] = "cape"
+	p.loadout = loadout
+	await step(3)
+	assert_true(_shown(body, "PlayerPrimary").albedo_color.is_equal_approx(Color("#26306b")), "new colour")
+	for item: String in ["HatSocket/Cosmetic_hat", "FaceSocket/Cosmetic_face", "NeckSocket/Cosmetic_neck", "BackSocket/Cosmetic_back"]:
+		assert_true(root.get_node_or_null(item) != null, "%s worn" % item)
+	assert_true(_all_toon(root), "still toon after the change")
+
+
+func test_pop_copy_keeps_tint_and_items() -> void:
+	var p := spawn_arena(2)[0]
+	await step(3)
+	var colour := Color(str(p.loadout["primary"]))
+	var before := p.get_parent().get_children()
+	p.eliminate(&"test")
+	await step(1)
+	var ghost: Node3D = null
+	for n in p.get_parent().get_children():
+		if not before.has(n):
+			ghost = n as Node3D
+	if not assert_true(ghost != null, "pop copy exists"):
+		return
+	var body := ghost.get_node("Body") as MeshInstance3D
+	assert_true(_shown(body, "PlayerPrimary").albedo_color.is_equal_approx(colour), "copy keeps the tint")
+	assert_true(ghost.get_node_or_null("HatSocket/Cosmetic_hat") != null, "copy keeps the hat")
+	assert_true(_all_toon(ghost), "copy is toon")
 
 
 func test_idle_settles_at_rest_scale() -> void:

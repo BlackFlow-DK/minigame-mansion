@@ -4,7 +4,7 @@ extends PlayerComponent
 ## in code, on every peer. Owner: character animator.
 ##
 ## It only READS replicated state (global position -> a velocity estimate, `facing`, `alive`,
-## `slot`, `loadout`) and LISTENS to the player events (jumped, landed, shove_started,
+## `slot`) and LISTENS to the player events (jumped, landed, shove_started,
 ## shove_hit, got_hit, stunned, eliminated, respawned). It never writes gameplay state and
 ## ignores `intent`, so a remote copy animates exactly like the authority's.
 ##
@@ -18,22 +18,23 @@ extends PlayerComponent
 ## (landing squash, shove, hit, stun, pop-in) -> emotes. The face eases between
 ## BlobExpressions presets, blinks, and glances around or at the nearest other player.
 ##
+## Materials: this component never colours the blob. It gives the model the house toon look
+## once when it instances it (`BlobToon.apply`: shared Look toon materials); the cosmetics
+## component tints the player materials, attaches items under the sockets and re-applies the
+## toon to what it changed.
+## Nothing here writes a material or touches the `Cosmetic_*` items; a flash effect, if one is
+## ever added, must go through `material_overlay`.
+##
 ## Public API (other systems):
 ##   get_model_root() -> Node3D           the blob.glb instance. Sockets HatSocket, FaceSocket,
 ##                                        NeckSocket, BackSocket and the PlayerPrimary /
 ##                                        PlayerSecondary materials live under it and stay put.
-##   apply_tint(primary, secondary)       recolour the player materials (cosmetics can take over)
 ##   play_emote(name, loop := false) -> bool   &"cheer", &"wave", &"sad"; false if unknown
 ##   stop_emote()
 ##   set_look_target(target)              Node3D or world Vector3 to look at; null = glance around
 ##   set_expression(name, seconds := -1.0)     force a BlobExpressions preset; &"" releases it
 ##   get_reaction() / get_expression() / get_emote()   what is showing now (tests, debugging)
 
-## Default primary colour per slot when `loadout` has none (secondary: DEFAULT_SECONDARY).
-const DEFAULT_PRIMARY: Array[String] = [
-	"#ff5a5f", "#3fa9f5", "#62c370", "#ffc93c", "#a26bff", "#ff8c42", "#2ec4b6", "#f7f7f7",
-]
-const DEFAULT_SECONDARY := "#fff4e6"
 const EMOTES: Dictionary = {&"cheer": 1.8, &"wave": 1.8, &"sad": 2.2}  # name -> seconds
 
 const SHOVE_TIME := 0.4
@@ -125,11 +126,11 @@ func _ready() -> void:
 		return
 	_rig.root.name = "Blob"
 	_motion.add_child(_rig.root)
+	BlobToon.apply(_rig.root)
 	if player == null:
 		return
 	_rng.seed = hash(player.slot) + 7919
 	_blink_in = _rng.randf_range(0.5, 3.0)
-	_tint_from_loadout()
 	_snap_to_player()
 	player.jumped.connect(_on_jumped)
 	player.landed.connect(_on_landed)
@@ -144,33 +145,12 @@ func _ready() -> void:
 
 # --- Public API ------------------------------------------------------------------------
 
-## The blob.glb instance. Cosmetics tint its PlayerPrimary/PlayerSecondary materials and
-## attach items to its HatSocket/FaceSocket/NeckSocket/BackSocket children; both stay stable.
+## The blob.glb instance. The cosmetics component tints its PlayerPrimary/PlayerSecondary
+## materials and attaches items to its HatSocket/FaceSocket/NeckSocket/BackSocket children;
+## both stay stable (the visuals never replace them).
 ## Its own transform is animated (squash-and-stretch), so attach under the sockets, not beside it.
 func get_model_root() -> Node3D:
 	return _rig.root if _rig else null
-
-
-## Recolours this blob's PlayerPrimary / PlayerSecondary surfaces with per-instance copies
-## (the shared imported materials, and their names, are left untouched).
-func apply_tint(primary: Color, secondary: Color) -> void:
-	if _rig == null:
-		return
-	for mi in _rig.meshes():
-		for i in mi.mesh.get_surface_count():
-			var base := mi.mesh.surface_get_material(i) as BaseMaterial3D
-			if base == null:
-				continue
-			var colour: Color
-			if base.resource_name == "PlayerPrimary":
-				colour = primary
-			elif base.resource_name == "PlayerSecondary":
-				colour = secondary
-			else:
-				continue
-			var copy := base.duplicate() as BaseMaterial3D
-			copy.albedo_color = colour
-			mi.set_surface_override_material(i, copy)
 
 
 ## Plays `emote` (&"cheer", &"wave", &"sad") on top of whatever the blob is doing.
@@ -224,17 +204,6 @@ func get_expression() -> StringName:
 ## &"land", &"air", &"emote", &"run" or &"idle".
 func get_reaction() -> StringName:
 	return _reaction
-
-
-# --- Tint --------------------------------------------------------------------------------
-
-## Colours from `player.loadout` (`primary`/`secondary` hex), else a per-slot default.
-## The one place the visuals colour the blob; the cosmetics system may take this over.
-func _tint_from_loadout() -> void:
-	var slot_primary := Color(DEFAULT_PRIMARY[posmod(player.slot, DEFAULT_PRIMARY.size())])
-	var primary := Color.from_string(str(player.loadout.get("primary", "")), slot_primary)
-	var secondary := Color.from_string(str(player.loadout.get("secondary", "")), Color(DEFAULT_SECONDARY))
-	apply_tint(primary, secondary)
 
 
 # --- Events ------------------------------------------------------------------------------
@@ -315,10 +284,12 @@ func _on_respawned(_xform: Transform3D) -> void:
 
 ## The real blob is hidden the moment a player is eliminated (Player hides itself), so the
 ## shrink-pop plays on a copy of the model left behind in the world, which frees itself.
+## A plain node-by-node copy (no re-instancing from blob.glb), so it keeps the tint, the toon
+## materials and the worn items exactly as they are on the player.
 func _spawn_pop_ghost() -> void:
 	if _rig == null or not is_inside_tree() or player.get_parent() == null:
 		return
-	var ghost := _rig.root.duplicate() as Node3D
+	var ghost := _rig.root.duplicate(Node.DUPLICATE_SIGNALS | Node.DUPLICATE_GROUPS | Node.DUPLICATE_SCRIPTS) as Node3D
 	player.get_parent().add_child(ghost)
 	ghost.name = "%sPop" % player.name
 	ghost.global_transform = _rig.root.global_transform

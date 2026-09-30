@@ -86,16 +86,6 @@ func rest_of(part: StringName) -> Vector3:
 	return rest.get(part, Vector3.ZERO)
 
 
-## Every MeshInstance3D of the blob itself (not items attached to sockets later).
-func meshes() -> Array[MeshInstance3D]:
-	var out: Array[MeshInstance3D] = []
-	for child in root.get_children():
-		var mi := child as MeshInstance3D
-		if mi and mi.mesh:
-			out.append(mi)
-	return out
-
-
 func _part(n: StringName) -> Node3D:
 	var node := root.get_node_or_null(NodePath(String(n))) as Node3D
 	if node == null:
