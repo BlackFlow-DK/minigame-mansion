@@ -40,6 +40,41 @@ BODY_C = Vector((0.0, 0.40, 0.0))
 BODY_R = 0.40
 SPHERES = ((HEAD_C, HEAD_R), (BODY_C, BODY_R))
 
+# The REAL blob profile (copied from art/scripts/character/blob.py body_r). Items built with real=True hug this;
+# older items still use the two-sphere stand-in above so their catalog fits stay valid.
+REAL = False
+_NECK_Y, _NECK_R, _NECK_SLOPE, _BELLY_Y, _BELLY_R, _BASE_R, _HEAD_Y = 0.40, 0.40, -0.12, 0.29, 0.41, 0.10, 0.62
+
+
+def set_real_body(flag):
+    global REAL
+    REAL = bool(flag)
+
+
+def _herm(y, y0, r0, m0, y1, r1, m1):
+    h = y1 - y0
+    t = (y - y0) / h
+    t2, t3 = t * t, t * t * t
+    return (2 * t3 - 3 * t2 + 1) * r0 + (t3 - 2 * t2 + t) * h * m0 + (-2 * t3 + 3 * t2) * r1 + (t3 - t2) * h * m1
+
+
+def real_body_r(y):
+    if y < _BELLY_Y:
+        k = (_BELLY_Y - max(y, 0.0)) / _BELLY_Y
+        return _BASE_R + (_BELLY_R - _BASE_R) * math.sqrt(max(0.0, 1.0 - k * k))
+    if y < _NECK_Y:
+        return _herm(y, _BELLY_Y, _BELLY_R, 0.0, _NECK_Y, _NECK_R, _NECK_SLOPE)
+    if y < _HEAD_Y:
+        return _herm(y, _NECK_Y, _NECK_R, _NECK_SLOPE, _HEAD_Y, HEAD_R, 0.0)
+    return math.sqrt(max(0.0, HEAD_R ** 2 - (y - _HEAD_Y) ** 2))
+
+
+def _real_normal_rz(y):
+    e = 1e-4
+    drdy = (real_body_r(y + e) - real_body_r(y - e)) / (2 * e)
+    ln = math.hypot(1.0, drdy)
+    return 1.0 / ln, -drdy / ln  # (radial, vertical) components
+
 
 def _dominant(y):
     """(centre, radius, horizontal radius) of the sphere that is widest at height y."""
@@ -55,12 +90,18 @@ def _dominant(y):
 
 def blob_r(y):
     """Horizontal radius of the blob at height y (0 outside)."""
+    if REAL:
+        return real_body_r(y)
     b = _dominant(y)
     return b[2] if b else 0.0
 
 
 def blob_surface(phi, y, off=0.0):
     """Point on the blob at angle phi (0 = front, +x side positive, pi = back) and height y, pushed `off` along the normal."""
+    if REAL:
+        R = real_body_r(y)
+        nr, ny = _real_normal_rz(y)
+        return Vector((R * math.sin(phi), y, R * math.cos(phi))) + Vector((nr * math.sin(phi), ny, nr * math.cos(phi))) * off
     c, r, R = _dominant(y)
     base = Vector((R * math.sin(phi), y, R * math.cos(phi)))
     n = (base - c).normalized()
@@ -83,11 +124,20 @@ def blob_ring(phi, y, roff=0.0):
 
 def blob_normal(p):
     """Outward normal of the blob nearest to world point p (dominant sphere at p's height)."""
+    if REAL:
+        y = min(max(p.y, 0.0), 0.99)
+        nr, ny = _real_normal_rz(y)
+        phi = math.atan2(p.x, p.z)
+        return Vector((nr * math.sin(phi), ny, nr * math.cos(phi)))
     c, _r, _R = _dominant(min(max(p.y, 0.02), 0.98))
     return (p - c).normalized()
 
 
 def blob_sdf(p):
+    if REAL:
+        if p.y >= _HEAD_Y:
+            return (p - Vector((0.0, _HEAD_Y, 0.0))).length - HEAD_R
+        return math.hypot(p.x, p.z) - real_body_r(min(max(p.y, 0.0), 1.0))
     return min((p - c).length - r for c, r in SPHERES)
 
 
@@ -399,9 +449,10 @@ SLOT_LIMITS = {
 }
 
 
-def export_item(slot, item_id, build_fn, socket):
+def export_item(slot, item_id, build_fn, socket, real=False):
     """Reset the scene, build parts with build_fn(socket) -> [Part], check the contract, export cosmetics/<slot>_<id>.glb."""
     artlib.reset_scene()
+    set_real_body(real)
     parts = build_fn(Vector(socket))
     for p in parts:
         p.build()
@@ -412,6 +463,9 @@ def export_item(slot, item_id, build_fn, socket):
     deepest = -min(blob_sdf(q) for q in pts)
     name = f"{slot}_{item_id}"
     print(f"WEARABLE {name}: tris={tris} bbox_world=({lo.x:.2f},{lo.y:.2f},{lo.z:.2f})..({hi.x:.2f},{hi.y:.2f},{hi.z:.2f}) deepest_in_body={deepest:.3f} parts={[p.name for p in parts]}")
+    for p in parts:
+        sd = [blob_sdf(q) for q in p.world_points()]
+        print(f"  part {p.name}: sdf min={min(sd):+.3f} max={max(sd):+.3f} tris={p.tris()}")
     problems = []
     if not 200 <= tris <= 1500:
         problems.append(f"triangle count {tris} outside 200..1500")

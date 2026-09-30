@@ -21,25 +21,30 @@ TAU = 2 * math.pi
 PI = math.pi
 
 
-# ------------------------------------------------------------------ cape
+# ------------------------------------------------------------------ cape  (real body, catalog fit = identity)
 def cape(sock):
-    ytop, ybot = 0.57, 0.12
+    """Gathered into a small collar high on the back, flaring out away from the body to a wavy hem.
+    It spans only +-26..52 degrees round the back (never the sides) and stays clear of the belly."""
+    ytop, ybot = 0.63, 0.14
 
     def cp(u, s, extra=0.0):
-        fold = math.cos(4 * PI * u)
-        y = ytop + (ybot - ytop) * s - 0.022 * s * s * (0.5 - 0.5 * fold)
-        th = math.radians(60 + 24 * s) * u
-        off = 0.02 + 0.06 * s * s + 0.018 * s * fold + extra
-        return blob_ring(PI + th, y, off)
+        f1 = math.cos(5 * PI * u)
+        f2 = 0.5 * math.cos(3 * PI * u + 1.0)
+        y = ytop + (ybot - ytop) * s - 0.034 * s ** 2.5 * (0.5 - 0.5 * f1)
+        th = math.radians(26 + 26 * s) * u
+        gap = 0.016 + 0.085 * s ** 1.3 + 0.03 * s * (0.8 * f1 + f2)
+        return blob_ring(PI + th, y, gap + extra)
 
-    cloth = Part("Cloth", sock, [("CapeRed", "red", 0.8)], closed=True, outward=(0, 0.45, 0), solidify=0.018, sharp=70)
+    cloth = Part("Cloth", sock, [("CapeRed", "red", 0.8)], closed=True, outward=(0, 0.45, 0), solidify=0.014, sharp=70)
     cloth.grid(lambda u, v: cp(u * 2 - 1, v), 24, 6)
-    trim = Part("Trim", sock, [("CapeCream", "cream", 0.85), ("CapeGold", "gold", 0.4)], sharp=75)
-    trim.tube([cp(-1 + 2 * i / 22, 0.0, 0.012) for i in range(23)], 0.03, sides=6)
-    trim.tube([cp(-1 + 2 * i / 22, 1.0, 0.004) for i in range(23)], 0.011, sides=4, m=1)
-    for sgn in (-1, 1):
-        trim.ellipsoid(cp(sgn, 0.02, 0.035), (0.028, 0.028, 0.028), seg=8, rings=4, m=1)
-    return [cloth, trim]
+    collar = Part("Collar", sock, [("CapeCream", "cream", 0.85)], sharp=75)
+    collar.tube([cp(-0.96 + 1.92 * i / 18, 0.0, 0.012) for i in range(19)],
+                lambda t: 0.008 + 0.018 * (1 - (2 * t - 1) ** 2), sides=6)
+    trim = Part("Trim", sock, [("CapeGold", "gold", 0.4)], sharp=75)
+    trim.tube([cp(-1 + 2 * i / 26, 1.0, 0.003) for i in range(27)], 0.009, sides=4)
+    c = cp(0.0, 0.0, 0.034)
+    trim.ellipsoid(c, (0.028, 0.012, 0.028), seg=8, rings=4, rot=basis_from_y(Vector((0, 0, -1))))
+    return [cloth, collar, trim]
 
 
 # ------------------------------------------------------------------ backpack
@@ -152,16 +157,17 @@ def turtle_shell(sock):
     return [shell, plates, rim]
 
 
+# (builder, uses the real blob profile). Items still on the two-sphere stand-in keep their tuned catalog fits.
 ITEMS = {
-    "cape": cape,
-    "backpack": backpack,
-    "angel_wings": angel_wings,
-    "jetpack": jetpack,
-    "turtle_shell": turtle_shell,
+    "cape": (cape, True),
+    "backpack": (backpack, False),
+    "angel_wings": (angel_wings, False),
+    "jetpack": (jetpack, False),
+    "turtle_shell": (turtle_shell, False),
 }
 
 if __name__ == "__main__":
     only = artlib.script_args()
-    for item_id, fn in ITEMS.items():
+    for item_id, (fn, real) in ITEMS.items():
         if not only or item_id in only:
-            export_item("back", item_id, fn, SOCKET)
+            export_item("back", item_id, fn, SOCKET, real)

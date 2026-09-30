@@ -36,14 +36,27 @@ def surf_path(ctrl_xy, off, per_seg=2, sign=1):
     return [blob_xy(p.x, p.y, True, off) for p in pts]
 
 
-# ------------------------------------------------------------------ round_glasses
+# ------------------------------------------------------------------ round_glasses  (real body, catalog fit = identity)
+RG_X, RG_Y, RG_R = 0.138, 0.665, 0.128   # rim centre (the real eye centre) and rim radius
+
+
 def round_glasses(sock):
     m = ("GlassesRed", "red", 0.45)
     fr = Part("Frame", sock, [m], sharp=75)
     for s in (-1, 1):
-        fr.tube(ring_pts(s * EX, EY, 0.112, 0.03, 28), 0.013, sides=6, closed=True)
-        fr.tube(temple_pts(EX + 0.112, 0.70, s, 0.016), 0.009, sides=5)
-    fr.tube(surf_path([(-0.026, 0.69), (-0.012, 0.712), (0.0, 0.716), (0.012, 0.712), (0.026, 0.69)], 0.03), 0.009, sides=5)
+        fr.tube(ring_pts(s * RG_X, RG_Y, RG_R, 0.034, 28), 0.013, sides=6, closed=True)
+        # arm: leaves the rim at 0.034 and settles onto the head (touching it) within the first third
+        p0 = blob_xy((RG_X + RG_R) * s, RG_Y, True, 0.0)
+        phi0 = math.atan2(p0.x, p0.z)
+        n = 10
+        pts = []
+        for i in range(n):
+            t = i / (n - 1)
+            k = min(1.0, t / 0.3)
+            off = 0.034 + (0.0075 - 0.034) * (k * k * (3 - 2 * k))
+            pts.append(blob_surface(phi0 + (s * 1.32 - phi0) * t, RG_Y - 0.02 * t, off))
+        fr.tube(pts, 0.009, sides=5)
+    fr.tube(surf_path([(-0.014, 0.682), (0.0, 0.706), (0.014, 0.682)], 0.036, per_seg=3), 0.009, sides=5)
     return [fr]
 
 
@@ -93,13 +106,18 @@ def monocle(sock):
     return [ring, chain]
 
 
-# ------------------------------------------------------------------ moustache
+# ------------------------------------------------------------------ moustache  (real body, catalog fit = identity)
 def moustache(sock):
+    """0.31 m wide, ~0.05 m tall in the middle: an arch over the mouth (mouth top ~0.57), ends drooping down."""
     p = Part("Moustache", sock, [("MoustacheDark", "charcoal", 0.55)], sharp=85)
-    ctrl = [(0.0, 0.598), (0.045, 0.588), (0.10, 0.583), (0.155, 0.591), (0.195, 0.611), (0.212, 0.636)]
+    ctrl = [(0.0, 0.612), (0.045, 0.607), (0.09, 0.598), (0.125, 0.586), (0.152, 0.570)]
+    rad = lambda t: 0.006 + 0.02 * (1 - t) ** 0.8  # noqa: E731
     for s in (-1, 1):
-        p.tube(surf_path(ctrl, 0.028, per_seg=2, sign=s), lambda t: 0.006 + 0.022 * (1 - t) ** 0.7, sides=8)
-    p.ellipsoid(blob_xy(0, 0.597, True, 0.026), (0.052, 0.034, 0.03), seg=10, rings=6)
+        xy = catmull([Vector((s * x, y, 0)) for x, y in ctrl], 3)
+        n = len(xy)
+        pts = [blob_xy(q.x, q.y, True, 0.6 * rad(i / (n - 1)) + 0.004) for i, q in enumerate(xy)]
+        p.tube(pts, rad, sides=8)
+    p.ellipsoid(blob_xy(0, 0.612, True, 0.019), (0.05, 0.028, 0.026), seg=10, rings=6)
     return [p]
 
 
@@ -114,29 +132,32 @@ def clown_nose(sock):
     return [red, gl]
 
 
-# ------------------------------------------------------------------ eye_patch
+# ------------------------------------------------------------------ eye_patch  (real body, catalog fit = identity)
+PATCH_A, PATCH_B, PATCH_H = 0.119, 0.106, 0.061
+
+
 def eye_patch(sock):
     ch = ("PatchCharcoal", "charcoal", 0.7)
-    cx = -EX
+    cx, cy = -0.138, 0.665
     patch = Part("Patch", sock, [ch], closed=False, outward=(0, 0.62, 0), sharp=70)
-    patch.cap(cx, EY, 0.125, 0.112, 0.064, -0.004, True, 0.5, seg=20, rings=7)
+    patch.cap(cx, cy, PATCH_A, PATCH_B, PATCH_H, -0.004, True, 0.5, seg=20, rings=7)
     strap = Part("Strap", sock, [ch], sharp=75)
     for ctrl in (
-        [(-0.22, 0.775), (-0.02, 0.83), (0.25, 0.885), (0.6, 0.92), (1.0, 0.90), (1.5, 0.85), (2.0, 0.80)],
-        [(-0.76, 0.70), (-1.05, 0.69), (-1.5, 0.68), (-2.0, 0.67)],
+        [(-0.30, 0.755), (-0.05, 0.815), (0.22, 0.87), (0.55, 0.905), (0.95, 0.895), (1.45, 0.85), (1.95, 0.80)],
+        [(-0.75, 0.665), (-1.05, 0.66), (-1.5, 0.655), (-2.0, 0.65)],
     ):
-        pts = catmull([Vector((a, y, 0)) for a, y in ctrl], 2)
-        strap.tube([blob_surface(q.x, q.y, 0.01) for q in pts], 0.011, sides=5)
+        pts = catmull([Vector((a, y, 0)) for a, y in ctrl], 3)
+        strap.tube([blob_surface(q.x, q.y, 0.004) for q in pts], 0.011, sides=5)
     x_mark = Part("Stitch", sock, [("PatchCream", "cream", 0.6)], sharp=85, bevel=(0.002, 1))
 
     def dome(x, y):
-        rho2 = ((x - cx) / 0.125) ** 2 + ((y - EY) / 0.112) ** 2
-        return -0.004 + 0.064 * math.sqrt(max(0.0, 1.0 - rho2))
+        rho2 = ((x - cx) / PATCH_A) ** 2 + ((y - cy) / PATCH_B) ** 2
+        return -0.004 + PATCH_H * math.sqrt(max(0.0, 1.0 - rho2))
 
-    L, w = 0.048, 0.0115
+    L, w = 0.046, 0.011
     plus = [(L, -w), (L, w), (w, w), (w, L), (-w, L), (-w, w), (-L, w), (-L, -w), (-w, -w), (-w, -L), (w, -L), (w, -w)]
     ca, sa = math.cos(math.radians(45)), math.sin(math.radians(45))
-    cross = [(cx + px * ca - py * sa, EY + px * sa + py * ca) for px, py in plus]
+    cross = [(cx + px * ca - py * sa, cy + px * sa + py * ca) for px, py in plus]
     x_mark.prism(cross, lambda x, y: blob_xy(x, y, True, dome(x, y) + 0.007), lambda x, y: blob_xy(x, y, True, dome(x, y) - 0.003))
     return [patch, strap, x_mark]
 
@@ -151,17 +172,18 @@ def _rot_in_plane(n, ang_deg):
     return base @ Matrix.Rotation(math.radians(ang_deg), 3, "Z")
 
 
+# (builder, uses the real blob profile). Items still on the two-sphere stand-in keep their tuned catalog fits.
 ITEMS = {
-    "round_glasses": round_glasses,
-    "star_shades": star_shades,
-    "monocle": monocle,
-    "moustache": moustache,
-    "clown_nose": clown_nose,
-    "eye_patch": eye_patch,
+    "round_glasses": (round_glasses, True),
+    "star_shades": (star_shades, False),
+    "monocle": (monocle, False),
+    "moustache": (moustache, True),
+    "clown_nose": (clown_nose, False),
+    "eye_patch": (eye_patch, True),
 }
 
 if __name__ == "__main__":
     only = artlib.script_args()
-    for item_id, fn in ITEMS.items():
+    for item_id, (fn, real) in ITEMS.items():
         if not only or item_id in only:
-            export_item("face", item_id, fn, SOCKET)
+            export_item("face", item_id, fn, SOCKET, real)

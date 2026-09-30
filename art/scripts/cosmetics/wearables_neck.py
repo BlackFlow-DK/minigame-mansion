@@ -20,13 +20,22 @@ SOCKET = (0.0, 0.40, 0.0)
 TAU = 2 * math.pi
 
 
-# ------------------------------------------------------------------ scarf
+def back_w(phi, a0=1.4, a1=2.4):
+    """0 over the front and sides, smoothly 1 over the back (|phi| from a0 to a1 rad): neck items go flat there so they sit under back items."""
+    a = abs(math.remainder(phi, TAU))
+    k = min(1.0, max(0.0, (a - a0) / (a1 - a0)))
+    return k * k * (3 - 2 * k)
+
+
+# ------------------------------------------------------------------ scarf  (real body)
 def scarf(sock):
     wrap = Part("Wrap", sock, [("ScarfRed", "red", 0.85), ("ScarfCream", "cream", 0.85)], sharp=75)
     for y0, t, wob, ph in ((0.385, 0.033, 0.010, 0.0), (0.440, 0.034, 0.010, 2.0), (0.494 - 0.034, 0.031, 0.006, 4.0)):
         n = 28
-        pts = [blob_surface(TAU * i / n, y0 + wob * math.cos(TAU * i / n - ph), t + 0.008) for i in range(n)]
-        wrap.tube(pts, t, sides=6, closed=True, mat_fn=lambda i: (i // 2) % 2)
+        # cross-section: round (t x t) over the front, a flat ribbon (t x 0.007 thick) over the back
+        thick = lambda w, t=t: t - (t - 0.007) * w  # noqa: E731
+        pts = [blob_surface(TAU * i / n, y0 + wob * math.cos(TAU * i / n - ph), thick(back_w(TAU * i / n)) + 0.008) for i in range(n)]
+        wrap.tube(pts, lambda u, t=t: (t - 0.003 * back_w(TAU * u), thick(back_w(TAU * u))), sides=6, closed=True, mat_fn=lambda i: (i // 2) % 2)
     # hanging end
     tail = Part("Tail", sock, [("ScarfRed", "red", 0.85), ("ScarfCream", "cream", 0.85)], closed=True,
                 outward=(0, 0.4, 0), solidify=0.034, sharp=70)
@@ -96,9 +105,12 @@ def gold_chain(sock):
         w = n if k % 2 == 0 else t.cross(n).normalized()
         loop = [p + t * (0.043 * math.cos(TAU * i / 6)) + w * (0.021 * math.sin(TAU * i / 6)) for i in range(6)]
         links.tube(loop, 0.0115, sides=4, closed=True)
-    # plain rope at the back (rarely seen)
-    back = [blob_surface(lim - 0.05 + (TAU - 2 * lim + 0.1) * i / 12, chain_y(lim + (TAU - 2 * lim) * i / 12), 0.02) for i in range(13)]
-    links.tube(back, 0.012, sides=4)
+    # rope at the back: thins out and lies flat (top <= ~0.014 above the body) so it sits under a shell/backpack
+    nb = 18
+    phis = [lim - 0.05 + (TAU - 2 * lim + 0.1) * i / nb for i in range(nb + 1)]
+    wts = [1.0 - back_w(ph, 1.4, 2.3) for ph in phis]
+    back = [blob_surface(ph, chain_y(ph), 0.008 + 0.012 * w) for ph, w in zip(phis, wts)]
+    links.tube(back, lambda u: 0.006 + 0.006 * wts[min(nb, int(round(u * nb)))], sides=4)
     # medallion
     p, t = at(0.0)
     top = p + Vector((0, -0.02, 0))
@@ -164,8 +176,9 @@ def _leaf_rot(tang, n):
 def bandana(sock):
     red = ("BandanaRed", "red", 0.8)
     cream = ("BandanaCream", "cream", 0.8)
-    band = Part("Band", sock, [red], closed=True, outward=(0, 0.4, 0), solidify=0.016, sharp=70)
-    rows = [[blob_surface(TAU * i / 24, y, 0.022 + 0.004 * math.sin(TAU * i / 24 * 6)) for i in range(24)] for y in (0.385, 0.44, 0.495)]
+    band = Part("Band", sock, [red], closed=True, outward=(0, 0.4, 0), solidify=0.012, sharp=70)
+    # over the back the band lies flat (mid-surface 0.009 above the body) so it disappears under a backpack or shell
+    rows = [[blob_surface(TAU * i / 24, y, 0.009 + (0.013 + 0.004 * math.sin(TAU * i / 24 * 6)) * (1 - back_w(TAU * i / 24))) for i in range(24)] for y in (0.385, 0.44, 0.495)]
     band.sheet(rows, closed_u=True)
     tri = Part("Triangle", sock, [red], closed=True, outward=(0, 0.4, 0), solidify=0.016, sharp=70)
     rows = []
@@ -182,26 +195,24 @@ def bandana(sock):
         dots.ellipsoid(c, (0.02, 0.006, 0.02), seg=6, rings=3, rot=basis_from_y(blob_normal(c)))
     for i in range(9):
         phi = TAU * (i + 0.5) / 9
-        c = blob_surface(phi, 0.44, 0.034)
+        if back_w(phi, 1.4, 2.0) > 0.0:
+            continue  # no bumps over the back
+        c = blob_surface(phi, 0.44, 0.03)
         dots.ellipsoid(c, (0.017, 0.006, 0.017), seg=6, rings=3, rot=basis_from_y(blob_normal(c)))
-    knot = Part("Knot", sock, [red], sharp=75)
-    kc = blob_surface(math.pi, 0.44, 0.05)
-    knot.ellipsoid(kc, (0.05, 0.04, 0.035), seg=8, rings=5)
-    for sgn in (-1, 1):
-        knot.ellipsoid(blob_surface(math.pi + sgn * 0.13, 0.37, 0.05), (0.028, 0.06, 0.012), seg=6, rings=4, rot=rz(sgn * 18))
-    return [band, tri, dots, knot]
+    return [band, tri, dots]
 
 
+# (builder, uses the real blob profile). Items still on the two-sphere stand-in keep their tuned catalog fits.
 ITEMS = {
-    "scarf": scarf,
-    "bow_tie": bow_tie,
-    "gold_chain": gold_chain,
-    "flower_lei": flower_lei,
-    "bandana": bandana,
+    "scarf": (scarf, True),
+    "bow_tie": (bow_tie, False),
+    "gold_chain": (gold_chain, True),
+    "flower_lei": (flower_lei, False),
+    "bandana": (bandana, True),
 }
 
 if __name__ == "__main__":
     only = artlib.script_args()
-    for item_id, fn in ITEMS.items():
+    for item_id, (fn, real) in ITEMS.items():
         if not only or item_id in only:
-            export_item("neck", item_id, fn, SOCKET)
+            export_item("neck", item_id, fn, SOCKET, real)
