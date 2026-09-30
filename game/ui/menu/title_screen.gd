@@ -1,9 +1,10 @@
 class_name MenuTitleScreen
 extends Control
-## Title screen: logo, name entry, Host / Join / Wardrobe / Quit. Pure view; MenuRoot acts on the signals.
+## Title screen: logo, name entry, Host / Join / Play offline / Wardrobe / Quit. Pure view; MenuRoot acts on the signals.
 
 signal host_pressed
 signal join_pressed
+signal offline_pressed
 signal wardrobe_pressed
 signal quit_pressed
 ## The name field lost focus or was submitted (MenuRoot saves the profile).
@@ -15,6 +16,7 @@ const DEFAULT_NAME := "Player"
 var name_edit: LineEdit
 var host_button: Button
 var join_button: Button
+var offline_button: Button
 var wardrobe_button: Button
 var quit_button: Button
 var message_panel: PanelContainer
@@ -77,13 +79,15 @@ func _init() -> void:
 
 	host_button = MenuUI.button("Host game", &"PrimaryButton")
 	join_button = MenuUI.button("Join game")
+	offline_button = MenuUI.button("Play offline")
 	wardrobe_button = MenuUI.button("Wardrobe")
 	quit_button = MenuUI.button("Quit", &"DangerButton")
-	for b: Button in [host_button, join_button, wardrobe_button, quit_button]:
+	for b: Button in [host_button, join_button, offline_button, wardrobe_button, quit_button]:
 		col.add_child(b)
 
 	host_button.pressed.connect(func() -> void: host_pressed.emit())
 	join_button.pressed.connect(func() -> void: join_pressed.emit())
+	offline_button.pressed.connect(func() -> void: offline_pressed.emit())
 	wardrobe_button.pressed.connect(func() -> void: wardrobe_pressed.emit())
 	quit_button.pressed.connect(func() -> void: quit_pressed.emit())
 	name_edit.text_submitted.connect(_on_name_submitted)
@@ -116,7 +120,7 @@ func show_message(text: String) -> void:
 
 
 func refresh_focus() -> void:
-	MenuUI.chain_vertical([name_edit, host_button, join_button, wardrobe_button, quit_button])
+	MenuUI.chain_vertical([name_edit, host_button, join_button, offline_button, wardrobe_button, quit_button])
 
 
 func focus_default() -> void:

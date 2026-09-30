@@ -1,18 +1,7 @@
 [gd_scene format=3]
 
 [ext_resource type="Script" path="res://minigames/minigame.gd" id="1_script"]
-
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-
-[sub_resource type="Sky" id="Sky_main"]
-sky_material = SubResource("ProceduralSkyMaterial_sky")
-
-[sub_resource type="Environment" id="Environment_main"]
-background_mode = 2
-sky = SubResource("Sky_main")
-ambient_light_source = 3
-reflected_light_source = 2
-tonemap_mode = 2
+[ext_resource type="PackedScene" path="res://look/stage_look.tscn" id="2_look"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
 size = Vector3(20, 1, 20)
@@ -29,12 +18,8 @@ title = "Dev Arena"
 rule_text = "Sandbox and tests: a flat 20 m floor."
 time_limit = 0.0
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_main")
-
-[node name="Sun" type="DirectionalLight3D" parent="."]
-rotation = Vector3(-0.9, 0.6, 0)
-shadow_enabled = true
+[node name="StageLook" parent="." instance=ExtResource("2_look")]
+preset = 1
 
 [node name="Camera3D" type="Camera3D" parent="."]
 position = Vector3(0, 14, 12)

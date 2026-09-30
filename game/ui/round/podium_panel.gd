@@ -18,6 +18,10 @@ const RISE := 0.42
 const RISE_GAP := 0.1
 ## Seconds until (at the latest) the winner is announced and confetti starts.
 const CELEBRATE_AT := 3.0 * (RISE + RISE_GAP)
+## The winner banner stays this wide (it wobbles), clear of the "Back to lobby" button in the
+## top-right corner; long names get a smaller font instead of running under the button.
+const WINNER_MAX_W := 660.0
+const WINNER_FONT_SIZE := 72
 
 var _dim: ColorRect
 var _stage: Control
@@ -55,11 +59,11 @@ func _ready() -> void:
 	_title.size = Vector2(STAGE_SIZE.x, 56)
 	_stage.add_child(_title)
 
-	_winner = RoundStyle.label("", 72, RoundStyle.GOLD, 18)
+	_winner = RoundStyle.label("", WINNER_FONT_SIZE, RoundStyle.GOLD, 18)
 	_winner.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_winner.clip_text = true
-	_winner.position = Vector2(60, 66)
-	_winner.size = Vector2(STAGE_SIZE.x - 120.0, 96)
+	_winner.position = Vector2((STAGE_SIZE.x - WINNER_MAX_W) * 0.5, 66)
+	_winner.size = Vector2(WINNER_MAX_W, 96)
 	_winner.pivot_offset = _winner.size * 0.5
 	_stage.add_child(_winner)
 
@@ -133,6 +137,7 @@ func play(ranking: Array, totals: Dictionary) -> void:
 
 	var winner_slot := int(ranking[0]) if not ranking.is_empty() else -1
 	_winner.text = ("%s WINS!" % RoundStyle.player_name(winner_slot).to_upper()) if winner_slot >= 0 else "WHAT A PARTY!"
+	_fit_winner_font()
 	_winner.modulate.a = 0.0
 	_winner.scale = Vector2(0.3, 0.3)
 
@@ -153,6 +158,16 @@ func play(ranking: Array, totals: Dictionary) -> void:
 	_seq.tween_callback(_celebrate)
 	_seq.tween_property(_winner, ^"modulate:a", 1.0, 0.15)
 	_seq.parallel().tween_property(_winner, ^"scale", Vector2.ONE, 0.5).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+
+
+func _fit_winner_font() -> void:
+	var font := _winner.get_theme_font(&"font")
+	var size := WINNER_FONT_SIZE
+	if font:
+		var w := font.get_string_size(_winner.text, HORIZONTAL_ALIGNMENT_LEFT, -1, WINNER_FONT_SIZE).x + 36.0
+		if w > WINNER_MAX_W:
+			size = maxi(32, int(WINNER_FONT_SIZE * WINNER_MAX_W / w))
+	_winner.add_theme_font_size_override(&"font_size", size)
 
 
 func stop() -> void:

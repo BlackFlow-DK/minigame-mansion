@@ -14,6 +14,8 @@ var quit_button: Button
 
 func _init() -> void:
 	name = "PauseMenu"
+	# While visible the player's blob ignores input (ControllerComponent.INPUT_BLOCKER_GROUP).
+	add_to_group(&"blocks_player_input")
 	MenuUI.full_rect(self)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	var dim := MenuUI.full_rect(ColorRect.new()) as ColorRect
