@@ -238,9 +238,19 @@ func _bot_round(count: int, seed_value: int, scale: float) -> float:
 			(c.brain as BotBrain).configure(seed_value * 100 + p.slot)
 	var exploded := watch(mg, &"bomb_exploded")
 	var frames := 0
+	# Hold times in game seconds (fuse clock): from getting the bomb to passing or blowing.
+	var holds: Array[float] = []
+	var clock := [0, 0]  # [frame now, frame the current hold began] (lambdas copy plain locals)
+	var end_hold := func() -> void:
+		holds.append((clock[0] - clock[1]) * physics_delta() * scale)
+		clock[1] = clock[0]
+	mg.bomb_given.connect(func(_s: int) -> void: clock[1] = clock[0])
+	mg.bomb_passed.connect(func(_f: int, _t: int, _k: int) -> void: end_hold.call())
+	mg.bomb_exploded.connect(func(_s: int) -> void: end_hold.call())
 	while not mg.is_finished() and frames < 60 * 150:
 		await step(1, func(_i: int) -> void: brain0.fill_intent(ps[0].intent, physics_delta()))
 		frames += 1
+		clock[0] = frames
 	assert_true(mg.is_finished(), "%d bots, seed %d: round finished" % [count, seed_value])
 	assert_eq(ranking.size(), count, "ranking has every slot")
 	var sorted := ranking.duplicate()
@@ -259,7 +269,16 @@ func _bot_round(count: int, seed_value: int, scale: float) -> float:
 	assert_eq(ranking, expected, "survivor first, then reverse elimination order")
 	assert_eq(exploded.size(), count - 1, "one bomb per knock-out")
 	var seconds := frames * physics_delta()
-	print("  hot_potato bots=%d seed=%d scale=%.1f: %.1f s, %d passes" % [count, seed_value, scale, seconds, mg.pass_count])
+	var mean_hold := 0.0
+	var short_holds := 0
+	for h in holds:
+		mean_hold += h
+		if h < mg.pass_back_block + 0.1:
+			short_holds += 1
+	mean_hold /= maxf(holds.size(), 1)
+	print("  hot_potato bots=%d seed=%d scale=%.1f: %.1f s, %d passes, mean hold %.2f s (%d holds, %d under 0.9 s)" % [
+		count, seed_value, scale, seconds, mg.pass_count, mean_hold, holds.size(), short_holds])
+	assert_true(mean_hold > 1.5, "mean hold %.2f s well above the 0.8 s pass-back window" % mean_hold)
 	brain0.queue_free()
 	return seconds
 

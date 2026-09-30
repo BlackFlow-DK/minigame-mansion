@@ -101,6 +101,8 @@ var _slow_slot: int = -1
 var _slow_left: float = 0.0
 var _rig: BombRig = null
 var _obstacle_spots: Array[Vector3] = []
+var _rethink_frame: int = -1
+var _rethink_slot: int = -2
 ## Every obstacle piece's base position (tests, bots).
 var obstacle_positions: Array[Vector3] = []
 
@@ -271,26 +273,20 @@ func _explode(h: Player) -> void:
 		var dir := to / d if d > 0.01 else Vector3.RIGHT.rotated(Vector3.UP, rng.randf() * TAU)
 		var k := 1.0 - 0.6 * d / blast_radius
 		p.apply_impulse(dir * blast_force * k + Vector3.UP * blast_lift * k)
-	_bomb_out(h)
+	knock_out(h, &"bomb")
 	if not is_finished():
 		_pause_left = explosion_pause
 
 
-## knock_out() with reason `bomb`: eliminates, records the order, finishes at <= 1 left.
-func _bomb_out(p: Player) -> void:
-	if is_finished() or not p.alive:
+## Asks bots to re-plan. A repeat request in the same physics frame (a hand-over announced
+## twice, e.g. by a listener on bomb_passed) is dropped, so each bot re-plans once per event.
+func request_bot_rethink(slot: int = -1) -> void:
+	var frame := Engine.get_physics_frames()
+	if frame == _rethink_frame and (_rethink_slot == -1 or _rethink_slot == slot):
 		return
-	knocked_out.append(p.slot)
-	p.eliminate(&"bomb")
-	var alive_slots: Array[int] = []
-	for q in players:
-		if is_instance_valid(q) and q.alive:
-			alive_slots.append(q.slot)
-	if alive_slots.size() <= 1:
-		var ranking: Array[int] = alive_slots.duplicate()
-		for i in range(knocked_out.size() - 1, -1, -1):
-			ranking.append(knocked_out[i])
-		finish(ranking)
+	_rethink_frame = frame
+	_rethink_slot = slot
+	super(slot)
 
 
 # --- RPCs (host -> every peer) -----------------------------------------------------------------
@@ -302,6 +298,7 @@ func _rpc_bomb(slot: int, from_slot: int, kind: int, level: int) -> void:
 	holder_slot = slot
 	urgency = level
 	var p := _player(slot)
+	request_bot_rethink()  # bots re-plan at once: the new holder chases, the rest flee
 	_set_holder_face(previous, p)
 	if _rig:
 		_rig.show_on(p, level)
