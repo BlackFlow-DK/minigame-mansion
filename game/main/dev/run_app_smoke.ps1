@@ -142,6 +142,9 @@ try {
             $s.overlay_visible
         }
     }
+    Wait-For 'every player has its own colour (all peers)' {
+        Test-All $All { param($s) @($s.roster.PSObject.Properties | ForEach-Object { $_.Value.primary } | Where-Object { $_ -ne '' } | Select-Object -Unique).Count -eq 4 }
+    }
     Send-Cmd 'Alice' 'walk 0 1 0.8'
     Send-Cmd 'Bob' 'walk 1 0.3 0.6'
     Wait-For 'walks done' { (Read-State 'Alice').walks_done -ge 1 -and (Read-State 'Bob').walks_done -ge 1 }

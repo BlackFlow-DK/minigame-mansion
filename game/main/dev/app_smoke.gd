@@ -189,7 +189,8 @@ func _write() -> void:
 		}
 	var roster: Dictionary = {}
 	for slot: int in Net.roster:
-		roster[str(slot)] = {"name": Net.roster[slot].name, "bot": Net.roster[slot].is_bot}
+		roster[str(slot)] = {"name": Net.roster[slot].name, "bot": Net.roster[slot].is_bot,
+			"primary": str(Net.roster[slot].loadout.get("primary", ""))}
 	var menu := app.menu
 	var state := {
 		"name": _name, "peer_id": multiplayer.get_unique_id(), "local_slot": Net.local_slot(),

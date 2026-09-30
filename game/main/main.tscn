@@ -14,6 +14,7 @@ script = ExtResource("1_main")
 [node name="RoundUI" parent="." instance=ExtResource("3_round_ui")]
 
 [node name="MenuRoot" parent="." instance=ExtResource("4_menu")]
+layer = 11
 
 [node name="SessionSounds" type="Node" parent="."]
 script = ExtResource("5_sounds")

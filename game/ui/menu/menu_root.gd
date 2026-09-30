@@ -235,7 +235,9 @@ func _load_profile() -> void:
 func _commit_profile() -> void:
 	var n := title.player_name()
 	Cosmetics.save_profile(n, _loadout)
-	Net.set_local_profile(n, _loadout)
+	# An untouched profile carries slot 0's default colours; sending it would make every
+	# such player red. Send none instead, so the host gives each player its slot's colours.
+	Net.set_local_profile(n, {} if _loadout == Cosmetics.default_loadout(0) else _loadout)
 
 
 func _on_wardrobe_closed() -> void:
@@ -376,7 +378,10 @@ func _input(event: InputEvent) -> void:
 	# (ControllerComponent ignores input while a control has focus): mouse users need no focus.
 	var mb := event as InputEventMouseButton
 	if mb and not mb.pressed and screen == LOBBY and not pause.visible and _focus_in(lobby):
-		_release_focus.call_deferred()
+		# Deferred: the button acts on this release first (it may leave the lobby screen).
+		(func() -> void:
+			if screen == LOBBY and not pause.visible and _focus_in(lobby):
+				_release_focus()).call_deferred()
 
 
 func _unhandled_input(event: InputEvent) -> void:
