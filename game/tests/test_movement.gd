@@ -1,29 +1,24 @@
 extends GameTest
 ## Movement (running): top speed, stopping, turning, facing, frozen, external velocity, air control.
-## Only the Player API and shared state are used. The jump component may or may not add
-## gravity; the tests hold the blob on the floor (or in the air) themselves so they pass either way.
+## Only the Player API and shared state are used. The real jump component's gravity keeps the
+## blob on the floor; external pushes are written straight into `velocity` where the test is
+## about movement alone, because `apply_impulse` (status) also stuns and grants hit immunity.
 
 
 func _horizontal_speed(p: Player) -> float:
 	return Vector2(p.velocity.x, p.velocity.z).length()
 
 
-## One player on the dev arena (slot 0 at (0, 0, 5)), pressed onto the floor for a few ticks
-## so `is_on_floor()` is true before the test starts.
+## One player on the dev arena (slot 0 at (0, 0, 5)), settled on the floor by gravity.
 func _grounded_player() -> Player:
 	var p := spawn_arena(1)[0]
-	await step(3, func(_i: int) -> void: _press_down(p))
+	await step(3)
 	assert_true(p.is_on_floor(), "player starts on the floor")
 	return p
 
 
-func _press_down(p: Player) -> void:
-	p.velocity.y = minf(p.velocity.y, -1.0)
-
-
 func _run(p: Player, move: Vector2) -> Callable:
 	return func(_i: int) -> void:
-		_press_down(p)
 		p.intent.move = move
 
 
@@ -118,7 +113,7 @@ func test_frozen_does_not_move() -> void:
 
 func test_external_velocity_decays() -> void:
 	var p: Player = await _grounded_player()
-	p.apply_impulse(Vector3(12, 0, 0))
+	p.velocity.x += 12.0
 	await step(1, _run(p, Vector2.ZERO))
 	assert_true(p.velocity.x > 11.0, "a push survives the next tick (vx = %f)" % p.velocity.x)
 	var last := p.velocity.x
@@ -131,22 +126,28 @@ func test_external_velocity_decays() -> void:
 	assert_true(frames > 10, "the push lasts a while (%d ticks)" % frames)
 	assert_true(frames < 90, "and then it is gone (%d ticks)" % frames)
 	# Running against a push slows it but does not cancel it at once.
-	p.apply_impulse(Vector3(12, 0, 0))
+	p.velocity.x += 12.0
 	await step(1, _run(p, Vector2.LEFT))
 	assert_true(p.velocity.x > 10.0, "running into a push does not erase it (vx = %f)" % p.velocity.x)
 
 
 func test_control_locked_slides_longer() -> void:
-	var free_p: Player = await _grounded_player()
-	free_p.apply_impulse(Vector3(-5, 0, 0))
-	await step(8, _run(free_p, Vector2.ZERO))
-	var free_speed := _horizontal_speed(free_p)
-	free_p.control_locked = true
-	free_p.apply_impulse(Vector3(-5 - free_p.velocity.x, 0, 0))  # back to exactly -5
-	await step(8, _run(free_p, Vector2.ZERO))
-	var locked_speed := _horizontal_speed(free_p)
+	var p: Player = await _grounded_player()
+	# Free: a push written straight into velocity (no stun), ground friction stops it.
+	p.velocity.x = -5.0
+	await step(8, _run(p, Vector2.ZERO))
+	var free_speed := _horizontal_speed(p)
+	assert_false(p.control_locked, "a raw velocity push does not stun")
+	await step(20, _run(p, Vector2.ZERO))
+	# Stunned: the same push through the real hit path, which also locks control.
+	p.apply_impulse(Vector3(-5, 0, 0) - p.velocity * Vector3(1, 0, 1))  # to exactly -5 horizontally
+	assert_true(p.control_locked, "apply_impulse stunned the player")
+	await step(8, _run(p, Vector2.RIGHT))  # intent is cleared while stunned: no steering
+	assert_true(p.control_locked, "still stunned after 8 ticks")
+	var locked_speed := _horizontal_speed(p)
 	assert_true(locked_speed > free_speed + 1.0, "stunned players slide further (%f vs %f)" % [locked_speed, free_speed])
 	assert_true(locked_speed < 5.0, "but still slow down")
+	assert_true(p.velocity.x < 0.0, "and cannot steer against the slide")
 
 
 func test_air_control_weaker_than_ground() -> void:
@@ -154,19 +155,17 @@ func test_air_control_weaker_than_ground() -> void:
 	await step(6, _run(p, Vector2.LEFT))
 	var ground_speed := _horizontal_speed(p)
 	await step(30, _run(p, Vector2.ZERO))
-	# Lift the blob well above the floor and hold it there (whatever gravity jump applies).
+	# Drop the blob from high up; it falls for well over a second under real gravity.
 	p.place_at(Transform3D(Basis.IDENTITY, Vector3(0, 30, 0)))
-	var float_there := func(_i: int) -> void:
-		p.velocity.y = 0.0
-		p.intent.move = Vector2.LEFT
-	await step(1, func(_i: int) -> void: p.velocity.y = 0.0)
+	await step(1)
 	assert_false(p.is_on_floor(), "in the air")
-	await step(6, float_there)
+	await step(6, _run(p, Vector2.LEFT))
 	var air_speed := _horizontal_speed(p)
 	assert_true(air_speed > 0.1, "some air control (%f)" % air_speed)
 	assert_true(air_speed < ground_speed * 0.6, "air control weaker than ground (%f vs %f)" % [air_speed, ground_speed])
 	# Letting go in the air keeps most of the momentum.
-	await step(30, float_there)
+	await step(30, _run(p, Vector2.LEFT))
 	var cruising := _horizontal_speed(p)
-	await step(6, func(_i: int) -> void: p.velocity.y = 0.0)
+	await step(6, _run(p, Vector2.ZERO))
+	assert_false(p.is_on_floor(), "still falling")
 	assert_true(_horizontal_speed(p) > cruising * 0.5, "air friction is gentle")
