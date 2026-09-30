@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://dev/showcase_wearables.gd" id="1_show"]
+
+[node name="ShowcaseWearables" type="Node3D"]
+script = ExtResource("1_show")
