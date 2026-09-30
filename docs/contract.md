@@ -125,6 +125,13 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 | `Fx` | look and effects | `play(effect: StringName, at: Vector3, color := Color.WHITE)` |
 | `Sfx` | audio | `play(sound: StringName, at := Vector3.INF)` |
 
+`Net` details (added after wave 1):
+- `join_game` accepts `"ip"` or `"ip:port"`. `join_failed` reasons are exactly `timeout`, `full`, `in progress`, `version mismatch`, `could not connect`.
+- `games_found` entries: `{id, address ("ip:port", pass it to join_game), ip, port, game_name, host_name, players, max_players, in_lobby, version, compatible}`.
+- `session_in_progress: bool` (host sets, clients receive) and `accept_late_joiners: bool` (default false: joins during a session are refused with `in progress`). `Session` sets `session_in_progress` at session start and clears it when it returns to LOBBY.
+
+`Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place. Returning to LOBBY clears the stage.
+
 Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
 
 ## Stage and minigames
