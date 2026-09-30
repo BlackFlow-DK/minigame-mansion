@@ -9,6 +9,10 @@ Run tools from anywhere; they resolve paths from their own repo/worktree root. N
 - One agent = one branch = one worktree. Never work in the main checkout, never touch `main` or another worktree, never merge.
 - Setup: `git -C C:\Users\Sander\games\minigame-mansion worktree add C:\Users\Sander\games\mm-wt\<branch> -b <branch> main`, then run every tool from inside `C:\Users\Sander\games\mm-wt\<branch>` (`powershell ... -File tools\godot-check.ps1` there). The first check/test imports automatically (`.godot/` is per worktree).
 - Commit on your branch. Edit only the files your brief names.
+- Temp files and helper scripts go in your own worktree's `build\` (gitignored), never in a shared temp/scratchpad folder: other agents run at the same time and will overwrite them.
+- After merging or pulling `main` into your worktree, run `godot-import` before check/test (new `class_name`s and assets are only known after an import).
+- Lighting: a scene uses `res://look/stage_look.tscn` (pick a `preset`) instead of its own WorldEnvironment/sun; only one WorldEnvironment can be active. Call `Look.apply_toon(model)` on models you instance.
+- `godot-screenshot` does not catch `SHADER ERROR` lines: if you write shaders, read the run output yourself.
 
 ## Orchestrator-owned files (report needed changes, do not edit)
 `game/project.godot`, `game/player/player.tscn`, `game/player/player.gd`, `game/player/player_component.gd`, `game/player/player_intent.gd`, `game/minigames/minigame.gd`, `game/minigames/registry.gd`, `game/stage/`, `game/dev/`, `game/tests/harness.gd`, `game/tests/run_tests.gd`, `game/tests/test_skeleton.gd`, `game/tools/`, `art/scripts/artlib.py`, `tools/`, `CLAUDE.md`, `docs/`.
