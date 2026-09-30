@@ -10,6 +10,8 @@ extends Node3D
 
 ## Slots, best first. Emitted once, on the host.
 signal finished(ranking: Array[int])
+## Bots: raised by `request_bot_rethink`. Bot brains listen and re-ask `get_bot_goal`.
+signal bot_rethink_requested(slot: int)
 
 @export var title: String = ""
 ## One line shown on the title card.
@@ -67,13 +69,14 @@ func is_finished() -> bool:
 	return _finished
 
 
-## Host only. Eliminates `player` and records the order; when one player (or none) is
-## left, finishes with the survivor first, then the knocked-out in reverse order.
-func knock_out(player: Player) -> void:
+## Host only. Eliminates `player` (with `reason`, default `knocked_out`) and records the
+## order; when one player (or none) is left, finishes with the survivor first, then the
+## knocked-out in reverse order.
+func knock_out(player: Player, reason: StringName = &"") -> void:
 	if _finished or player == null or not player.alive:
 		return
 	knocked_out.append(player.slot)
-	player.eliminate(&"knocked_out")
+	player.eliminate(reason if reason != &"" else &"knocked_out")
 	var alive_slots: Array[int] = []
 	for p in players:
 		if p.alive:
@@ -91,6 +94,13 @@ func get_bot_goal(_player: Player) -> Vector3:
 	if points.is_empty():
 		return global_position
 	return points[randi() % points.size()].origin
+
+
+## Optional, host. Tells bots that what `get_bot_goal` answers has changed (a coin was
+## taken, the bomb changed hands), so they re-ask after their own short reaction delay
+## instead of at their next routine refresh. `slot` -1 = every bot.
+func request_bot_rethink(slot: int = -1) -> void:
+	bot_rethink_requested.emit(slot)
 
 
 ## Bots avoid positions where this returns false. Default: everywhere is safe.

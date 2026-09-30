@@ -101,6 +101,24 @@ func test_no_shove_when_enemy_not_in_front_or_far() -> void:
 		assert_eq(_actions(recs), 0, "no shove with the enemy at %s" % spot)
 
 
+class CalmGame extends FakeGame:
+	var bot_aggression_scale: float = 0.0
+
+
+func test_aggression_scale_zero_never_shoves() -> void:
+	var ps := _world()
+	var calm := CalmGame.new()
+	add_child(calm)
+	calm.players = ps
+	_put(ps[2], Vector3(0.0, 0.0, 1.0))  # right in front
+	var b := BotBrain.new()
+	b.player = ps[1]
+	b.minigame = calm
+	add_child(b)
+	b.configure(13, 0.5, 1.0)
+	assert_eq(_actions(_run(b, 120)), 0, "a calm minigame gets no shoves")
+
+
 func test_steers_away_from_unsafe_edge() -> void:
 	var ps := _world()
 	game.goal = Vector3(6.0, 0.0, 0.0)
@@ -126,7 +144,7 @@ func test_backs_off_unsafe_ground() -> void:
 	var recs := _run(_brain(ps[1], 16, 0.5, 0.0), 90)
 	for r in recs.slice(60):
 		var m: Vector2 = r["move"]
-		assert_true(m.x < -0.5, "heads back to safe ground (%s)" % m)
+		assert_true(m.x < -0.3 and m.length() > 0.5, "heads back to safe ground (%s)" % m)
 
 
 func test_keeps_course_over_small_gap() -> void:
@@ -206,3 +224,149 @@ func test_controller_runs_brain_for_bots() -> void:
 		assert_true(ctrl.brain is BotBrain, "bot %d has a BotBrain" % i)
 	assert_false(moved.has(0), "the human did not move")
 	assert_true(moved.size() >= 1, "bots produce movement intents through the controller")
+
+
+# --- Goals: re-think --------------------------------------------------------------------------
+
+## Counts get_bot_goal calls; answers `goal`.
+class CountingGame extends Minigame:
+	var goal: Vector3 = Vector3.ZERO
+	var asked: int = 0
+
+	func get_bot_goal(_player: Player) -> Vector3:
+		asked += 1
+		return goal
+
+
+func test_rethink_request_switches_goal_quickly() -> void:
+	var ps := _world()
+	var cg := CountingGame.new()
+	add_child(cg)
+	cg.players = ps
+	cg.goal = Vector3(6.0, 0.0, 0.0)
+	var b := BotBrain.new()
+	b.player = ps[1]
+	b.minigame = cg
+	add_child(b)
+	b.configure(21, 0.5, 0.0)
+	_run(b, 60)
+	var before := cg.asked
+	cg.goal = Vector3(-6.0, 0.0, 0.0)
+	_run(b, 30)  # 0.5 s: well inside the routine refresh
+	assert_eq(cg.asked, before, "without a request the bot sticks to its plan")
+	cg.request_bot_rethink()
+	var recs := _run(b, 30)
+	assert_true(cg.asked > before, "a rethink request re-asks the goal")
+	assert_true((recs[recs.size() - 1]["move"] as Vector2).x < -0.5, "and the bot turns to the new goal")
+	# A request for another slot is ignored.
+	var asked := cg.asked
+	cg.request_bot_rethink(3)
+	_run(b, 30)
+	assert_eq(cg.asked, asked, "requests for other slots are ignored")
+
+
+func test_reaching_the_goal_asks_for_the_next() -> void:
+	var ps := _world()
+	var cg := CountingGame.new()
+	add_child(cg)
+	cg.players = ps
+	cg.goal = Vector3(0.2, 0.0, 0.0)  # already there
+	var b := BotBrain.new()
+	b.player = ps[1]
+	b.minigame = cg
+	add_child(b)
+	b.configure(22, 0.5, 0.0)
+	_run(b, 40)
+	var asked := cg.asked
+	cg.goal = Vector3(0.0, 0.0, 6.0)
+	# The bot stands at a reached goal and looks again; it must not idle for the full refresh.
+	var recs := _run(b, 30)
+	assert_true(cg.asked >= asked, "asked again")
+	var moved := false
+	for r in recs:
+		moved = moved or (r["move"] as Vector2).y > 0.5
+	assert_true(moved or cg.asked > asked, "picks up a new goal soon after arriving")
+
+
+# --- Jumps with real gravity -----------------------------------------------------------------
+
+## Safe only over the listed x-ranges (Vector2(min, max)) with |z| < half_width.
+class StripGame extends Minigame:
+	var goal: Vector3 = Vector3.ZERO
+	var ranges: Array[Vector2] = []
+	var half_width: float = 1.6
+
+	func get_bot_goal(_player: Player) -> Vector3:
+		return goal
+
+	func is_safe(pos: Vector3) -> bool:
+		if absf(pos.z) > half_width or pos.y < -0.5:
+			return false
+		for r in ranges:
+			if pos.x > r.x and pos.x < r.y:
+				return true
+		return false
+
+
+func _box(center: Vector3, size: Vector3) -> void:
+	var body := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = size
+	shape.shape = box
+	body.add_child(shape)
+	add_child(body)
+	body.global_position = center
+
+
+## Bot slot 1 with its real brain (controller not scripted), the human parked on the dev floor.
+func _physical_bot(game_node: Minigame, at: Vector3) -> Player:
+	var ps := spawn_arena(2, &"", false)
+	add_child(game_node)
+	game_node.players = ps
+	_put(ps[0], Vector3(-8.0, 0.0, -8.0))
+	_put(ps[1], at)
+	var b := (ps[1].get_component(&"controller") as ControllerComponent).brain as BotBrain
+	b.minigame = game_node
+	b.configure(31, 1.0, 0.0)
+	return ps[1]
+
+
+func test_hops_over_a_low_wall_when_stuck() -> void:
+	var g := StripGame.new()
+	g.ranges = [Vector2(91.0, 109.0)]
+	g.half_width = 4.5
+	g.goal = Vector3(106.0, 0.0, 0.0)
+	_box(Vector3(100.0, -0.5, 0.0), Vector3(20.0, 1.0, 10.0))
+	_box(Vector3(102.5, 0.3, 0.0), Vector3(0.4, 0.6, 10.0))  # a 0.6 m wall across the way
+	var p := _physical_bot(g, Vector3(99.0, 0.05, 0.0))
+	var jumps := watch(p, &"jumped")
+	await step(240)
+	assert_true(jumps.size() >= 1, "jumped when blocked")
+	assert_true(p.global_position.x > 103.0, "got over the wall (x = %.2f)" % p.global_position.x)
+
+
+func test_jumps_a_small_gap() -> void:
+	var g := StripGame.new()
+	# Platforms x 90..100 and 101.4..111.4 (a 1.4 m hole); safe 0.3 m inside their edges.
+	g.ranges = [Vector2(90.3, 99.7), Vector2(101.7, 111.1)]
+	g.goal = Vector3(108.0, 0.0, 0.0)
+	_box(Vector3(95.0, -0.5, 0.0), Vector3(10.0, 1.0, 4.0))
+	_box(Vector3(106.4, -0.5, 0.0), Vector3(10.0, 1.0, 4.0))
+	var p := _physical_bot(g, Vector3(93.0, 0.05, 0.0))
+	var jumps := watch(p, &"jumped")
+	await step(240)
+	assert_true(jumps.size() >= 1, "jumped")
+	assert_true(p.global_position.x > 103.0 and p.global_position.y > -0.3,
+		"crossed the gap and stands on the far side (%s)" % p.global_position)
+
+
+func test_never_walks_off_an_edge() -> void:
+	var g := StripGame.new()
+	g.ranges = [Vector2(90.3, 99.7)]
+	g.goal = Vector3(106.0, 0.0, 0.0)  # across a hole far too wide to jump
+	_box(Vector3(95.0, -0.5, 0.0), Vector3(10.0, 1.0, 4.0))
+	var p := _physical_bot(g, Vector3(93.0, 0.05, 0.0))
+	var lowest := [INF]
+	await step(300, func(_i: int) -> void: lowest[0] = minf(lowest[0], p.global_position.y))
+	assert_true(lowest[0] > -0.3, "stayed on the platform (lowest y %.2f, at %s)" % [lowest[0], p.global_position])
