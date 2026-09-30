@@ -2,6 +2,7 @@ extends Node
 ## Multi-process player-sync smoke actor, driven by game/net/sync/dev/run_sync_smoke.ps1.
 ##   godot_console --headless --path game res://net/sync/dev/sync_smoke.tscn -- --role=host|client
 ##       --name=N --dir=<state dir> [--join=127.0.0.1:PORT] [--port=PORT] [--life=SEC] [--time-scale=X]
+##       [--order-seed=N] [--scene-override=res://x.tscn]   (Session round order / every round's scene)
 ## Writes <dir>/<name>.json (players as seen here, event counts, Session state and scores) ten
 ## times a second and runs new lines of <dir>/<name>.cmd:
 ##   load dev|<id>          host: Stage.load_minigame* (clients follow the host manifest)
@@ -27,6 +28,8 @@ var _events: Array[String] = []
 var _counts: Dictionary = {}
 var _rounds: Array = []
 var _final_scores: Dictionary = {}
+var _final_wins: Dictionary = {}
+var _final_ranking: Array = []
 var _cmds_done: int = 0
 var _poll: float = 0.0
 var _write_accum: float = 0.0
@@ -52,6 +55,8 @@ func _ready() -> void:
 			"join": _join = v
 			"life": _life = float(v)
 			"time-scale": Session.time_scale = float(v)
+			"order-seed": Session.order_seed = int(v)
+			"scene-override": Session.scene_override = load(v) as PackedScene
 	stage.players_spawned.connect(_on_players_spawned)
 	Net.server_closed.connect(func() -> void: _event("server_closed"); _quit())
 	Net.join_failed.connect(func(r: String) -> void: _event("join_failed:" + r); _quit())
@@ -91,10 +96,14 @@ func _on_round_finished(ranking: Array[int], points: Dictionary) -> void:
 	_event("round_finished")
 
 
-func _on_session_finished(_final: Array[int]) -> void:
+func _on_session_finished(final: Array[int]) -> void:
 	_final_scores = {}
 	for s: int in Session.scores:
 		_final_scores[str(s)] = Session.scores[s]
+	_final_wins = {}
+	for s: int in Session.round_wins:
+		_final_wins[str(s)] = Session.round_wins[s]
+	_final_ranking = final.duplicate()
 	_event("session_finished")
 
 
@@ -233,7 +242,8 @@ func _write() -> void:
 		"scene": stage.minigame.scene_file_path if stage.minigame else "",
 		"players": ps, "knocked_out": knocked, "counts": _counts, "events": _events,
 		"session_state": Session.state, "round_index": Session.round_index,
-		"rounds": _rounds, "final_scores": _final_scores,
+		"rounds": _rounds, "final_scores": _final_scores, "final_wins": _final_wins,
+		"final_ranking": _final_ranking,
 		"walks_done": _walks_done, "shoves_done": _shoves_done, "cmds_done": _cmds_done,
 	}
 	var f := FileAccess.open(_dir.path_join(_name + ".json"), FileAccess.WRITE)

@@ -2,7 +2,9 @@
 # (127.0.0.1). Each actor (game/net/sync/dev/sync_smoke.gd) writes what it sees to
 # build/sync-smoke/<stamp>/<name>.json; this runner drives them through <name>.cmd files and
 # asserts they agree: positions after a walk, a shove across clients, a host elimination, a
-# full 2-round Session with identical scores, and a client quitting mid-round.
+# full 2-round Session (every round on the flat dev arena via Session.scene_override, fixed
+# order seed) that must end identically on every peer and add up by the points table, and a
+# client quitting mid-round. Every failure prints a line starting with FAIL and the reason.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\net\sync\dev\run_sync_smoke.ps1 [-Port 24595]
 # Exit 0 when every check passes. Always kills the processes it started.
 param([int]$Port = 24595, [int]$StepTimeoutSec = 20, [double]$TimeScale = 10)
@@ -15,11 +17,19 @@ $Dir = Join-Path $Root ('build\sync-smoke\' + (Get-Date -Format 'yyyyMMdd-HHmmss
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 $GodotDir = $Dir -replace '\\', '/'
 $script:Procs = [ordered]@{}
+$script:Reported = $false
+
+# Prints "FAIL <reason>" and aborts the run.
+function Fail([string]$Reason) {
+    Write-Host "FAIL $Reason"
+    $script:Reported = $true
+    throw $Reason
+}
 
 function Start-Actor([string]$Name, [string[]]$Extra) {
     $argList = @('--headless', '--path', $GameDir, 'res://net/sync/dev/sync_smoke.tscn', '--',
         "--name=$Name", "--dir=$GodotDir", "--port=$Port", '--bind-ip=127.0.0.1', '--life=180',
-        "--time-scale=$TimeScale") + $Extra
+        "--time-scale=$TimeScale", '--order-seed=1234', '--scene-override=res://dev/dev_arena.tscn') + $Extra
     $p = Start-Process -FilePath $godot -ArgumentList (ConvertTo-ArgString $argList) -NoNewWindow -PassThru `
         -WorkingDirectory $Root -RedirectStandardOutput (Join-Path $Dir "$Name.out") -RedirectStandardError (Join-Path $Dir "$Name.err")
     $null = $p.Handle
@@ -58,9 +68,8 @@ function Wait-For([string]$Desc, [scriptblock]$Cond, [int]$Timeout = $StepTimeou
         if ($ok) { Write-Host "PASS $Desc"; return }
         Start-Sleep -Milliseconds 200
     }
-    Write-Host "FAIL $Desc"
     Show-States @($script:Procs.Keys)
-    throw "smoke step failed: $Desc"
+    Fail "timed out: $Desc"
 }
 
 function Get-Player([string]$Name, [int]$Slot) {
@@ -91,6 +100,52 @@ function Test-Positions([string[]]$Names, [int[]]$Slots, [double]$Tol) {
 }
 
 function Get-Dist($a, $b) { return [math]::Sqrt([math]::Pow($a.x - $b.x, 2) + [math]::Pow($a.z - $b.z, 2)) }
+
+# Session outcome checks: what matters for sync, not the exact numbers.
+function Test-SessionResult([string[]]$Names, [int[]]$Slots) {
+    $table = @(4, 3, 2, 1)
+    foreach ($key in @('final_scores', 'final_wins', 'final_ranking', 'rounds')) {
+        $vals = @($Names | ForEach-Object { ((Read-State $_).$key | ConvertTo-Json -Compress -Depth 6) })
+        Write-Host "  ${key}: $($vals[0])"
+        if (@($vals | Select-Object -Unique).Count -ne 1) { Fail "$key differs between peers: $($vals -join ' | ')" }
+    }
+    $h = Read-State 'Host'
+    $rounds = @($h.rounds)
+    if ($rounds.Count -ne 2) { Fail "expected 2 rounds to reach RESULTS, got $($rounds.Count)" }
+    foreach ($n in $Names) { if (@((Read-State $n).rounds).Count -ne 2) { Fail "${n}: saw $(@((Read-State $n).rounds).Count) round results, expected 2" } }
+    $sum = @{}; $wins = @{}
+    foreach ($slot in $Slots) { $sum[$slot] = 0; $wins[$slot] = 0 }
+    for ($i = 0; $i -lt $rounds.Count; $i++) {
+        $r = $rounds[$i]
+        $ranking = @($r.ranking | ForEach-Object { [int]$_ })
+        $prev = 99
+        for ($k = 0; $k -lt $ranking.Count; $k++) {
+            $pts = [int]$r.points."$($ranking[$k])"
+            # Place k scores table[k] (0 past the table); only a shared first place repeats 4.
+            $expected = if ($k -lt $table.Count) { $table[$k] } else { 0 }
+            if (-not ($pts -eq $expected -or ($pts -eq 4 -and $prev -eq 4))) {
+                Fail "round $($i + 1): slot $($ranking[$k]) in place $($k + 1) got $pts points (ranking $($ranking -join ','))"
+            }
+            $prev = $pts
+        }
+        foreach ($slot in $Slots) {
+            if ($null -eq $r.points."$slot") { Fail "round $($i + 1): slot $slot was not scored" }
+            $sum[$slot] += [int]$r.points."$slot"
+            if ([int]$r.points."$slot" -eq 4) { $wins[$slot] += 1 }
+        }
+    }
+    $fr = @($h.final_ranking | ForEach-Object { [int]$_ })
+    if ($fr.Count -ne $Slots.Count) { Fail "final ranking has $($fr.Count) slots, expected $($Slots.Count)" }
+    foreach ($slot in $Slots) {
+        if ($null -eq $h.final_scores."$slot") { Fail "slot $slot missing from the final scores" }
+        if ([int]$h.final_scores."$slot" -ne $sum[$slot]) { Fail "slot ${slot}: total $($h.final_scores."$slot") but its rounds add up to $($sum[$slot])" }
+        if ([int]$h.final_wins."$slot" -ne $wins[$slot]) { Fail "slot ${slot}: $($h.final_wins."$slot") round wins but won $($wins[$slot]) rounds" }
+        if ($fr -notcontains $slot) { Fail "slot $slot missing from the final ranking" }
+    }
+    for ($k = 1; $k -lt $fr.Count; $k++) {
+        if ([int]$h.final_scores."$($fr[$k])" -gt [int]$h.final_scores."$($fr[$k - 1])") { Fail "final ranking $($fr -join ',') is not sorted by total" }
+    }
+}
 
 $All = @('Host', 'Alice', 'Bob')
 $exit = 1
@@ -132,7 +187,7 @@ try {
     $after = Get-Player 'Host' $A
     $moved = Get-Dist $before $after
     Write-Host ("  Alice moved {0:N2} m (host view)" -f $moved)
-    if ($moved -lt 2.0) { throw "Alice barely moved on the host ($moved m)" }
+    if ($moved -lt 2.0) { Fail "Alice barely moved on the host ($moved m)" }
 
     # 3. Alice shoves Bob: got_hit on all three, Bob moves (his own client simulates him).
     $bobBefore = Get-Player 'Host' $B
@@ -143,7 +198,7 @@ try {
     Wait-For 'all peers agree after the shove (0.15 m)' { Test-Positions $All $Slots 0.15 }
     $pushed = Get-Dist $bobBefore (Get-Player 'Host' $B)
     Write-Host ("  Bob pushed {0:N2} m (host view)" -f $pushed)
-    if ($pushed -lt 0.5) { throw "Bob was not pushed ($pushed m)" }
+    if ($pushed -lt 0.5) { Fail "Bob was not pushed ($pushed m)" }
 
     # 4. Host eliminates Bob: gone everywhere, once.
     Send-Cmd 'Host' "eliminate $B"
@@ -164,14 +219,8 @@ try {
     Wait-For 'round 2 playing' { $s = Read-State 'Host'; $s.session_state -eq 2 -and $s.round_index -eq 1 }
     Send-Cmd 'Host' "endround $A $B 0"
     Wait-For 'session finished on all three' { @($All | Where-Object { (Read-State $_).events -contains 'session_finished' }).Count -eq 3 }
-    $scores = @($All | ForEach-Object { ((Read-State $_).final_scores | ConvertTo-Json -Compress) })
-    $rounds = @($All | ForEach-Object { ((Read-State $_).rounds | ConvertTo-Json -Compress -Depth 5) })
-    Write-Host "  final scores: $($scores -join ' | ')"
-    if (@($scores | Select-Object -Unique).Count -ne 1) { throw 'final scores differ between peers' }
-    if (@($rounds | Select-Object -Unique).Count -ne 1) { throw 'round results differ between peers' }
-    $fs = (Read-State 'Host').final_scores
-    if ($fs.'0' -ne 6 -or $fs."$A" -ne 7 -or $fs."$B" -ne 5) { throw "unexpected scores $($scores[0])" }
-    Write-Host 'PASS identical scores and rounds on all peers'
+    Test-SessionResult $All $Slots
+    Write-Host 'PASS identical scores, round wins, rankings and rounds on all peers; totals add up'
     Wait-For 'back in the lobby, stage cleared everywhere' {
         @($All | Where-Object { $s = Read-State $_; $s.session_state -eq 0 -and @($s.players.PSObject.Properties).Count -eq 0 }).Count -eq 3
     }
@@ -208,11 +257,12 @@ try {
     }
     if ($bad.Count -gt 0) {
         $bad | ForEach-Object { Write-Host "  $_" }
-        throw 'error lines in actor logs'
+        Fail 'error lines in actor logs'
     }
     Write-Host 'PASS no error lines in actor logs'
     $exit = 0
 } catch {
+    if (-not $script:Reported) { Write-Host "FAIL $($_.Exception.Message)" }
     Write-Host "sync-smoke: $($_.Exception.Message)"
 } finally {
     $ErrorActionPreference = 'Continue'
