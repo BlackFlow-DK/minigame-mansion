@@ -1,0 +1,9 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://camera/arena_camera.gd" id="1_cam"]
+
+[node name="ArenaCamera" type="Camera3D"]
+transform = Transform3D(1, 0, 0, 0, 0.642788, 0.766044, 0, -0.766044, 0.642788, 0, 13.789, 11.570)
+fov = 50.0
+far = 200.0
+script = ExtResource("1_cam")
