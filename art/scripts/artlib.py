@@ -3,6 +3,10 @@
 Run scripts through tools/blender-run.ps1, never the Blender GUI. Conventions:
 metres, Blender Z-up (exporter converts to glTF/Godot +Y up), model front faces
 Blender -Y (becomes Godot +Z = Vector3.MODEL_FRONT), origin at the base centre.
+
+Multi-part models (character, cosmetics): keep parts as separate named objects
+(finalize()), add sockets with empty(), parent with set_parent(), then
+export_glb(name, family="character").
 """
 import sys
 from pathlib import Path
@@ -68,9 +72,61 @@ def join(objs, name):
     return obj
 
 
-def export_glb(filename, out_dir=MODELS_DIR):
-    """Export the whole scene to <out_dir>/<filename>.glb with the project's glTF settings."""
-    out = Path(out_dir) / f"{filename}.glb"
+def from_godot(xyz):
+    """Godot-space (x, y, z) (Y up, front +Z) -> Blender location (x, -z, y) (Z up, front -Y)."""
+    x, y, z = xyz
+    return (x, -z, y)
+
+
+def empty(name, location=(0.0, 0.0, 0.0), parent=None, size=0.1):
+    """A named empty (a socket/attachment point); imports into Godot as a Node3D `name`.
+
+    `location` is in Blender space; wrap Godot-space numbers in from_godot(...).
+    """
+    obj = bpy.data.objects.new(name, None)
+    obj.empty_display_type = "PLAIN_AXES"
+    obj.empty_display_size = size
+    bpy.context.scene.collection.objects.link(obj)
+    obj.location = location
+    if parent is not None:
+        set_parent(obj, parent)
+    return obj
+
+
+def set_parent(child, parent, keep_world=True):
+    """Parent `child` to `parent` (exported as a child node). keep_world keeps its world placement."""
+    world = child.matrix_world.copy()
+    child.parent = parent
+    if keep_world:
+        child.matrix_world = world
+    return child
+
+
+def finalize(obj, name=None):
+    """Name a separate part and apply its rotation and scale, keeping its origin where it is.
+
+    Use for parts that must stay separate objects (unlike join(), which moves the origin
+    to the world origin). Mesh primitives get their origin at the `location` they are added at.
+    """
+    if name:
+        obj.name = name
+        if obj.data is not None:
+            obj.data.name = name
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+    return obj
+
+
+def export_glb(filename, family=None, out_dir=MODELS_DIR):
+    """Export the whole scene to <out_dir>/[<family>/]<filename>.glb with the project's glTF settings.
+
+    Every object keeps its own name, origin and transform (join() only what should be one mesh);
+    empties export as plain nodes. Family example: export_glb("blob", family="character")
+    writes game/assets/models/character/blob.glb.
+    """
+    out = Path(out_dir) / (family or "") / f"{filename}.glb"
     out.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.export_scene.gltf(
         filepath=str(out),

@@ -1,13 +1,15 @@
 # Runs the game WINDOWED (real GPU renderer), waits N frames, saves the viewport to PNG, quits.
 # Usage: tools/godot-screenshot.ps1 [-Scene res://scenes/main.tscn] [-Out build/screenshots/x.png] [-Frames 60]
 # Default scene is the project's main scene. Default Out is build/screenshots/<scene name>.png.
+# -GameArgs passes space-separated user args to the game, e.g. -GameArgs "--minigame=bumper_sumo --players=8" (sandbox).
 # Fails if the PNG is not written, the run times out, or any SCRIPT ERROR / ERROR line is printed.
 param(
     [string]$Scene = '',
     [string]$Out = '',
     [int]$Frames = 60,
     [string]$Resolution = '1280x720',
-    [int]$TimeoutSec = 60
+    [int]$TimeoutSec = 60,
+    [string]$GameArgs = ''
 )
 . "$PSScriptRoot\_common.ps1"
 
@@ -27,6 +29,7 @@ if ($Scene -ne '') { $argList += $Scene }
 # In-game timeout is a little shorter than the process kill, so Godot normally exits cleanly.
 $inGameTimeout = [Math]::Max(5, $TimeoutSec - 10)
 $argList += @('--', "--screenshot=$Out", "--frames=$Frames", "--timeout=$inGameTimeout")
+if ($GameArgs.Trim() -ne '') { $argList += @($GameArgs.Trim() -split '\s+') }
 
 $r = Invoke-Tool -Exe $godot -ArgList $argList -TimeoutSec $TimeoutSec
 $errors = Get-GodotErrors $r.Output
