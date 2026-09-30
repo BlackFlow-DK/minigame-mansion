@@ -136,12 +136,19 @@ func _host_tick(delta: float) -> void:
 	if is_finished():
 		return
 	elapsed += delta
+	# Same-tick falls go out lowest first, so the highest of them places best (never by slot).
+	var fallers: Array[Player] = []
 	for p in players:
 		if is_instance_valid(p) and p.alive and to_local(p.global_position).y < knockout_y:
-			_lava_out(p)
+			fallers.append(p)
+	fallers.sort_custom(func(a: Player, b: Player) -> bool: return a.global_position.y < b.global_position.y)
+	for p in fallers:
+		_lava_out(p)
 	if is_finished():
 		return
-	if time_limit > 0.0 and elapsed >= time_limit:
+	# Time is up: under Session its backstop ends the round and ranks survivors equally;
+	# alone (tests, sandbox) the round ends here.
+	if time_limit > 0.0 and elapsed >= time_limit and not _session_drives():
 		_finish_on_time()
 		return
 
@@ -387,7 +394,12 @@ func _finish_if_decided() -> void:
 		finish(_ranking_with(alive_slots))
 
 
-## Time is up (should not happen: the collapse ends rounds sooner): survivors by slot first.
+func _session_drives() -> bool:
+	return Session.current_minigame == self and Session.state == Session.State.PLAYING
+
+
+## Time is up without a Session (tests, sandbox): survivors by slot first. Under Session its
+## backstop finishes instead, with the survivors sharing first place.
 func _finish_on_time() -> void:
 	var alive_slots: Array[int] = []
 	for p in players:

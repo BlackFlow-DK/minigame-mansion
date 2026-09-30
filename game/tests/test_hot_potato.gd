@@ -35,7 +35,7 @@ func test_scene_loads_with_8_spawns_inside_the_fence() -> void:
 	var ps := spawn_arena(8, ID)
 	var mg := _mg()
 	assert_true(mg != null, "hot_potato loads")
-	assert_eq(mg.time_limit, 0.0, "no time limit")
+	assert_eq(mg.time_limit, 180.0, "180 s backstop (Session ends a stalled round)")
 	var points := mg.get_spawn_points()
 	assert_eq(points.size(), 8, "8 spawn points")
 	for t in points:

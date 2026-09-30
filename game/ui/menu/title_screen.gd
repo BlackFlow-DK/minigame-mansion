@@ -104,6 +104,19 @@ func player_name() -> String:
 	return n if n != "" else DEFAULT_NAME
 
 
+## A friendly first-run name ("Wobbly Blob", "Sunny Pudding"), at most 16 characters, so
+## friends can tell each other apart before anyone renames.
+static func random_name(rng: RandomNumberGenerator = null) -> String:
+	const ADJECTIVES: Array[String] = ["Wobbly", "Bouncy", "Sunny", "Sneaky", "Fuzzy", "Jolly", "Zippy",
+		"Grumpy", "Sparkly", "Sleepy", "Mighty", "Squishy", "Dizzy", "Cheeky", "Plucky", "Breezy"]
+	const NOUNS: Array[String] = ["Blob", "Jelly", "Pudding", "Bean", "Dumpling", "Gumdrop", "Mochi",
+		"Noodle", "Muffin", "Pickle", "Waffle", "Biscuit"]
+	var r := rng if rng else RandomNumberGenerator.new()
+	if rng == null:
+		r.randomize()
+	return ("%s %s" % [ADJECTIVES[r.randi() % ADJECTIVES.size()], NOUNS[r.randi() % NOUNS.size()]]).left(MAX_NAME_LENGTH)
+
+
 func set_player_name(n: String) -> void:
 	name_edit.text = n.left(MAX_NAME_LENGTH)
 

@@ -108,8 +108,10 @@ func _render_slot(slot: StringName, ids: Array[String]) -> void:
 	for id in ids:
 		if not is_inside_tree():
 			return
-		var tex := await _shoot(studio, slot, id)
-		if not is_inside_tree():
+		var tex: Texture2D = await _shoot(studio, slot, id)
+		# The wardrobe may have been freed while this frame was pending (closed early, or
+		# force-closed when a round starts): stop quietly.
+		if not is_instance_valid(self) or not is_inside_tree():
 			return
 		var key := key_of(slot, id)
 		_textures[key] = tex
@@ -138,7 +140,7 @@ func _shoot(studio: Dictionary, slot: StringName, id: String) -> Texture2D:
 		return placeholder()
 	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	await RenderingServer.frame_post_draw
-	if not is_instance_valid(vp):
+	if not is_instance_valid(self) or not is_instance_valid(vp) or not vp.is_inside_tree():
 		return placeholder()
 	var img := vp.get_texture().get_image()
 	if img == null or img.is_empty():

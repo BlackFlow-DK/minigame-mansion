@@ -8,7 +8,7 @@
 script = ExtResource("1_script")
 title = "Hot Potato"
 rule_text = "Touch someone to pass the bomb before it blows!"
-time_limit = 0.0
+time_limit = 180.0
 
 [node name="StageLook" parent="." instance=ExtResource("2_look")]
 preset = 3

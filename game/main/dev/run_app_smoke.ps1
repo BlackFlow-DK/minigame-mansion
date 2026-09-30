@@ -4,13 +4,16 @@
 # this runner drives them through <name>.cmd files and asserts:
 #   host + a bot in the lobby; Alice finds the game by LAN discovery, Bob joins by address;
 #   all three see 3 humans + 1 bot, at agreeing positions after scripted walking; the host
-#   starts a 2-round session from the overlay; all reach the podium with identical scores;
+#   starts a 2-round session from the overlay (round 1 is -FirstRound, default bumper_sumo);
+#   on every peer each round's minigame is the one Session set up and started, with the same
+#   players and tuning, and round 1 ends with the same host-decided state (sumo rings);
+#   all reach the podium with identical scores;
 #   the host's "Back to lobby" returns everyone to the hall (podiums close by themselves); Bob leaves and is gone everywhere;
 #   the host quits and Alice lands on the title screen with the message.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\main\dev\run_app_smoke.ps1 [-Port 24605]
 # Exit 0 when every check passes. Always kills the processes it started.
 # -AllowError <regex>: log lines matching it do not fail the run (a known bug owned elsewhere).
-param([int]$Port = 24605, [int]$StepTimeoutSec = 25, [double]$TimeScale = 10, [double]$RoundTime = 25, [string]$AllowError = '')
+param([int]$Port = 24605, [int]$StepTimeoutSec = 25, [double]$TimeScale = 10, [double]$RoundTime = 25, [string]$AllowError = '', [string]$FirstRound = 'bumper_sumo')
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 . (Join-Path $Root 'tools\_common.ps1')  # Get-GodotBin, ConvertTo-ArgString, $GameDir, $GodotErrorPattern
@@ -155,6 +158,7 @@ try {
 
     # 4. The host starts a 2-round session from the overlay; round 1 has knock-outs.
     Send-Cmd 'Host' 'podium_time 600'
+    Send-Cmd 'Host' "first_round $FirstRound"
     Send-Cmd 'Host' 'start 2'
     Wait-For 'round 1 playing everywhere, overlay hidden, same minigame' {
         $scene = (Read-State 'Host').scene
@@ -172,6 +176,26 @@ try {
     if (@((Read-State 'Host').rounds).Count -ne 2) { throw 'expected 2 rounds' }
     Write-Host 'PASS identical scores and rounds on all peers'
     Write-Host "  rounds played: $(@((Read-State 'Host').rounds | ForEach-Object { $_.scene }) -join ', ')"
+    if ((Read-State 'Host').rounds[0].scene -notmatch $FirstRound) { throw "round 1 was not $FirstRound" }
+    foreach ($n in $All) {
+        $s = Read-State $n
+        $starts = @($s.round_starts)
+        if ($starts.Count -ne 2) { throw "${n}: expected 2 round starts, got $($starts.Count)" }
+        foreach ($r in $starts) {
+            if (-not $r.cm_ok) { throw "${n}: round $($r.index) minigame is not the one Session set up and started" }
+            if ($r.players -ne 4) { throw "${n}: round $($r.index) minigame has $($r.players) players" }
+        }
+        foreach ($r in @($s.rounds)) { if (-not $r.cm_ok) { throw "${n}: a round ended on a minigame Session did not drive" } }
+    }
+    Write-Host 'PASS every peer: each round''s minigame got _setup/_start from Session (4 players)'
+    $tunings = @($All | ForEach-Object { ((Read-State $_).round_starts | ConvertTo-Json -Compress -Depth 5) })
+    if (@($tunings | Select-Object -Unique).Count -ne 1) { throw "round-start tuning differs between peers: $($tunings -join ' | ')" }
+    Write-Host "PASS same minigames, players and tuning at every round start on all peers"
+    $states = @($All | ForEach-Object { (Read-State $_).rounds[0].mg_state })
+    Write-Host "  round 1 end state: $($states -join ' | ')"
+    if (@($states | Select-Object -Unique).Count -ne 1) { throw 'round 1 host-decided state differs between peers' }
+    if ($FirstRound -eq 'bumper_sumo' -and $states[0] -notmatch '2') { throw 'no sumo ring dropped in round 1 (nothing compared)' }
+    Write-Host 'PASS round 1 host-decided state identical on all peers'
 
     # 5. Host: Back to lobby. Everyone is in the hall again; every podium closes by itself.
     Send-Cmd 'Host' 'back'
@@ -193,6 +217,20 @@ try {
         Test-All @('Host', 'Alice') { param($s) $s.roster_size -eq 3 -and @($s.players.PSObject.Properties).Count -eq 3 -and $null -eq $s.players."$B" }
     }
     Send-Cmd 'Bob' 'quit'
+
+    # 6b. Carl joins, then his PC "drops" (process killed, no goodbye): the short ENet
+    # timeout removes his blob everywhere within a few seconds (no frozen ghost).
+    Start-Actor 'Carl'
+    Wait-For 'Carl app ready' { (Read-State 'Carl').events -contains 'ready' }
+    Send-Cmd 'Carl' "join 127.0.0.1:$Port"
+    Wait-For 'Carl in the hall on host and Alice' { Test-All @('Host', 'Alice') { param($s) $s.roster_size -eq 4 -and @($s.players.PSObject.Properties).Count -eq 4 } }
+    $C = [int](Read-State 'Carl').local_slot
+    & taskkill.exe /PID $script:Procs['Carl'].Id /T /F 2>&1 | Out-Null
+    $killedAt = Get-Date
+    Wait-For 'dropped Carl removed on host and Alice within 10 s' {
+        Test-All @('Host', 'Alice') { param($s) $s.roster_size -eq 3 -and $null -eq $s.players."$C" }
+    } 10
+    Write-Host ("  ghost gone after {0:N1} s" -f ((Get-Date) - $killedAt).TotalSeconds)
 
     # 7. The host quits: Alice lands on the title screen with the message.
     Send-Cmd 'Host' 'quit'
