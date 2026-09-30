@@ -62,7 +62,7 @@ func test_standing_still_player_falls_into_lava_and_is_knocked_out() -> void:
 	assert_true(String(out[0][0]).contains("lava"), "reason mentions lava: %s" % out[0][0])
 	var g0 := _game()
 	assert_true(g0.knocked_out.has(0), "recorded as knocked out")
-	# grace 1.5 s + touch 0.5 s + crack 0.7 s + a fall of 1.2 m: about 3.0 s.
+	# grace 1.5 s + touch 1.0 s + crack 0.7 s + a fall of 1.2 m: about 3.5 s.
 	var expect := g0.grace_time + g0.touch_time + g0.crack_delay + 0.3
 	var secs := frames * physics_delta()
 	assert_near(secs, expect, 0.25, "out after %.2f s" % secs)
@@ -77,7 +77,7 @@ func test_tile_cracks_then_falls_on_time_and_loses_its_collider() -> void:
 	var crack_frame := -1
 	var fall_frame := -1
 	var collider_while_cracking := false
-	for f in 60 * 3:
+	for f in 60 * 5:
 		await step(1)
 		if crack_frame < 0 and _has_index(cracked, tile):
 			crack_frame = f
@@ -98,6 +98,31 @@ func test_tile_cracks_then_falls_on_time_and_loses_its_collider() -> void:
 	assert_eq(g.get_tile_state(tile), FloorIsLava.TileState.FALLEN, "fallen state")
 	await step(10)
 	assert_true(ps[0].global_position.y < -0.2, "the player drops through")
+
+
+func test_running_across_tiles_does_not_crack_them_but_standing_does() -> void:
+	var ps := spawn_arena(8, ID)
+	var g := _game()
+	var cracked := watch(g, &"tile_cracked")
+	ps[0].place_at(Transform3D(Basis.IDENTITY, g.get_tile_position(g.tile_at(Vector3(-6.4, 0.0, 0.0)))))
+	await step(int(g.grace_time * 60.0) - 5)
+	assert_true(cracked.is_empty(), "nothing cracks during the grace period")
+	# Run east across the field for 2 s (about 7 tiles), everyone else hops in place.
+	await step(120, func(_i: int) -> void:
+		ps[0].intent.move = Vector2.RIGHT
+		for k in range(1, ps.size()):
+			ps[k].intent.jump_pressed = ps[k].is_on_floor()
+			ps[k].intent.jump_held = true)
+	assert_true(ps[0].global_position.x > 3.0, "ran across (x=%.1f)" % ps[0].global_position.x)
+	var under_runner := 0
+	for e: Array in cracked:
+		if absf(g.get_tile_position(e[0]).z) < 1.0:
+			under_runner += 1
+	assert_eq(under_runner, 0, "no tile on the runner's path cracked")
+	# Then stand still: the tile under the runner cracks after touch_time.
+	var tile := g.tile_at(ps[0].global_position)
+	await step(int(g.touch_time * 60.0) + 10, func(_i: int) -> void: ps[0].intent.move = Vector2.ZERO)
+	assert_true(_has_index(cracked, tile), "standing still cracks the tile")
 
 
 func _has_index(events: Array, index: int) -> bool:
@@ -222,6 +247,14 @@ func test_bot_round_4_seed_3() -> void:
 	await _bot_round(4, 3)
 
 
+func test_bot_round_4_seed_4() -> void:
+	await _bot_round(4, 4)
+
+
+func test_bot_round_4_seed_5() -> void:
+	await _bot_round(4, 5)
+
+
 func test_bot_round_8_seed_1() -> void:
 	await _bot_round(8, 11)
 
@@ -232,3 +265,11 @@ func test_bot_round_8_seed_2() -> void:
 
 func test_bot_round_8_seed_3() -> void:
 	await _bot_round(8, 13)
+
+
+func test_bot_round_8_seed_4() -> void:
+	await _bot_round(8, 14)
+
+
+func test_bot_round_8_seed_5() -> void:
+	await _bot_round(8, 15)

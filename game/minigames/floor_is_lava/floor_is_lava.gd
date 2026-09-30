@@ -1,7 +1,7 @@
 class_name FloorIsLava
 extends Minigame
 ## Floor Is Lava: a field of hexagonal stone tiles over a lake of lava. A tile a grounded
-## player touches starts cracking and falls `crack_delay` seconds later, for good. From
+## player stays on for `touch_time` starts cracking and falls `crack_delay` later, for good. From
 ## `collapse_start` on, untouched tiles crack by themselves (outer rings first, faster and
 ## faster), so a round always ends well inside the time limit. Falling into the lava knocks
 ## you out; the last blob standing wins. Shoving as usual.
@@ -50,9 +50,9 @@ const AXIAL_DIRS: Array[Vector2i] = [
 ]
 
 @export_group("Rules")
-## Seconds a grounded player must stand on a tile (in total, over any number of visits)
-## before it cracks. Running straight across a tile takes about as long, so keep moving.
-@export var touch_time: float = 0.5
+## Seconds a grounded player must stay on one tile before it cracks. Running across tiles
+## never cracks them; standing still is fatal in about touch_time + crack_delay + 0.3 s.
+@export var touch_time: float = 1.0
 ## Seconds from "cracking" to "falls".
 @export var crack_delay: float = 0.7
 ## Seconds after GO before tiles react to players.
@@ -62,7 +62,7 @@ const AXIAL_DIRS: Array[Vector2i] = [
 ## Tiles per second at `collapse_start`...
 @export var collapse_rate: float = 0.8
 ## ...plus this many tiles per second for every second after it.
-@export var collapse_accel: float = 0.35
+@export var collapse_accel: float = 0.5
 ## A player whose origin (feet) drops below this height is in the lava.
 @export var knockout_y: float = -1.2
 ## Host RNG seed (collapse order, bot goals); 0 = random.
@@ -94,8 +94,8 @@ var _fall_speed: PackedFloat32Array = PackedFloat32Array()
 var _animating: Array[int] = []
 ## Host: `elapsed` when the tile cracked.
 var _cracked_at: PackedFloat32Array = PackedFloat32Array()
-## Host: seconds players have stood on each tile.
-var _wear: PackedFloat32Array = PackedFloat32Array()
+## Host: slot -> [tile index, seconds on it without leaving].
+var _stay: Dictionary = {}
 var _collapse_budget: float = 0.0
 var _rng := RandomNumberGenerator.new()
 var _toon_cache: Dictionary = {}
@@ -143,7 +143,7 @@ func _host_tick(delta: float) -> void:
 			fallers.append(p)
 	fallers.sort_custom(func(a: Player, b: Player) -> bool: return a.global_position.y < b.global_position.y)
 	for p in fallers:
-		_lava_out(p)
+		knock_out(p, &"lava")  # the reason makes the effects splash
 	if is_finished():
 		return
 	# Time is up: under Session its backstop ends the round and ranks survivors equally;
@@ -158,16 +158,19 @@ func _host_tick(delta: float) -> void:
 			to_fall.append(i)
 	var to_crack := PackedInt32Array()
 	if elapsed >= grace_time:
-		var touched := PackedInt32Array()
 		for p in players:
 			if not is_instance_valid(p) or not p.alive or not _is_grounded(p):
 				continue
 			var i := _contact_tile(to_local(p.global_position))
-			if i >= 0 and not touched.has(i):
-				touched.append(i)
-				_wear[i] += delta
-				if _wear[i] >= touch_time - 0.0001:
-					to_crack.append(i)
+			if i < 0:
+				continue
+			# Only an unbroken stay counts: stepping onto another tile starts over. Time in
+			# the air neither counts nor resets (hopping in place does not save you).
+			var stay: Array = _stay.get(p.slot, [-1, 0.0])
+			stay = [i, (float(stay[1]) + delta) if stay[0] == i else delta]
+			_stay[p.slot] = stay
+			if float(stay[1]) >= touch_time - 0.0001 and not to_crack.has(i):
+				to_crack.append(i)
 	if elapsed >= collapse_start:
 		if _collapse_budget < 0.0:
 			_collapse_budget = 1.0  # the first tile goes right at collapse_start
@@ -376,24 +379,6 @@ func _pick_collapse_tile(exclude: PackedInt32Array) -> int:
 	return best
 
 
-## Like Minigame.knock_out, with the reason `lava` (effects splash on it).
-func _lava_out(p: Player) -> void:
-	if is_finished() or not p.alive:
-		return
-	knocked_out.append(p.slot)
-	p.eliminate(&"lava")
-	_finish_if_decided()
-
-
-func _finish_if_decided() -> void:
-	var alive_slots: Array[int] = []
-	for p in players:
-		if is_instance_valid(p) and p.alive:
-			alive_slots.append(p.slot)
-	if alive_slots.size() <= 1:
-		finish(_ranking_with(alive_slots))
-
-
 func _session_drives() -> bool:
 	return Session.current_minigame == self and Session.state == Session.State.PLAYING
 
@@ -505,7 +490,6 @@ func _build_tiles() -> void:
 	_anim_time.resize(n)
 	_fall_speed.resize(n)
 	_cracked_at.resize(n)
-	_wear.resize(n)
 
 
 func _add_tile_nodes(i: int) -> void:
