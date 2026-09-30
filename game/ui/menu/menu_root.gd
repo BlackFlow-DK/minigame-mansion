@@ -34,12 +34,17 @@ var lobby: MenuLobbyOverlay
 var pause: MenuPauseMenu
 ## True when hosting fell back to an offline game.
 var offline_game: bool = false
+## False: the name / loadout are only handed to Net, never saved to the profile file (dev and
+## test runs set it so `--name=` and friends leave `user://profile.json` alone).
+var persist_profile: bool = true
 
 var _loadout: Dictionary = {}
 var _lobby_note: String = ""
 var _join_timer: Timer
 var _wardrobe_layer: CanvasLayer
 var _wardrobe: Node = null
+## Screen to return to when the wardrobe closes (title, or lobby when opened in a game).
+var _wardrobe_return: StringName = TITLE
 
 
 func _ready() -> void:
@@ -82,6 +87,7 @@ func _ready() -> void:
 	lobby.add_bot_pressed.connect(_on_add_bot)
 	lobby.remove_bot_pressed.connect(_on_remove_bot)
 	lobby.leave_pressed.connect(leave_game)
+	lobby.wardrobe_pressed.connect(open_wardrobe)
 	pause.resume_pressed.connect(close_pause)
 	pause.leave_pressed.connect(leave_game)
 	pause.quit_pressed.connect(_quit)
@@ -96,6 +102,7 @@ func _ready() -> void:
 	_apply_ui_scale()
 	_load_profile()
 	title.set_wardrobe_available(ResourceLoader.exists(WARDROBE_PATH))
+	lobby.wardrobe_button.visible = ResourceLoader.exists(WARDROBE_PATH)
 	if _in_game():
 		_enter_lobby()
 	else:
@@ -148,16 +155,21 @@ func set_connecting(address: String) -> void:
 	_join_timer.start(JOIN_TIMEOUT_SEC)
 
 
-## Opens the wardrobe scene (another system's) over the title; returns to the title when it closes.
+## Opens the wardrobe scene (another system's) over the title or the lobby; returns there when
+## it closes. In a game the wardrobe hands the new look to Net itself, so everyone sees it live;
+## the local blob ignores input while it is open.
 func open_wardrobe() -> void:
 	if _wardrobe != null or not ResourceLoader.exists(WARDROBE_PATH):
 		return
-	_commit_profile()
+	_wardrobe_return = LOBBY if _in_game() else TITLE
+	if _wardrobe_return == TITLE:
+		_commit_profile()
 	var ps := load(WARDROBE_PATH) as PackedScene
 	if ps == null:
 		title.show_message("The wardrobe could not be opened.")
 		return
 	_wardrobe = ps.instantiate()
+	_wardrobe.add_to_group(&"blocks_player_input")
 	_wardrobe.tree_exited.connect(_on_wardrobe_closed, CONNECT_ONE_SHOT)
 	for sig: StringName in [&"closed", &"close_requested", &"done", &"back_pressed"]:
 		if _wardrobe.has_signal(sig):
@@ -169,6 +181,15 @@ func open_wardrobe() -> void:
 func close_wardrobe() -> void:
 	if _wardrobe != null and is_instance_valid(_wardrobe):
 		_wardrobe.queue_free()
+
+
+## Closes the wardrobe as if Done was pressed (keeps the edits), e.g. when a round starts.
+func finish_wardrobe() -> void:
+	if _wardrobe != null and is_instance_valid(_wardrobe):
+		if _wardrobe.has_method(&"done"):
+			_wardrobe.call(&"done")  # emits closed -> close_wardrobe
+		else:
+			close_wardrobe()
 
 
 ## This machine's IPv4 LAN addresses (private ranges first; loopback and link-local skipped).
@@ -222,7 +243,8 @@ func _on_join_menu() -> void:
 
 
 func _on_name_committed(player_name: String) -> void:
-	Cosmetics.save_profile(player_name, _loadout)
+	if persist_profile:
+		Cosmetics.save_profile(player_name, _loadout)
 
 
 func _load_profile() -> void:
@@ -234,7 +256,8 @@ func _load_profile() -> void:
 
 func _commit_profile() -> void:
 	var n := title.player_name()
-	Cosmetics.save_profile(n, _loadout)
+	if persist_profile:
+		Cosmetics.save_profile(n, _loadout)
 	# An untouched profile carries slot 0's default colours; sending it would make every
 	# such player red. Send none instead, so the host gives each player its slot's colours.
 	Net.set_local_profile(n, {} if _loadout == Cosmetics.default_loadout(0) else _loadout)
@@ -242,9 +265,14 @@ func _commit_profile() -> void:
 
 func _on_wardrobe_closed() -> void:
 	_wardrobe = null
+	if not is_inside_tree() or not Net.is_inside_tree():
+		return  # the app is quitting with the wardrobe open
 	_load_profile()
 	if screen == WARDROBE:
-		show_screen(TITLE)
+		if _wardrobe_return == LOBBY and _in_game():
+			_enter_lobby()
+		else:
+			show_screen(TITLE)
 
 
 func _quit() -> void:
@@ -336,6 +364,8 @@ func _on_roster_changed() -> void:
 
 
 func _on_session_state_changed(state: int) -> void:
+	if state != Session.State.LOBBY and screen == WARDROBE and _in_game():
+		finish_wardrobe()  # a round is starting: keep the edits, get out of the way
 	if state == Session.State.LOBBY:
 		if _in_game() and screen == NONE:
 			show_screen(LOBBY)

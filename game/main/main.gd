@@ -12,8 +12,9 @@ extends Node
 ## While this peer is in a game and `Session.state == LOBBY`, the host (or offline peer) loads
 ## the lobby hall through the Stage with `follow_roster` on: joiners appear and leavers
 ## disappear on every peer. Every peer unfreezes lobby players on `Stage.players_spawned`.
-## Leaving (or the host closing the game) clears the stage and the round UI; MenuRoot shows
-## the title with its message. F11 / Alt+Enter toggle fullscreen.
+## When the session returns to LOBBY (the host's "Back to lobby" or the podium timing out) the
+## podium closes on every peer. Leaving (or the host closing the game) clears the stage and the
+## round UI; MenuRoot shows the title with its message. F11 / Alt+Enter toggle fullscreen.
 ##
 ## User args after `--`:
 ##   --sandbox | --minigame=<id> | --players=N   the offline dev sandbox (res://dev/sandbox.tscn)
@@ -28,6 +29,9 @@ extends Node
 ##   --round-time=S      shorten every round's time limit to S seconds (this peer's view)
 ##   --time-scale=X      Session.time_scale (phase timers run X times faster)
 ##   --fps=N             cap the frame rate (screenshots: frame counts map to seconds)
+##   --round-minigame=ID every round plays minigame ID (Session.scene_override; screenshots)
+##   --open-wardrobe     open the wardrobe once in the lobby
+## Any of these dev args also keeps the run from saving the profile (user://profile.json).
 
 enum AppState { TITLE, LOBBY, ROUND, PODIUM }
 
@@ -35,12 +39,16 @@ signal app_state_changed(state: AppState)
 
 const LOBBY_SCENE: PackedScene = preload("res://lobby/lobby.tscn")
 const SANDBOX_SCENE := "res://dev/sandbox.tscn"
+## Dev / test args; any of them makes this run leave the saved profile alone.
+const DEV_ARGS: Array[String] = ["name", "offline", "auto-host", "auto-join", "bots", "auto-start", "round-time",
+	"time-scale", "round-minigame", "open-wardrobe"]
 
 var app_state: AppState = AppState.TITLE
 
 var _args: Dictionary = {}
 var _bots_added: bool = false
 var _auto_started: bool = false
+var _wardrobe_opened: bool = false
 
 @onready var stage: Stage = $Stage
 @onready var menu: MenuRoot = $MenuRoot
@@ -62,8 +70,13 @@ func _ready() -> void:
 	var round_root := round_ui.get_node_or_null(^"Root") as Control
 	if round_root:
 		Sfx.attach_ui(round_root)
+	for key in DEV_ARGS:
+		if _args.has(key):
+			menu.persist_profile = false
 	if _args.has("fps"):
 		Engine.max_fps = int(_args["fps"])
+	if _args.has("round-minigame") and MinigameRegistry.has(StringName(_args["round-minigame"])):
+		Session.scene_override = load(MinigameRegistry.scene_path(StringName(_args["round-minigame"]))) as PackedScene
 	if _args.has("time-scale"):
 		Session.time_scale = maxf(0.01, float(_args["time-scale"]))
 	_refresh()
@@ -144,9 +157,9 @@ func _physics_process(delta: float) -> void:
 func _on_session_state_changed(state: int) -> void:
 	if state == Session.State.LOBBY:
 		_refresh()
-		# The podium stays up (with its own "Back to lobby") until this player dismisses it.
-		if round_ui.view == RoundUI.View.PODIUM and menu.screen == MenuRoot.LOBBY:
-			menu.show_screen(MenuRoot.NONE)
+		# The host went back (or the podium timed out): everyone's podium closes with it.
+		if round_ui.view == RoundUI.View.PODIUM:
+			round_ui.reset()
 	_update_app_state()
 
 
@@ -168,7 +181,7 @@ func _update_app_state() -> void:
 	if Net.local_slot() >= 0:
 		match Session.state:
 			Session.State.LOBBY:
-				s = AppState.PODIUM if round_ui.view == RoundUI.View.PODIUM else AppState.LOBBY
+				s = AppState.LOBBY
 			Session.State.PODIUM:
 				s = AppState.PODIUM
 			_:
@@ -195,6 +208,9 @@ func _run_dev_args() -> void:
 func _maybe_auto_start() -> void:
 	if Net.local_slot() < 0 or not Net.is_host() or Session.state != Session.State.LOBBY:
 		return
+	if _args.has("open-wardrobe") and not _wardrobe_opened and stage.minigame is MansionLobby:
+		_wardrobe_opened = true
+		menu.open_wardrobe.call_deferred()
 	if _args.has("bots") and not _bots_added:
 		_bots_added = true
 		for i in int(_args["bots"]):

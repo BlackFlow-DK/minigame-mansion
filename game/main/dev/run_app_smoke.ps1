@@ -5,11 +5,12 @@
 #   host + a bot in the lobby; Alice finds the game by LAN discovery, Bob joins by address;
 #   all three see 3 humans + 1 bot, at agreeing positions after scripted walking; the host
 #   starts a 2-round session from the overlay; all reach the podium with identical scores;
-#   the host's "Back to lobby" returns everyone to the hall; Bob leaves and is gone everywhere;
+#   the host's "Back to lobby" returns everyone to the hall (podiums close by themselves); Bob leaves and is gone everywhere;
 #   the host quits and Alice lands on the title screen with the message.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\main\dev\run_app_smoke.ps1 [-Port 24605]
 # Exit 0 when every check passes. Always kills the processes it started.
-param([int]$Port = 24605, [int]$StepTimeoutSec = 25, [double]$TimeScale = 10, [double]$RoundTime = 25)
+# -AllowError <regex>: log lines matching it do not fail the run (a known bug owned elsewhere).
+param([int]$Port = 24605, [int]$StepTimeoutSec = 25, [double]$TimeScale = 10, [double]$RoundTime = 25, [string]$AllowError = '')
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 . (Join-Path $Root 'tools\_common.ps1')  # Get-GodotBin, ConvertTo-ArgString, $GameDir, $GodotErrorPattern
@@ -120,7 +121,7 @@ try {
     Start-Actor 'Alice'
     Wait-For 'Alice app ready' { (Read-State 'Alice').events -contains 'ready' }
     Send-Cmd 'Alice' 'discover'
-    Wait-For 'Alice discovered the host' { (Read-State 'Alice').games -ge 1 -and (Read-State 'Alice').screen -eq 'join' }
+    Wait-For 'Alice discovered the host (other LAN games may be listed too)' { (@((Read-State 'Alice').game_ports) -contains $Port) -and (Read-State 'Alice').screen -eq 'join' }
     Send-Cmd 'Alice' "join_found $Port"
     Wait-For 'Alice joined (lobby screen, slot >= 1)' { $s = Read-State 'Alice'; $s.local_slot -ge 1 -and $s.screen -eq 'lobby' }
     Start-Actor 'Bob'
@@ -170,8 +171,9 @@ try {
     if (@($rounds | Select-Object -Unique).Count -ne 1) { throw 'round results differ between peers' }
     if (@((Read-State 'Host').rounds).Count -ne 2) { throw 'expected 2 rounds' }
     Write-Host 'PASS identical scores and rounds on all peers'
+    Write-Host "  rounds played: $(@((Read-State 'Host').rounds | ForEach-Object { $_.scene }) -join ', ')"
 
-    # 5. Host: Back to lobby. Everyone is in the hall again; clients close their podium.
+    # 5. Host: Back to lobby. Everyone is in the hall again; every podium closes by itself.
     Send-Cmd 'Host' 'back'
     Wait-For 'everyone back in the hall (4 unfrozen players), session over' {
         Test-All $All { param($s)
@@ -180,13 +182,9 @@ try {
             @($ps | Where-Object { $_.Value.frozen }).Count -eq 0
         }
     }
-    Wait-For 'host overlay back; clients still see the podium with its button' {
-        (Read-State 'Host').screen -eq 'lobby' -and (Read-State 'Host').round_view -eq 0 -and
-        (Test-All @('Alice', 'Bob') { param($s) $s.round_view -eq 4 -and $s.back_shown -and $s.screen -eq 'none' })
+    Wait-For 'podium closed and lobby overlay back on all three (no client presses anything)' {
+        Test-All $All { param($s) $s.screen -eq 'lobby' -and $s.round_view -eq 0 -and $s.overlay_visible }
     }
-    Send-Cmd 'Alice' 'back'
-    Send-Cmd 'Bob' 'back'
-    Wait-For 'clients dismissed the podium: lobby overlay' { Test-All @('Alice', 'Bob') { param($s) $s.screen -eq 'lobby' -and $s.round_view -eq 0 } }
 
     # 6. Bob leaves from the overlay: gone everywhere.
     Send-Cmd 'Bob' 'leave'
@@ -212,7 +210,7 @@ try {
             $path = Join-Path $Dir $f
             if (Test-Path -LiteralPath $path) {
                 $bad += @(Get-Content -LiteralPath $path | ForEach-Object { $_ -replace "\x1b\[[0-9;]*[A-Za-z]", '' } |
-                    Where-Object { $_ -match $GodotErrorPattern } | ForEach-Object { "${n}: $_" })
+                    Where-Object { $_ -match $GodotErrorPattern -and ($AllowError -eq '' -or $_ -notmatch $AllowError) } | ForEach-Object { "${n}: $_" })
             }
         }
     }

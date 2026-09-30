@@ -44,8 +44,10 @@ const PLACE_POINTS: Array[int] = [4, 3, 2, 1]
 @export var time_limit_grace: float = 1.0
 ## Fewer players than this: start_session is ignored, a running session ends early.
 @export var min_players: int = 2
-## Multiplies how fast Session's own timers run (phases and the time-limit backstop);
-## tests raise it. Does not change the delta passed to `_host_tick`.
+## Multiplies how fast a session's clocks run: Session's own timers (phases and the
+## time-limit backstop) and the delta passed to the minigame's `_host_tick`, so a minigame
+## that counts time in `_host_tick` stays in step with the backstop. Tests and smokes raise
+## it; player physics still runs at normal speed.
 @export var time_scale: float = 1.0
 
 ## Seed for the round order; -1 = random. Host only.
@@ -215,7 +217,7 @@ func _tick_playing(delta: float) -> void:
 		_end_round([])
 		return
 	if not current_minigame.is_finished():
-		current_minigame._host_tick(delta)
+		current_minigame._host_tick(delta * time_scale)
 	if state != State.PLAYING:
 		return  # the minigame finished during its tick
 	_play_elapsed += delta * time_scale

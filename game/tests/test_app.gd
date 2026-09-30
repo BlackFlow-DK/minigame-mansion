@@ -1,14 +1,18 @@
 extends GameTest
 ## The main scene end to end, offline and headless: title -> Play offline -> lobby with bots
-## -> a 2-round Session on the registry minigames -> podium -> back to the lobby, checking
-## Session state, Stage contents and UI panels at each step. Also: leaving, the podium
-## timing out, the sandbox args, and menus taking the human's input away from the blob.
+## -> a 2-round Session -> podium -> back to the lobby, checking Session state, Stage contents
+## and UI panels at each step. Rounds play on the flat dev arena (`Session.scene_override`) and
+## are decided by the test, so the outcome is exact and fast. Also: leaving, the podium timing
+## out, the sandbox args, menus taking the human's input away from the blob, the lobby
+## wardrobe. `test_real_*`: one round of each real minigame with bots reaches RESULTS.
 
 const MAIN_SCENE_PATH := "res://main/main.tscn"
+const DEV_ARENA_SCENE: PackedScene = preload("res://dev/dev_arena.tscn")
 
 var app: MainApp
 var _connections: Array = []
 var _saved_podium_time: float = 8.0
+var _saved_profile_path: String = ""
 
 
 func before_each() -> void:
@@ -16,9 +20,15 @@ func before_each() -> void:
 	Session.abort_session()
 	Session.time_scale = 50.0
 	Session.order_seed = 4321
+	Session.scene_override = DEV_ARENA_SCENE
 	_saved_podium_time = Session.podium_time
+	# The wardrobe saves on Done: keep the player's real profile out of it.
+	_saved_profile_path = Cosmetics.profile_path
+	Cosmetics.profile_path = "user://test_app_profile.json"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path))
 	app = (load(MAIN_SCENE_PATH) as PackedScene).instantiate() as MainApp
 	add_child(app)
+	app.menu.persist_profile = false  # never write the real user://profile.json
 	await step(2)
 
 
@@ -31,7 +41,10 @@ func after_each() -> void:
 	Session.abort_session()
 	Session.time_scale = 1.0
 	Session.order_seed = -1
+	Session.scene_override = null
 	Session.podium_time = _saved_podium_time
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path))
+	Cosmetics.profile_path = _saved_profile_path
 	if is_instance_valid(app):
 		app.stage.clear()
 		remove_child(app)
@@ -134,7 +147,7 @@ func test_full_offline_loop() -> void:
 	assert_true(Net.session_in_progress, "Net.session_in_progress set")
 	assert_false(app.stage.follow_roster, "rounds do not follow the roster")
 	assert_false(app.stage.minigame is MansionLobby, "a minigame replaced the lobby")
-	assert_true(MinigameRegistry.has(StringName(app.stage.minigame.scene_file_path.get_file().get_basename())), "registry minigame loaded")
+	assert_true(MinigameRegistry.has(Session.round_order[0]), "round 1 is a registry minigame")
 	assert_eq(app.stage.players.size(), 4, "4 players in the round")
 	assert_true(_all_frozen(true), "frozen during the intro")
 	assert_eq(app.menu.screen, MenuRoot.NONE, "overlay hidden in the round")
@@ -168,7 +181,7 @@ func test_full_offline_loop() -> void:
 	assert_eq(app.app_state, MainApp.AppState.LOBBY, "app state lobby again")
 
 
-func test_podium_timeout_keeps_the_podium_until_dismissed() -> void:
+func test_podium_timeout_takes_everyone_back_to_the_lobby() -> void:
 	Session.podium_time = 0.5
 	await _to_lobby_with_bots(1)
 	_on(Session.round_intro, func(_info: Dictionary, _index: int) -> void:
@@ -177,13 +190,9 @@ func test_podium_timeout_keeps_the_podium_until_dismissed() -> void:
 	assert_true(await _wait_state(Session.State.PODIUM), "podium")
 	assert_true(await _wait_state(Session.State.LOBBY, 120), "podium timed out to LOBBY")
 	await step(2)
-	assert_true(app.stage.minigame is MansionLobby, "lobby loaded under the podium")
-	assert_eq(app.round_ui.view, RoundUI.View.PODIUM, "podium still up")
-	assert_eq(app.menu.screen, MenuRoot.NONE, "no lobby overlay over the podium")
-	assert_true(app.round_ui.podium.is_back_button_shown(), "back button shown")
-	app.round_ui.podium.back_pressed.emit()
-	await step(1)
-	assert_eq(app.menu.screen, MenuRoot.LOBBY, "overlay after dismissing the podium")
+	assert_true(app.stage.minigame is MansionLobby, "lobby loaded")
+	assert_eq(app.round_ui.view, RoundUI.View.NONE, "podium closed by itself")
+	assert_eq(app.menu.screen, MenuRoot.LOBBY, "lobby overlay")
 	assert_eq(app.app_state, MainApp.AppState.LOBBY, "app state lobby")
 
 
@@ -239,3 +248,82 @@ func test_sandbox_args_are_recognised() -> void:
 	assert_true(MainApp.wants_sandbox(MainApp.parse_user_args(PackedStringArray(["--sandbox"]))), "--sandbox")
 	assert_false(MainApp.wants_sandbox(MainApp.parse_user_args(PackedStringArray(["--offline", "--bots=3"]))), "game args")
 	assert_eq(MainApp.parse_user_args(PackedStringArray(["--auto-join=127.0.0.1:24600", "--x"])), {"auto-join": "127.0.0.1:24600", "x": ""}, "parse")
+
+
+func test_lobby_wardrobe_changes_the_look_live() -> void:
+	await _to_lobby_with_bots(1)
+	var me := app.stage.get_player(Net.local_slot())
+	assert_true(app.menu.lobby.wardrobe_button.visible, "Wardrobe on the lobby overlay")
+	app.menu.lobby.wardrobe_button.pressed.emit()
+	await step(2)
+	assert_eq(app.menu.screen, MenuRoot.WARDROBE, "wardrobe open")
+	assert_true(ControllerComponent.ui_has_input(app.get_viewport()), "blob input blocked while the wardrobe is open")
+	var w := app.menu.find_child("Wardrobe", true, false) as Wardrobe
+	assert_true(w != null, "wardrobe instanced under the menu")
+	var colours := Cosmetics.palette(&"primary")
+	var pick: String = colours[3] if colours[3] != me.loadout.get("primary") else colours[4]
+	w.select_colour(&"primary", pick)
+	w.done()
+	await step(3)
+	assert_eq(app.menu.screen, MenuRoot.LOBBY, "back in the lobby overlay")
+	assert_true(not is_instance_valid(w), "wardrobe freed")
+	assert_false(ControllerComponent.ui_has_input(app.get_viewport()), "blob input back")
+	assert_eq(str(Net.roster[Net.local_slot()].loadout["primary"]), pick, "roster has the new colour")
+	assert_eq(str(me.loadout["primary"]), pick, "the blob in the hall wears it")
+
+
+func test_wardrobe_closes_when_a_round_starts() -> void:
+	await _to_lobby_with_bots(1)
+	app.menu.lobby.wardrobe_button.pressed.emit()
+	await step(2)
+	Session.start_session(1)
+	assert_true(await _wait_state(Session.State.INTRO), "intro")
+	await step(2)
+	assert_eq(app.menu.screen, MenuRoot.NONE, "wardrobe closed for the round")
+	assert_true(app.menu.find_child("Wardrobe", true, false) == null, "wardrobe gone")
+
+
+# --- Real minigames: one round each, 1 human (idle) + 3 bots, through the real flow -----------
+
+## Plays one round of `id` and checks it reaches RESULTS with a valid ranking. Session clocks
+## (and the delta minigames get) run `Session.time_scale` times faster.
+func _real_round(id: StringName) -> void:
+	Session.scene_override = load(MinigameRegistry.scene_path(id)) as PackedScene
+	Session.time_scale = 4.0
+	await _to_lobby_with_bots(3)
+	var finished := watch(Session, &"round_finished")
+	Session.start_session(1)
+	assert_true(await _wait_state(Session.State.PLAYING, 120), "%s: playing" % id)
+	assert_true(app.stage.minigame.scene_file_path == MinigameRegistry.scene_path(id), "%s loaded" % id)
+	assert_true(await _wait_state(Session.State.RESULTS, 60 * 40), "%s: reached RESULTS" % id)
+	assert_eq(finished.size(), 1, "one round_finished")
+	if finished.is_empty():
+		return
+	var ranking: Array = finished[0][0]
+	var points: Dictionary = finished[0][1]
+	var sorted := ranking.duplicate()
+	sorted.sort()
+	assert_eq(sorted, [0, 1, 2, 3], "%s: ranking has every slot once (%s)" % [id, ranking])
+	var total := 0
+	for s: int in [0, 1, 2, 3]:
+		assert_true(points.has(s) and int(points[s]) in [0, 1, 2, 3, 4], "%s: points for slot %d" % [id, s])
+		total += int(points.get(s, 0))
+		assert_eq(Session.scores.get(s, -1), int(points.get(s, 0)), "%s: score of slot %d" % [id, s])
+	assert_true(total >= 10 and total <= 16, "%s: points follow the table (total %d)" % [id, total])
+	assert_true(int(points[int(ranking[0])]) == 4, "%s: winner scores 4" % id)
+
+
+func test_real_floor_is_lava() -> void:
+	await _real_round(&"floor_is_lava")
+
+
+func test_real_bumper_sumo() -> void:
+	await _real_round(&"bumper_sumo")
+
+
+func test_real_hot_potato() -> void:
+	await _real_round(&"hot_potato")
+
+
+func test_real_coin_scramble() -> void:
+	await _real_round(&"coin_scramble")
