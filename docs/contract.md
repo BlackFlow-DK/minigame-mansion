@@ -173,6 +173,24 @@ Flow (Session drives it; the sandbox and the test harness do the same offline): 
 
 A minigame lives in `game/minigames/<id>/` (scene `<id>.tscn` whose root script `<id>.gd` `extends Minigame`, plus its own assets). The placeholder has `WorldEnvironment`, `Sun`, `Camera3D` (fixed, current), `Ground` (20 m, top at y=0) and `Spawns` (8 markers on a 5 m ring, the first four spread out); replace anything but keep `Spawns` with 8 markers. Ids in v1 (`MinigameRegistry.IDS` in `game/minigames/registry.gd`): `floor_is_lava`, `bumper_sumo`, `hot_potato`, `coin_scramble`. A minigame may change player component tuning in `_setup` and must not reach into other systems beyond this contract. The host decides everything that matters (who is out, scores); clients learn it through the minigame's own RPCs.
 
+## Networking rules for minigames (added after player sync landed)
+
+- `Stage` sits at the same node path on every peer; the loaded minigame is `Stage/Minigame` everywhere. `Stage.follow_roster` (lobby: players come and go with the roster) and `Stage.name_tags`. `clear()` on the host clears every client. A player who leaves mid-round is knocked out, then removed, on all peers.
+- Decide on the host. `knock_out` / `eliminate` / `respawn_at` called on the host reach every peer by themselves.
+- Send any other minigame state (scores, timers, which platform fell, who holds the bomb) with `@rpc("authority", "call_local", "reliable")` functions on the minigame root, called from the host. Moving scenery must be deterministic from a host-sent start time or seed, not simulated separately per peer.
+- Tuning changes and visuals go in `_setup` / `_start`, which run on every peer. Never set `frozen`, position or tuning of a client's player on the host only.
+- Remote player copies are kinematic obstacles; read `velocity`, `facing`, `control_locked` and `SyncComponent.is_grounded()` on them, never `is_on_floor()`.
+- In the lobby, players spawn frozen: whoever loads the lobby unfreezes them on `Stage.players_spawned`.
+
+## Presentation APIs a minigame may call (all safe headless)
+
+- `RoundUI.push_counter(slot, value)`, `RoundUI.push_banner(text, seconds)` (this peer only: call on every peer, e.g. inside your `call_local` RPC).
+- `Fx.play(name, at, color)`: `dust_puff`, `land_thud`, `shove_whoosh`, `hit_stars`, `stun_swirl`, `poof`, `respawn_sparkle`, `coin_pickup`, `explosion`, `confetti`, `splash_lava`.
+- `Sfx.play(name, at)`, `Sfx.play_loop(name, at) -> id`, `Sfx.stop_loop(id)`: `coin`, `coin_big`, `bomb_tick`, `bomb_fuse_loop`, `explosion`, `platform_crack`, `platform_fall`, `lava_sizzle`, `round_win_jingle`, and the rest in `game/audio/sfx.gd`.
+- Look: instance `res://look/stage_look.tscn` and set its `preset`; `Look.apply_toon(model)`; materials in `res://look/materials/` (`lava`, `water`, `void_fade`).
+- Camera: instance `res://camera/arena_camera.tscn` (`ArenaCamera`), set bounds; `add_shake(amount)`.
+- Player visuals: `VisualsComponent.play_emote(&"cheer" | &"wave" | &"sad")`, `set_expression`.
+
 ## Tests
 
 `tools/godot-test.ps1 [-Filter text]` runs every `test_*` method of every `game/tests/test_*.gd` headless at a fixed 60 ticks/s (deterministic step, as fast as the CPU allows). A test file `extends GameTest` (`game/tests/harness.gd`); each test method gets a fresh instance and may `await`. It fails on a failed assert, any engine/script error or `push_error` during the test, or a 60 s timeout.
