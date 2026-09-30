@@ -58,17 +58,50 @@ function Show-States([string[]]$Names) {
     }
 }
 
+# Every check: its name, how long it took, and on failure the reason. Written to
+# <logdir>/result.txt whatever happens (with every actor's last state).
+$script:Check = '(setup)'
+$script:Passed = @()
+
 function Wait-For([string]$Desc, [scriptblock]$Cond, [int]$Timeout = $StepTimeoutSec) {
-    $deadline = (Get-Date).AddSeconds($Timeout)
+    $script:Check = $Desc
+    $start = Get-Date
+    $deadline = $start.AddSeconds($Timeout)
     while ((Get-Date) -lt $deadline) {
         $ok = $false
         try { $ok = [bool](& $Cond) } catch { $ok = $false }
-        if ($ok) { Write-Host "PASS $Desc"; return }
+        if ($ok) {
+            $took = ((Get-Date) - $start).TotalSeconds
+            $script:Passed += ('PASS {0} ({1:N1} s)' -f $Desc, $took)
+            Write-Host ('PASS {0} ({1:N1} s)' -f $Desc, $took)
+            $script:Check = "(after: $Desc)"
+            return
+        }
         Start-Sleep -Milliseconds 200
     }
-    Write-Host "FAIL $Desc"
     Show-States @($script:Procs.Keys)
-    throw "smoke step failed: $Desc"
+    throw "not true within $Timeout s"
+}
+
+# A check done inline (not by Wait-For): names it for the result file, throws with the reason.
+function Assert-Check([string]$Desc, [bool]$Ok, [string]$Reason) {
+    $script:Check = $Desc
+    if (-not $Ok) { throw $Reason }
+    $script:Passed += "PASS $Desc"
+    Write-Host "PASS $Desc"
+    $script:Check = "(after: $Desc)"
+}
+
+function Write-Result([string]$Status, [string]$Reason) {
+    $lines = @("app-smoke: $Status")
+    if ($Status -ne 'OK') { $lines += "FAIL ${script:Check}: $Reason" }
+    $lines += '' ; $lines += $script:Passed
+    foreach ($n in $script:Procs.Keys) {
+        $f = Join-Path $Dir "$n.json"
+        $lines += ''; $lines += "--- $n (exited: $($script:Procs[$n].HasExited))"
+        if (Test-Path -LiteralPath $f) { $lines += (Get-Content -LiteralPath $f -Raw) }
+    }
+    Set-Content -LiteralPath (Join-Path $Dir 'result.txt') -Value $lines -Encoding UTF8
 }
 
 function Get-Player([string]$Name, [int]$Slot) {
@@ -171,11 +204,13 @@ try {
     $scores = @($All | ForEach-Object { ((Read-State $_).final_scores | ConvertTo-Json -Compress) })
     $rounds = @($All | ForEach-Object { ((Read-State $_).rounds | ConvertTo-Json -Compress -Depth 5) })
     Write-Host "  final scores: $($scores -join ' | ')"
+    $script:Check = 'identical scores and rounds on all peers'
     if (@($scores | Select-Object -Unique).Count -ne 1) { throw 'final scores differ between peers' }
     if (@($rounds | Select-Object -Unique).Count -ne 1) { throw 'round results differ between peers' }
     if (@((Read-State 'Host').rounds).Count -ne 2) { throw 'expected 2 rounds' }
     Write-Host 'PASS identical scores and rounds on all peers'
     Write-Host "  rounds played: $(@((Read-State 'Host').rounds | ForEach-Object { $_.scene }) -join ', ')"
+    $script:Check = 'every peer: each round''s minigame got _setup/_start from Session'
     if ((Read-State 'Host').rounds[0].scene -notmatch $FirstRound) { throw "round 1 was not $FirstRound" }
     foreach ($n in $All) {
         $s = Read-State $n
@@ -189,10 +224,12 @@ try {
     }
     Write-Host 'PASS every peer: each round''s minigame got _setup/_start from Session (4 players)'
     $tunings = @($All | ForEach-Object { ((Read-State $_).round_starts | ConvertTo-Json -Compress -Depth 5) })
+    $script:Check = 'same minigames, players and tuning at every round start'
     if (@($tunings | Select-Object -Unique).Count -ne 1) { throw "round-start tuning differs between peers: $($tunings -join ' | ')" }
     Write-Host "PASS same minigames, players and tuning at every round start on all peers"
     $states = @($All | ForEach-Object { (Read-State $_).rounds[0].mg_state })
     Write-Host "  round 1 end state: $($states -join ' | ')"
+    $script:Check = 'round 1 host-decided state identical on all peers'
     if (@($states | Select-Object -Unique).Count -ne 1) { throw 'round 1 host-decided state differs between peers' }
     if ($FirstRound -eq 'bumper_sumo' -and $states[0] -notmatch '2') { throw 'no sumo ring dropped in round 1 (nothing compared)' }
     Write-Host 'PASS round 1 host-decided state identical on all peers'
@@ -225,11 +262,17 @@ try {
     Send-Cmd 'Carl' "join 127.0.0.1:$Port"
     Wait-For 'Carl in the hall on host and Alice' { Test-All @('Host', 'Alice') { param($s) $s.roster_size -eq 4 -and @($s.players.PSObject.Properties).Count -eq 4 } }
     $C = [int](Read-State 'Carl').local_slot
-    & taskkill.exe /PID $script:Procs['Carl'].Id /T /F 2>&1 | Out-Null
+    # Through cmd: taskkill's stderr (e.g. "child process could not be terminated" for a
+    # console host already on its way out) must not become a PowerShell error under Stop.
+    & cmd.exe /c "taskkill /PID $($script:Procs['Carl'].Id) /T /F >nul 2>&1"
     $killedAt = Get-Date
-    Wait-For 'dropped Carl removed on host and Alice within 10 s' {
+    Wait-For 'Carl process gone' { $script:Procs['Carl'].HasExited } 10
+    # ENet only checks its 6 s timeout when a retransmit timer expires, and those back off
+    # (doubling), so on loopback removal lands anywhere in ~7-13 s (measured). 20 s still
+    # proves the short timeout: ENet's defaults take up to 30 s.
+    Wait-For 'dropped Carl removed on host and Alice within 20 s' {
         Test-All @('Host', 'Alice') { param($s) $s.roster_size -eq 3 -and $null -eq $s.players."$C" }
-    } 10
+    } 20
     Write-Host ("  ghost gone after {0:N1} s" -f ((Get-Date) - $killedAt).TotalSeconds)
 
     # 7. The host quits: Alice lands on the title screen with the message.
@@ -242,6 +285,7 @@ try {
     Send-Cmd 'Alice' 'quit'
     Wait-For 'every process exited on its own' { @($script:Procs.Values | Where-Object { -not $_.HasExited }).Count -eq 0 }
 
+    $script:Check = 'no error lines in actor logs'
     $bad = @()
     foreach ($n in $script:Procs.Keys) {
         foreach ($f in @("$n.out", "$n.err")) {
@@ -258,8 +302,10 @@ try {
     }
     Write-Host 'PASS no error lines in actor logs'
     $exit = 0
+    Write-Result 'OK' ''
 } catch {
-    Write-Host "app-smoke: $($_.Exception.Message)"
+    Write-Host "FAIL ${script:Check}: $($_.Exception.Message)"
+    Write-Result 'FAILED' $_.Exception.Message
 } finally {
     $ErrorActionPreference = 'Continue'
     foreach ($n in $script:Procs.Keys) {
