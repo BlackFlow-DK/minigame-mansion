@@ -158,7 +158,9 @@ func show_screen(s: StringName) -> void:
 	screen = s
 	if settings.visible:
 		settings.visible = false  # a screen change (left the game, a round began) closes it
-	backdrop.visible = s == TITLE or s == JOIN or s == WARDROBE
+	# The live 3D hall only outside a game: in a game (lobby wardrobe) the stage already renders
+	# one, and a second world would cost a full extra 3D render for nothing.
+	backdrop.visible = s == TITLE or s == JOIN or (s == WARDROBE and _wardrobe_return == TITLE and not _in_game())
 	title.visible = s == TITLE
 	join.visible = s == JOIN
 	lobby.visible = s == LOBBY

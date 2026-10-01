@@ -259,6 +259,7 @@ func test_lobby_wardrobe_changes_the_look_live() -> void:
 	app.menu.lobby.wardrobe_button.pressed.emit()
 	await step(2)
 	assert_eq(app.menu.screen, MenuRoot.WARDROBE, "wardrobe open")
+	assert_false(app.menu.backdrop.visible, "no second 3D hall (title backdrop) behind the lobby wardrobe")
 	assert_true(ControllerComponent.ui_has_input(app.get_viewport()), "blob input blocked while the wardrobe is open")
 	var w := app.menu.find_child("Wardrobe", true, false) as Wardrobe
 	assert_true(w != null, "wardrobe instanced under the menu")

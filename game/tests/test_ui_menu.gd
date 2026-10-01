@@ -297,6 +297,27 @@ func test_join_failed_shows_error() -> void:
 	assert_false(menu.join.ip_join_button.disabled, "join enabled again")
 
 
+func test_title_backdrop_only_outside_a_game() -> void:
+	menu.persist_profile = false  # opening the wardrobe from the title commits the profile
+	assert_true(menu.backdrop.visible, "title: live backdrop")
+	menu.open_wardrobe()
+	await step(2)
+	assert_eq(menu.screen, MenuRoot.WARDROBE, "wardrobe from the title")
+	assert_true(menu.backdrop.visible, "wardrobe from the title keeps the backdrop")
+	menu.close_wardrobe()
+	await step(2)
+	assert_eq(menu.screen, MenuRoot.TITLE, "back on the title")
+	Net.start_offline()
+	menu.show_screen(MenuRoot.LOBBY)
+	assert_false(menu.backdrop.visible, "lobby: no title backdrop")
+	menu.open_wardrobe()
+	await step(2)
+	assert_false(menu.backdrop.visible, "lobby wardrobe: no title backdrop")
+	menu.close_wardrobe()
+	await step(2)
+	Net.leave()
+
+
 func test_version_mismatch_shows_clear_message() -> void:
 	menu.title.join_button.pressed.emit()
 	await step(1)
