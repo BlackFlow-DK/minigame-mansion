@@ -9,7 +9,7 @@ extends RefCounted
 ## beacon are UTF-8 JSON objects. Bump VERSION on any change to RPCs or roster data.
 
 ## Protocol version exchanged in the handshake and advertised in beacons.
-const VERSION := 1
+const VERSION := 2
 const GAME_ID := "minigame-mansion"
 const BEACON_MAGIC := "MMANSION-LAN"
 const MAX_NAME_LENGTH := 16
