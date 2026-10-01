@@ -3,7 +3,7 @@ extends RefCounted
 ## The minigames in the game. Orchestrator-owned.
 
 ## Minigame ids; each lives in `game/minigames/<id>/<id>.tscn`.
-const IDS: Array[StringName] = [&"floor_is_lava", &"bumper_sumo", &"hot_potato", &"coin_scramble", &"cannon_alley"]
+const IDS: Array[StringName] = [&"floor_is_lava", &"bumper_sumo", &"hot_potato", &"coin_scramble", &"cannon_alley", &"spotlight_chairs"]
 
 
 ## `res://` path of the scene for `id`.
