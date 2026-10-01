@@ -14,6 +14,8 @@ param(
     [int]$Seed = 1,
     [switch]$Parallel,
     [switch]$Verbose,
+    [string]$Set = '',
+    [string]$Size = 'normal',
     [string]$Out = '',
     [int]$TimeoutSec = 3600
 )
@@ -30,6 +32,8 @@ function Get-BatchArgs([string]$ids) {
     $a = @('--headless', '--fixed-fps', '60', '--path', $GameDir, 'res://tools/balance/balance_batch.tscn', '--',
         "--minigame=$ids", "--players=$Players", "--rounds=$Rounds", "--seed=$Seed")
     if ($Verbose) { $a += '--verbose' }
+    if ($Set -ne '') { $a += "--set=$Set" }
+    if ($Size -ne 'normal') { $a += "--size=$Size" }
     return $a
 }
 

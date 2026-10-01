@@ -35,6 +35,8 @@ var overrides: Dictionary = {}
 ## Speed: pause the players' presentation components (LEAN_PAUSED). They only listen and
 ## draw, so the rounds play out identically (same seed, same rankings), just faster.
 var lean: bool = true
+## Body size of every seat ("normal"; "small"/"big" to measure a size on its own).
+var body_size: String = "normal"
 
 var _stage: Stage = null
 var _saved: Dictionary = {}
@@ -156,6 +158,11 @@ func _play_round(scene: PackedScene, count: int, round_seed: int, brain_seeds: A
 	for i in count - 1:
 		Net.add_bot()
 	(Net.roster[0] as PlayerInfo).is_bot = true  # the host's seat is a bot like the rest
+	for s: int in Net.roster:
+		# Same body for every seat (the host's saved profile could carry another size).
+		var info := Net.roster[s] as PlayerInfo
+		info.loadout = Cosmetics.default_loadout(s)
+		info.loadout["size"] = body_size
 	Session.scene_override = scene
 	_round = {
 		"seconds": 0.0, "ranking": [], "points": {}, "winners": [], "timeout": false, "never": false,
@@ -235,6 +242,8 @@ func _on_intro() -> void:
 		var c := p.get_component(&"controller") as ControllerComponent
 		if c and c.brain and c.brain.has_method(&"configure"):
 			c.brain.call(&"configure", seeds[p.slot % seeds.size()])
+			if verbose:
+				print("    seat %d: skill %.2f aggression %.2f" % [p.slot, c.brain.get(&"skill"), c.brain.get(&"aggression")])
 		var last_hit := [-INF]
 		p.got_hit.connect(func(_impulse: Vector3, source_slot: int) -> void:
 			if source_slot >= 0:
