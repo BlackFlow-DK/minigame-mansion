@@ -9,6 +9,13 @@ func _game() -> FloorIsLava:
 	return get_minigame() as FloorIsLava
 
 
+## Spawns are on a circle at a random turn, so a start position can sit near a tile edge:
+## tests that time the tile under an idle player put the player on its tile's centre first.
+func _centre_on_tile(p: Player) -> void:
+	var g := _game()
+	p.place_at(Transform3D(Basis.IDENTITY, g.get_tile_position(g.tile_at(p.global_position))))
+
+
 func _slots_ok(r: Array[int], count: int) -> bool:
 	if r.size() != count:
 		return false
@@ -51,8 +58,78 @@ func test_small_rounds_field_and_spawns_stay_on_it() -> void:
 		assert_true(g.is_safe(pt.origin), "every spawn point exists in the smallest field")
 
 
+## The spawn points `pts` (local to the minigame) form an even ring of `radius`: equal
+## radii, equal angles between neighbours, each facing the centre.
+func _assert_even_ring(pts: Array[Transform3D], radius: float, what: String) -> void:
+	var n := pts.size()
+	var angles: Array[float] = []
+	for t in pts:
+		var flat := Vector3(t.origin.x, 0.0, t.origin.z)
+		assert_near(flat.length(), radius, 0.01, "%s: on the %.1f m circle" % [what, radius])
+		var look := t.basis * Vector3.MODEL_FRONT
+		assert_true(look.dot(-flat.normalized()) > 0.999, "%s: faces the centre" % what)
+		angles.append(atan2(flat.x, flat.z))
+	angles.sort()
+	for i in n:
+		var gap := fposmod(angles[(i + 1) % n] - angles[i], TAU)
+		assert_near(gap, TAU / n, 0.01, "%s: equal angles (%d players)" % [what, n])
+
+
+## Where the players stand now, as spawn transforms local to `mg` (origin + facing).
+func _player_points(mg: Minigame, ps: Array[Player]) -> Array[Transform3D]:
+	var out: Array[Transform3D] = []
+	for p in ps:
+		var local := mg.to_local(p.global_position)
+		local.y = 0.0
+		out.append(Transform3D(Basis.looking_at(-p.facing, Vector3.UP), local))
+	return out
+
+
+func test_spawn_layout_is_an_even_ring_on_solid_tiles_for_2_to_8() -> void:
+	spawn_arena(2, ID)
+	var g := _game()
+	for n in range(2, 9):
+		for turn: float in [0.0, 0.7, 2.9, 5.5]:
+			var pts := FloorIsLava.spawn_layout(n, turn)
+			assert_eq(pts.size(), n, "%d points for %d players" % [n, n])
+			_assert_even_ring(pts, FloorIsLava.SPAWN_RADIUS, "lava n=%d turn=%.1f" % [n, turn])
+			for t in pts:
+				assert_true(g.is_safe(g.to_global(t.origin)), "n=%d turn=%.1f: spawn on a solid tile, off the edges" % [n, turn])
+
+
+func _check_start_layout(n: int) -> void:
+	var ps := spawn_arena(n, ID)
+	var g := _game()
+	_assert_even_ring(_player_points(g, ps), FloorIsLava.SPAWN_RADIUS, "lava %d players" % n)
+	# A given turn and order places slot slots[i] on point i.
+	var slots := PackedInt32Array()
+	for i in range(n - 1, -1, -1):
+		slots.append(ps[i].slot)
+	g._rpc_spawn_layout(1.25, slots)
+	var pts := FloorIsLava.spawn_layout(n, 1.25)
+	for i in n:
+		var p := stage.get_player(slots[i])
+		assert_true(g.to_local(p.global_position).distance_to(pts[i].origin) < 0.001, "slot %d on point %d" % [slots[i], i])
+	await step(30)
+	for p in ps:
+		assert_true(p.alive and p.is_on_floor(), "%d players: P%d stands on a tile" % [n, p.slot])
+
+
+func test_players_start_on_the_host_layout_3() -> void:
+	await _check_start_layout(3)
+
+
+func test_players_start_on_the_host_layout_5() -> void:
+	await _check_start_layout(5)
+
+
+func test_players_start_on_the_host_layout_8() -> void:
+	await _check_start_layout(8)
+
+
 func test_standing_still_player_falls_into_lava_and_is_knocked_out() -> void:
 	var ps := spawn_arena(3, ID)
+	_centre_on_tile(ps[0])
 	var out := watch(ps[0], &"eliminated")
 	var frames := 0
 	while out.is_empty() and frames < 60 * 6:
@@ -72,6 +149,7 @@ func test_standing_still_player_falls_into_lava_and_is_knocked_out() -> void:
 
 func test_tile_cracks_then_falls_on_time_and_loses_its_collider() -> void:
 	var ps := spawn_arena(2, ID)
+	_centre_on_tile(ps[0])
 	var g := _game()
 	var tile := g.tile_at(ps[0].global_position)
 	var cracked := watch(g, &"tile_cracked")
@@ -201,6 +279,7 @@ func test_is_safe_and_bot_goal() -> void:
 
 func test_bot_goal_falls_back_to_the_nearest_solid_tile() -> void:
 	var ps := spawn_arena(2, ID)
+	_centre_on_tile(ps[0])
 	var g := _game()
 	var keep := g.tile_at(ps[0].global_position + Vector3(1.59, 0.0, 0.0))
 	var gone := PackedInt32Array()

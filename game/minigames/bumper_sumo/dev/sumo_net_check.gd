@@ -23,6 +23,8 @@ var _ring_events: Array[String] = []
 var _ring_times: Dictionary = {}
 var _eliminations: Array[String] = []
 var _ranking: Array = []
+## The spawn layout this peer applied ("turn|slots"), from BumperSumo.spawn_layout_applied.
+var _layout: String = ""
 var _round_t0: int = -1
 var _brain: Node = null
 var _cmds_done: int = 0
@@ -68,6 +70,8 @@ func _on_players_spawned(spawned: Array) -> void:
 		m.set_meta(&"net_check", true)
 		m.connect(&"ring_warned", _on_ring.bind("warn"))
 		m.connect(&"ring_dropped", _on_ring.bind("drop"))
+		m.connect(&"spawn_layout_applied", func(turn: float, slots: PackedInt32Array) -> void:
+			_layout = "%.5f|%s" % [turn, str(slots)])
 	for v: Variant in spawned:
 		var p := v as Player
 		p.eliminated.connect(func(reason: StringName) -> void: _eliminations.append("%d:%s" % [p.slot, reason]))
@@ -174,6 +178,7 @@ func _write() -> void:
 		"scene": stage.minigame.scene_file_path if stage.minigame else "",
 		"players": ps, "events": _events, "ring_events": _ring_events, "ring_times": _ring_times,
 		"eliminations": _eliminations, "ranking": _ranking, "cmds_done": _cmds_done,
+		"layout": _layout,
 	}
 	var f := FileAccess.open(_dir.path_join(_name + ".json"), FileAccess.WRITE)
 	if f:

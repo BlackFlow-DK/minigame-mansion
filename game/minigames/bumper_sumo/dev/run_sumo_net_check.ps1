@@ -93,6 +93,12 @@ try {
     if ($r.Count -ne 4 -or @($r | Select-Object -Unique).Count -ne 4) { throw "ranking is not 4 distinct slots: $($rankings[0])" }
     Write-Host "PASS same ranking on all peers: [$($rankings[0])]"
 
+    # Spawn layout: every peer applied the host's turn and order.
+    $layouts = @($All | ForEach-Object { $states[$_].layout })
+    if (@($layouts | Where-Object { -not $_ }).Count -gt 0) { throw "a peer never applied the spawn layout: $($layouts -join ' | ')" }
+    if (@($layouts | Select-Object -Unique).Count -ne 1) { throw "spawn layouts differ: $($layouts -join ' | ')" }
+    Write-Host "PASS same spawn layout on all peers: [$($layouts[0])]"
+
     # Ring events: same sequence everywhere, at least one drop, about the same time.
     $rings = @($All | ForEach-Object { ($states[$_].ring_events -join ',') })
     if (@($rings | Select-Object -Unique).Count -ne 1) { throw "ring events differ: $($rings -join ' | ')" }

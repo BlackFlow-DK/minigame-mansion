@@ -145,3 +145,72 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\balance-batch.ps1 -Min
 - `game/ui/round/dev/round_ui_dev.gd` fakes results with 4/3/2/1 (visual dev scene only).
 - Cannon Alley (new, not part of this pass): 8 players, seats 0-1 won 25-29 % and seat 7
   0 % of 24 rounds; worth a second seed by its owner.
+
+## Fairness follow-ups (2026-10-01, branch `fairness`)
+
+### 1. Spawn layout by player count (Floor Is Lava, Bumper Sumo)
+
+Before, Stage put player i on marker i: with 3 players seats 0 and 1 started face to face
+(+Z / -Z) and seat 2 beside them (+X). Now `_setup` on the host picks a random turn
+(`randf() * TAU`) and sends it with the slot order (`_rpc_spawn_layout`, reliable,
+`call_local`); every peer places the N players evenly around a circle (equal angles),
+each facing the centre, for every N from 2 to 8 (`spawn_layout(count, turn)`). Sumo keeps
+its markers as the 8-player layout (already an even 45-degree ring of 4.5 m), turned the
+same way; fewer players use the same 4.5 m circle. Lava's markers sit on tile centres at
+4.9-5.5 m (not an even ring), so every count is computed on a 5.2 m circle (on solid tiles,
+off the edges, for any turn: tested). The markers still exist; they only place players at
+load. The net checks (`run_lava_net.ps1`, `run_sumo_net_check.ps1`) now also assert that
+every peer applied the same turn and order.
+
+3 players, 24 rounds per cell, `tools\balance-batch.ps1 -Minigame floor_is_lava,bumper_sumo
+-Players "3" -Rounds 24 -Seed S`. Win share by seat 0 / 1 / 2 (fair 33.3 %), mean place
+(fair 2.00):
+
+| Minigame, seed | Before: wins | Before: mean place | After: wins | After: mean place |
+|---|---|---|---|---|
+| Lava, seed 1 | 29 / 25 / 46 % | 2.04 / 2.25 / 1.71 | 42 / 8 / 50 % | 1.83 / 2.50 / 1.67 |
+| Lava, seed 2 | 29 / 42 / 29 % | 2.21 / 1.83 / 1.96 | 33 / 25 / 42 % | 2.04 / 2.13 / 1.83 |
+| Sumo, seed 1 | 21 / 29 / 50 % | 2.21 / 2.08 / 1.71 | 37.5 / 25 / 37.5 % | 1.96 / 2.08 / 1.96 |
+| Sumo, seed 2 | 42 / 42 / 17 % | 1.83 / 1.88 / 2.29 | 37.5 / 29 / 33 % | 1.96 / 2.04 / 2.00 |
+
+Sumo meets the target on both seeds (top seat 37.5 %, mean places within 0.12). Lava seed
+1 does not (seat 2 50 %, seat 1 2 of 24, mean places 1.67-2.50), so Lava got three more
+seeds: seed 3 29 / 37.5 / 33 % (1.92 / 2.08 / 2.00), seed 4 17 / 42 / 42 % (2.33 / 1.79 /
+1.88), seed 5 42 / 42 / 17 % (2.04 / 1.92 / 2.04). Pooled over seeds 1-5 (120 rounds):
+32.5 / 30.8 / 36.7 % wins, mean place 2.03 / 2.08 / 1.88. The seat that leads changes from
+seed to seed, and the 3-seat ring is now the same from every seat (rotation symmetric, random
+turn), so no layout cause is left; seed 1 is the noise band (24 rounds: ~10 points sd).
+Round lengths barely moved (Lava 28.1 -> 27.2 s mean on seed 1, Sumo 29.1 -> 31.7 s).
+
+### 2. Cannon Alley, 8 players: seat 7 (noise, layout unchanged)
+
+The spawns are already symmetric: all eight on z = 0 (equidistant from both cannon walls),
+mirrored left-right (seat 7 at x = 3.45 mirrors seat 6 at x = -3.45: both 0.3 m from a near
+cannon lane, 0.95 m from a far one). 24 rounds per seed, 8 players, win share of seat 7
+(fair 12.5 %) and its mean place (fair 4.50):
+
+| Seed | Seat 7 wins | Seat 7 mean place | Top seat | Mean place range |
+|---|---|---|---|---|
+| 1 | 0 % | 4.71 | seat 1, 29 % | 3.50-5.71 |
+| 2 | 4.2 % | 4.92 | seat 0, 25 % | 3.58-5.04 |
+| 3 | 12.5 % | 4.42 | seat 4, 25 % | 4.13-4.96 |
+| 4 | 20.8 % (top) | 3.79 (best) | seat 7, 21 % | 3.63-5.33 |
+
+Over 96 rounds seat 7 won 9.4 % with a mean place of 4.46: noise, not the spawn. Seat 0
+(25 / 25 / 15 / 6 %, mean place 4.18) is worth a glance in a later pass but changes with the
+seed too. Nothing changed in Cannon Alley.
+
+### 3. `test_balance.gd` split into 4-round blocks
+
+One test per minigame ran 12 rounds (8 for Coin Scramble, ~36 s) against the runner's 60 s
+per-test limit. Now each test plays one personality block of 4 rounds with its own seed
+(seeds 1, 2, 3; Coin Scramble 1, 2): 11 tests, the same 44 pooled rounds as before, so the
+pooled "no seat above 35 %" check is unchanged in strength (it fires once all blocks have
+run: use `-Filter test_balance`). The rounds differ from before (seeds 2 and 3 added, and
+Lava/Sumo spawn differently), so the pooled numbers are new: wins by seat 11 / 34 / 34 /
+20 % (passes, but seats 1 and 2 sit 1 point under the 35 % line; the rounds are
+deterministic, so it only moves when a minigame or the bots change). Block times in a full
+`godot-test` run (other agents' Godot processes running too): 5-11 s each, Coin Scramble
+the longest at ~11 s, against ~36 s for the old Coin Scramble test. Full suite green (512
+tests). Trade-off: none in rounds or the bias check; a block alone (one test filtered) only
+checks its own rounds' time limits.

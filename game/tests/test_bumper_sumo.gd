@@ -67,6 +67,77 @@ func test_scene_loads_with_8_spawns_on_the_platform() -> void:
 		assert_near(p.global_position.y, 0.0, 0.05, "P%d on top of the platform" % p.slot)
 
 
+## The spawn points `pts` (local to the minigame) form an even ring of `radius`: equal
+## radii, equal angles between neighbours, each facing the centre.
+func _assert_even_ring(pts: Array[Transform3D], radius: float, what: String) -> void:
+	var n := pts.size()
+	var angles: Array[float] = []
+	for t in pts:
+		var flat := Vector3(t.origin.x, 0.0, t.origin.z)
+		assert_near(flat.length(), radius, 0.01, "%s: on the %.1f m circle" % [what, radius])
+		var look := t.basis * Vector3.MODEL_FRONT
+		assert_true(look.dot(-flat.normalized()) > 0.999, "%s: faces the centre" % what)
+		angles.append(atan2(flat.x, flat.z))
+	angles.sort()
+	for i in n:
+		var gap := fposmod(angles[(i + 1) % n] - angles[i], TAU)
+		assert_near(gap, TAU / n, 0.01, "%s: equal angles (%d players)" % [what, n])
+
+
+## Where the players stand now, as spawn transforms local to `mg` (origin + facing).
+func _player_points(mg: Minigame, ps: Array[Player]) -> Array[Transform3D]:
+	var out: Array[Transform3D] = []
+	for p in ps:
+		var local := mg.to_local(p.global_position)
+		local.y = 0.0
+		out.append(Transform3D(Basis.looking_at(-p.facing, Vector3.UP), local))
+	return out
+
+
+func test_spawn_layout_is_an_even_ring_for_2_to_8() -> void:
+	spawn_arena(2, ID)
+	var m := _sumo()
+	for n in range(2, 9):
+		for turn: float in [0.0, 0.7, 2.9, 5.5]:
+			var pts := m.spawn_layout(n, turn)
+			assert_eq(pts.size(), n, "%d points for %d players" % [n, n])
+			_assert_even_ring(pts, BumperSumo.SPAWN_RADIUS, "sumo n=%d turn=%.1f" % [n, turn])
+	# 8 players: the markers themselves (turn 0), in marker order.
+	var markers := m.get_spawn_points()
+	var eight := m.spawn_layout(8, 0.0)
+	for i in 8:
+		assert_true(eight[i].origin.distance_to(m.to_local(markers[i].origin)) < 0.001, "8 players: point %d is marker %d" % [i, i])
+
+
+func _check_start_layout(n: int) -> void:
+	var ps := spawn_arena(n, ID)
+	var m := _sumo()
+	_assert_even_ring(_player_points(m, ps), BumperSumo.SPAWN_RADIUS, "sumo %d players" % n)
+	var slots := PackedInt32Array()
+	for i in range(n - 1, -1, -1):
+		slots.append(ps[i].slot)
+	m._rpc_spawn_layout(1.25, slots)
+	var pts := m.spawn_layout(n, 1.25)
+	for i in n:
+		var p := stage.get_player(slots[i])
+		assert_true(m.to_local(p.global_position).distance_to(pts[i].origin) < 0.001, "slot %d on point %d" % [slots[i], i])
+	await step(30)
+	for p in ps:
+		assert_true(p.alive and p.is_on_floor(), "%d players: P%d stands on the platform" % [n, p.slot])
+
+
+func test_players_start_on_the_host_layout_3() -> void:
+	await _check_start_layout(3)
+
+
+func test_players_start_on_the_host_layout_5() -> void:
+	await _check_start_layout(5)
+
+
+func test_players_start_on_the_host_layout_8() -> void:
+	await _check_start_layout(8)
+
+
 func test_small_rounds_start_platform() -> void:
 	spawn_arena(3, ID)
 	var m := _sumo()
