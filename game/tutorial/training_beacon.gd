@@ -4,7 +4,7 @@ extends Node3D
 ## station's goal and a soft pulsing ring on the ground under it. It glides to a new goal.
 
 const ARROW_SCENE := "res://assets/models/props/arrow_marker.glb"
-const ARROW_HEIGHT := 2.7
+const ARROW_HEIGHT := 2.4
 
 ## Where the beacon points (global, on the ground).
 var goal: Vector3 = Vector3.ZERO
@@ -21,7 +21,7 @@ func _ready() -> void:
 	var scene := load(ARROW_SCENE) as PackedScene
 	_arrow = scene.instantiate() as Node3D if scene else Node3D.new()
 	_arrow.name = "Arrow"
-	_arrow.scale = Vector3.ONE * 1.1
+	_arrow.scale = Vector3.ONE * 1.7
 	add_child(_arrow)
 	Look.apply_toon(_arrow)
 	_ring = MeshInstance3D.new()

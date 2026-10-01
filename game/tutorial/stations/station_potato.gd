@@ -8,10 +8,10 @@ enum Phase { BOMBER_HOLDS, PLAYER_HOLDS, CATCHER_HOLDS, BLOWN }
 
 const BombRig := preload("res://minigames/hot_potato/bomb_rig.gd")
 
-const BOMBER_POST := Vector3(-1.8, 0.0, -3.4)
-const CATCHER_POST := Vector3(2.0, 0.0, -8.6)
+const BOMBER_POST := Vector3(-1.8, 0.0, -4.4)
+const CATCHER_POST := Vector3(2.0, 0.0, -9.2)
 ## The Bomber comes for you once you are this close to its post (m).
-const NOTICE_RANGE := 3.9
+const NOTICE_RANGE := 2.8
 ## Blob centres closer than this (flat) touch: the bomb passes (as in Hot Potato).
 const TOUCH := 1.0
 const FUSE := 9.0
@@ -30,7 +30,7 @@ var _shown_second: int = -1
 func _init() -> void:
 	checklist_name = "Hot potato"
 	card_title = "Hot potato"
-	card_line = "Take the bomb from the Bomber, then pass it to the Catcher before it blows!"
+	card_line = "Grab the bomb, then pass it to the Catcher before it blows!"
 	card_tip = "Touch or shove someone to pass the bomb."
 	glyphs = [&"move", &"shove"]
 	length = 13.0
@@ -134,6 +134,16 @@ func tick(delta: float) -> void:
 			if _t >= REARM_TIME:
 				set_progress("")
 				_give(bomber, Phase.BOMBER_HOLDS)
+
+
+## Once done the dummies walk back to their spots, out of the way.
+func idle_tick(_delta: float) -> void:
+	if not done:
+		return
+	if dummy(0):
+		steer(dummy(0), to_global(BOMBER_POST), 0.6)
+	if dummy(1):
+		steer(dummy(1), to_global(CATCHER_POST), 0.6)
 
 
 func reset() -> void:

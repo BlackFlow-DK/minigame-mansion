@@ -72,6 +72,11 @@ var finish_time: float = -1.0
 var falls: int = 0
 ## Mansion Coins the finish gave (0 when this profile already had the reward).
 var reward_given: int = 0
+## The camera looks at the player from a fixed angle, aimed a little behind the blob so it sits
+## above the middle of the screen, clear of the card at the bottom.
+const CAMERA_LEAD := Vector3(0.0, 0.5, 1.3)
+const CAMERA_X := 1.2
+
 ## Total length of the course (m).
 var course_length: float = 0.0
 var camera: ArenaCamera = null
@@ -170,8 +175,11 @@ func _host_tick(delta: float) -> void:
 		if TrainingStation.live(d):
 			d.intent.clear()
 	_check_falls()
-	if current < stations.size():
-		stations[current].tick(delta)
+	for i in stations.size():
+		if i == current:
+			stations[i].tick(delta)
+		else:
+			stations[i].idle_tick(delta)
 
 
 ## Bots never roam here: a dummy's goal is where it stands.
@@ -214,8 +222,7 @@ func jump_to_station(index: int) -> void:
 	_begin(index)
 	if beacon:
 		beacon.point_at(stations[index].target(), true)
-	if camera:
-		camera.snap()
+	_aim_camera(true)
 
 
 # --- Flow ----------------------------------------------------------------------------------------
@@ -264,12 +271,24 @@ func _check_falls() -> void:
 
 
 func _process(_delta: float) -> void:
+	_aim_camera(false)
 	if beacon == null:
 		return
 	var showing := current < stations.size() and stations[current].show_beacon()
 	beacon.visible = showing
 	if showing:
 		beacon.point_at(stations[current].target())
+
+
+func _aim_camera(snap: bool) -> void:
+	if camera == null or not TrainingStation.live(human):
+		return
+	var at := human.global_position + CAMERA_LEAD
+	at.x = clampf(at.x, -CAMERA_X, CAMERA_X)
+	at.y = clampf(at.y, 0.5, 1.6)
+	camera.fixed_focus = at
+	if snap:
+		camera.snap()
 
 
 # --- Building ------------------------------------------------------------------------------------

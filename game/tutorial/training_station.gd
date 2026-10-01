@@ -76,6 +76,12 @@ func tick(_delta: float) -> void:
 	pass
 
 
+## Virtual: host, every physics frame while this station is NOT current (done or not yet
+## reached): dummies walk home here, so nobody is left standing in the path.
+func idle_tick(_delta: float) -> void:
+	pass
+
+
 ## Virtual: the player fell off the course while this station was current: put it back.
 func reset() -> void:
 	pass

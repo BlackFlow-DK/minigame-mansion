@@ -15,7 +15,7 @@ preset = 1
 
 [node name="ArenaCamera" parent="." instance=ExtResource("3_cam")]
 current = true
-mode = 1
+mode = 2
 pitch_degrees = 52.0
 follow_distance = 12.5
 smoothing = 4.0

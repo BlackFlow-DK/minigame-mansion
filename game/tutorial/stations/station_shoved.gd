@@ -46,6 +46,12 @@ func begin() -> void:
 		player.got_hit.connect(_on_got_hit)
 
 
+func idle_tick(_delta: float) -> void:
+	var d := dummy(0)
+	if done and d:
+		steer(d, to_global(POST), 0.6)
+
+
 func reset() -> void:
 	_approach_time = 0.0
 

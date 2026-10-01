@@ -9,14 +9,23 @@ extends CanvasLayer
 ##   lobby --Session leaves LOBBY--> none (hidden) --Session back in LOBBY--> lobby
 ##   any --Net.server_closed--> title with a message;  Leave -> Net.leave() -> title
 ##   Esc/Start in lobby or in game: pause menu (the game keeps running)
+##   title --How to play--> Training Room (MainApp runs it; `training_requested`); the first run
+##   (no profile yet) offers it once; the lobby's pause menu offers it when only bots would be
+##   left behind; in the Training Room the pause menu offers Skip tutorial
 ##
 ## The layout is designed at 1280x720 and scaled uniformly to the window, so it also works
 ## without a project stretch mode.
 
 signal screen_changed(screen: StringName)
+## The player wants the Training Room (How to play, the first-run prompt, the lobby pause menu).
+signal training_requested
+## Pause menu in the Training Room: Skip tutorial.
+signal training_skip_requested
 
 const WARDROBE_PATH := "res://ui/wardrobe/wardrobe.tscn"
 const JOIN_TIMEOUT_SEC := 12.0
+## Remembers that the first-run Training Room prompt was shown (never asked twice).
+const TRAINING_FLAG_PATH := "user://training_prompt.cfg"
 ## Appended to join failures that can be a firewall block.
 const FIREWALL_HINT := " Check that both PCs allow Minigame Mansion through Windows Firewall on Private AND Public networks, and try the host's IP address (shown in the host's lobby)."
 
@@ -39,6 +48,10 @@ var offline_game: bool = false
 ## False: the name / loadout are only handed to Net, never saved to the profile file (dev and
 ## test runs set it so `--name=` and friends leave `user://profile.json` alone).
 var persist_profile: bool = true
+## True while MainApp runs the Training Room (pause menu: Skip tutorial).
+var in_training: bool = false
+## Where the first-run prompt flag lives (tests point it elsewhere).
+var training_flag_path: String = TRAINING_FLAG_PATH
 
 var _loadout: Dictionary = {}
 var _lobby_note: String = ""
@@ -83,6 +96,8 @@ func _ready() -> void:
 	title.wardrobe_pressed.connect(open_wardrobe)
 	title.quit_pressed.connect(_quit)
 	title.name_committed.connect(_on_name_committed)
+	title.how_to_play_pressed.connect(func() -> void: training_requested.emit())
+	title.training_prompt_answered.connect(_on_training_prompt_answered)
 	join.join_requested.connect(_on_join_requested)
 	join.back_pressed.connect(_on_join_back)
 	join.cancel_pressed.connect(_on_join_cancel)
@@ -94,6 +109,10 @@ func _ready() -> void:
 	pause.resume_pressed.connect(close_pause)
 	pause.leave_pressed.connect(leave_game)
 	pause.quit_pressed.connect(_quit)
+	pause.training_pressed.connect(func() -> void: training_requested.emit())
+	pause.skip_tutorial_pressed.connect(func() -> void:
+		close_pause()
+		training_skip_requested.emit())
 
 	Net.roster_changed.connect(_on_roster_changed)
 	Net.games_found.connect(_on_games_found)
@@ -132,6 +151,7 @@ func show_screen(s: StringName) -> void:
 
 
 func open_pause() -> void:
+	pause.configure(in_training, can_open_training())
 	pause.visible = true
 	pause.focus_default()
 
@@ -139,6 +159,41 @@ func open_pause() -> void:
 func close_pause() -> void:
 	pause.visible = false
 	_release_focus()
+
+
+## The lobby's pause menu offers the Training Room only when nobody else would be left behind
+## (an offline game, or a hosted one with only bots in it): going there leaves the game.
+func can_open_training() -> bool:
+	if in_training or screen != LOBBY or Session.state != Session.State.LOBBY or not _in_game():
+		return false
+	for slot: int in Net.roster:
+		if slot != Net.local_slot() and not Net.roster[slot].is_bot:
+			return false
+	return true
+
+
+## Hands the title's name and look to Net (and saves them when allowed), as Host / Join do.
+func commit_profile() -> void:
+	_commit_profile()
+
+
+## First run (no profile file yet, never asked before): shows "New here? Try the Training
+## Room" once. Returns true if it was shown. Dev and test runs (`persist_profile` off) never ask.
+func offer_training_once() -> bool:
+	if not persist_profile or screen != TITLE or _in_game():
+		return false
+	if FileAccess.file_exists(Cosmetics.profile_path) or FileAccess.file_exists(training_flag_path):
+		return false
+	var cfg := ConfigFile.new()
+	cfg.set_value("training", "prompted", true)
+	cfg.save(training_flag_path)
+	title.show_training_prompt()
+	return true
+
+
+func _on_training_prompt_answered(accepted: bool) -> void:
+	if accepted:
+		training_requested.emit()
 
 
 ## Leaves the current game (Net.leave) and returns to the title screen.

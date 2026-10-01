@@ -4,6 +4,7 @@ extends Node
 ## together; each system keeps its own logic:
 ##
 ##   title --(host | join | play offline)--> lobby --START--> session rounds --> podium --> lobby
+##   title / lobby pause --Training Room--> tutorial (offline: you + dummy bots) --> title | lobby
 ##
 ## - Stage (`Main/Stage`, the same node path on every peer, as player sync requires).
 ## - MenuRoot: title, join, lobby overlay and pause screens (drives Net / Session itself).
@@ -32,13 +33,20 @@ extends Node
 ##   --round-minigame=ID every round plays minigame ID (Session.scene_override; screenshots)
 ##   --open-wardrobe     open the wardrobe once in the lobby
 ## Any of these dev args also keeps the run from saving the profile (user://profile.json).
+##
+## Training Room (res://tutorial/): `start_training()` (MenuRoot.training_requested) leaves any
+## game, starts an offline roster with TrainingRoom.DUMMY_COUNT bots and loads the room through
+## the Stage; this script runs its _setup/_start and ticks it like the lobby. Its finish panel
+## (`exit_requested`) or the pause menu's Skip tutorial end it: back to the title, or on into
+## an offline game. The first run (no profile yet) offers it once (MenuRoot.offer_training_once).
 
-enum AppState { TITLE, LOBBY, ROUND, PODIUM }
+enum AppState { TITLE, LOBBY, ROUND, PODIUM, TRAINING }
 
 signal app_state_changed(state: AppState)
 
 const LOBBY_SCENE: PackedScene = preload("res://lobby/lobby.tscn")
 const SANDBOX_SCENE := "res://dev/sandbox.tscn"
+const TRAINING_SCENE := "res://tutorial/training_room.tscn"
 ## Dev / test args; any of them makes this run leave the saved profile alone.
 const DEV_ARGS: Array[String] = ["name", "offline", "auto-host", "auto-join", "bots", "auto-start", "round-time",
 	"time-scale", "round-minigame", "open-wardrobe"]
@@ -49,6 +57,8 @@ var _args: Dictionary = {}
 var _bots_added: bool = false
 var _auto_started: bool = false
 var _wardrobe_opened: bool = false
+## True while the Training Room runs.
+var _training: bool = false
 
 @onready var stage: Stage = $Stage
 @onready var menu: MenuRoot = $MenuRoot
@@ -66,6 +76,8 @@ func _ready() -> void:
 	Session.round_intro.connect(_on_round_intro)
 	stage.players_spawned.connect(_on_players_spawned)
 	round_ui.back_to_lobby_pressed.connect(_on_back_to_lobby)
+	menu.training_requested.connect(start_training)
+	menu.training_skip_requested.connect(end_training.bind(false))
 	Sfx.attach_ui(menu.root)
 	var round_root := round_ui.get_node_or_null(^"Root") as Control
 	if round_root:
@@ -81,6 +93,8 @@ func _ready() -> void:
 		Session.time_scale = maxf(0.01, float(_args["time-scale"]))
 	_refresh()
 	_run_dev_args.call_deferred()
+	if not _args.has("screenshot"):
+		menu.offer_training_once.call_deferred()  # checks menu.persist_profile (off for dev/test runs)
 
 
 ## `--key=value` / `--flag` user args -> {key: value | ""}.
@@ -126,6 +140,8 @@ func _refresh() -> void:
 		round_ui.reset()
 		_bots_added = false
 		_auto_started = false
+	elif _training:
+		pass  # the Training Room owns the stage until it ends
 	elif Session.state == Session.State.LOBBY and Net.is_host() and not (stage.minigame is MansionLobby):
 		_load_lobby()
 	_update_app_state()
@@ -138,6 +154,14 @@ func _load_lobby() -> void:
 
 
 func _on_players_spawned(spawned: Array[Player]) -> void:
+	var room := stage.minigame as TrainingRoom
+	if room:
+		room._setup(spawned)
+		for p in spawned:
+			if is_instance_valid(p):
+				p.frozen = false
+		room._start()
+		return
 	var lobby := stage.minigame as MansionLobby
 	if lobby == null:
 		return  # a round: Session unfreezes after the countdown
@@ -148,6 +172,10 @@ func _on_players_spawned(spawned: Array[Player]) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	var room := stage.minigame as TrainingRoom
+	if room and _training:
+		room._host_tick(delta)
+		return
 	# The lobby is a Minigame that never finishes; nobody else ticks it.
 	var lobby := stage.minigame as MansionLobby
 	if lobby and Net.is_host() and Session.state == Session.State.LOBBY and not lobby.is_finished():
@@ -178,7 +206,9 @@ func _on_round_intro(_info: Dictionary, _index: int) -> void:
 
 func _update_app_state() -> void:
 	var s := AppState.TITLE
-	if Net.local_slot() >= 0:
+	if _training:
+		s = AppState.TRAINING
+	elif Net.local_slot() >= 0:
 		match Session.state:
 			Session.State.LOBBY:
 				s = AppState.LOBBY
@@ -189,6 +219,49 @@ func _update_app_state() -> void:
 	if s != app_state:
 		app_state = s
 		app_state_changed.emit(s)
+
+
+# --- Training Room ---------------------------------------------------------------------------
+
+## Leaves any game and runs the Training Room (offline: you + the dummy bots).
+func start_training() -> void:
+	if _training:
+		return
+	var scene := load(TRAINING_SCENE) as PackedScene
+	if scene == null:
+		push_warning("MainApp: no Training Room scene")
+		return
+	if Net.local_slot() >= 0:
+		menu.leave_game()
+	menu.commit_profile()
+	_training = true
+	menu.in_training = true
+	menu.show_screen(MenuRoot.NONE)
+	Net.start_offline()
+	for i in TrainingRoom.DUMMY_COUNT:
+		Net.add_bot()
+	stage.follow_roster = false
+	var room := stage.load_minigame_scene(scene) as TrainingRoom  # players_spawned runs _setup/_start
+	if room:
+		room.exit_requested.connect(end_training)
+	_update_app_state()
+
+
+## Ends the Training Room: back to the title, or (`play_offline`) straight into an offline lobby.
+func end_training(play_offline: bool = false) -> void:
+	if not _training:
+		return
+	_training = false
+	menu.in_training = false
+	stage.clear()
+	menu.leave_game()
+	if play_offline:
+		menu.play_offline()
+	_update_app_state()
+
+
+func is_training() -> bool:
+	return _training
 
 
 # --- Dev / test args -------------------------------------------------------------------------

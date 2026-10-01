@@ -39,7 +39,7 @@ var _restore_left: float = -1.0
 func _init() -> void:
 	checklist_name = "Lava tiles"
 	card_title = "Floor is lava"
-	card_line = "Tiles crack when you stand on them. Keep moving to the far side!"
+	card_line = "Tiles crack under you. Keep moving to the far side!"
 	card_tip = "A cracked tile glows, wobbles, then drops into the lava."
 	glyphs = [&"move", &"jump"]
 	fall_effect = &"splash_lava"

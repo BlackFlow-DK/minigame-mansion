@@ -115,7 +115,7 @@ func _physics_process(delta: float) -> void:
 		RingState.DROPPED:
 			_t += delta
 			var far := not live(player) or flat_dist(player.global_position, to_global(centre)) > RING_RADIUS + 0.3
-			if _t >= RISE_AFTER and (done or far):
+			if (done and _t >= RISE_AFTER * 0.5) or (_t >= RISE_AFTER and far):
 				_rise()
 
 
