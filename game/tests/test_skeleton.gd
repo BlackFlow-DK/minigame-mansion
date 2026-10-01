@@ -76,7 +76,7 @@ func test_tick_order() -> void:
 	stage.add_child(p)
 	p.global_position = Vector3(0, 0.05, 3)
 	await step(1)
-	var expected: Array[String] = ["controller:tick", "status:tick", "movement:tick", "jump:tick", "shove:tick"]
+	var expected: Array[String] = ["size:tick", "controller:tick", "status:tick", "movement:tick", "jump:tick", "shove:tick"]
 	for n in names:
 		expected.append("%s:post" % n)
 	assert_eq(events, expected, "tick order")

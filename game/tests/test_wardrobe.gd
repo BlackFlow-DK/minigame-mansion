@@ -38,7 +38,7 @@ func _open() -> Wardrobe:
 
 
 func _look(primary: String, secondary: String, hat := "", face := "", neck := "", back := "") -> Dictionary:
-	return {"primary": primary, "secondary": secondary, "hat": hat, "face": face, "neck": neck, "back": back}
+	return {"primary": primary, "secondary": secondary, "hat": hat, "face": face, "neck": neck, "back": back, "size": "normal"}
 
 
 ## The albedo shown on the Body surface that uses `material_name`.
@@ -282,7 +282,7 @@ func test_focus_links() -> void:
 	assert_eq(_neighbor(w.swatches[&"primary"][8], &"focus_neighbor_bottom"), sec_first, "body grid -> accent grid")
 	var last := w.swatches[&"secondary"][11] as Control
 	assert_eq(_neighbor(last, &"focus_neighbor_bottom"), w.done_button, "bottom row down -> Done")
-	assert_eq(_neighbor(tab, &"focus_neighbor_right"), w.tab_buttons[&"hat"], "tabs chain right")
+	assert_eq(_neighbor(tab, &"focus_neighbor_right"), w.tab_buttons[&"body"], "tabs chain right")
 	assert_eq(_neighbor(w.tab_buttons[&"colour"], &"focus_neighbor_left"), w.tab_buttons[&"back"], "tabs wrap")
 	assert_eq(_neighbor(w.done_button, &"focus_neighbor_right"), w.name_edit, "bottom bar wraps")
 	assert_eq(_neighbor(w.done_button, &"focus_neighbor_top"), blue, "bottom bar up -> chosen item")
@@ -316,7 +316,7 @@ func test_shoulder_buttons_switch_tabs() -> void:
 	rb.pressed = true
 	Input.parse_input_event(rb)
 	await step(2)
-	assert_eq(w.current_tab, &"hat", "RB -> next tab")
+	assert_eq(w.current_tab, &"body", "RB -> next tab")
 	var lb := InputEventJoypadButton.new()
 	lb.button_index = JOY_BUTTON_LEFT_SHOULDER
 	lb.pressed = true

@@ -91,6 +91,35 @@ const SECONDARY: Array[String] = [
 	"#7a4a2a", # 11 brown
 ]
 
+## Body sizes (loadout key `size`), in wardrobe order; free for everyone. `scale` sizes the whole
+## blob (model, worn items, collision capsule, name tag). The other numbers multiply component
+## tuning on top of whatever the minigame set (the `size` player component applies them):
+## `speed` movement.max_speed, `jump` jump.jump_height, `shove` shove.force, `reach`
+## shove.reach and shove.width, `knockback` status.knockback_multiplier (knockback taken).
+## Starting point: docs/superpowers/specs/2026-09-30-night-features-design.md section 3;
+## tuned with game/tests/test_size_balance.gd (multipliers only). The spec's shove/knockback
+## (0.85/1.25 vs 1.20/0.78) made big win 42% vs small 0% (a slide grows with the square of the
+## push), so the combat factors stay within a few percent and mobility carries the trade-off:
+## 96 mixed rounds, win rate small 15.6 / normal 18.8 / big 15.6 %.
+const SIZES: Array[Dictionary] = [
+	{"id": "small", "name": "Small", "blurb": "Quick and bouncy, but a bit easier to push around.",
+		"scale": 0.82, "speed": 1.15, "jump": 1.08, "shove": 0.98, "reach": 0.97, "knockback": 1.01},
+	{"id": "normal", "name": "Normal", "blurb": "The classic blob: good at everything.",
+		"scale": 1.0, "speed": 1.0, "jump": 1.0, "shove": 1.0, "reach": 1.0, "knockback": 1.0},
+	{"id": "big", "name": "Big", "blurb": "Shoves harder and reaches further, but slow off the mark.",
+		"scale": 1.22, "speed": 0.88, "jump": 0.94, "shove": 1.01, "reach": 1.04, "knockback": 0.98},
+]
+const DEFAULT_SIZE := "normal"
+
+
+## The SIZES entry for `id`; the normal entry for anything else.
+static func size_entry(id: Variant) -> Dictionary:
+	for entry: Dictionary in SIZES:
+		if entry["id"] == id:
+			return entry
+	return SIZES[1]
+
+
 ## Per roster slot 0..7: [primary index, secondary index, hat id].
 const DEFAULTS: Array[Array] = [
 	[0, 1, "party_cone"],
