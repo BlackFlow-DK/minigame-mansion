@@ -15,6 +15,11 @@ extends Minigame
 ## Host decides (ring schedule, knock-outs, the end); clients learn it through the
 ## `call_local` RPCs below. Visuals (flash, shake, fall, clouds, lanterns) run on every peer
 ## in `_process` from the ring states those RPCs set.
+## Spawns: in `_setup` the host picks a random turn and sends it with the round order
+## (`_rpc_spawn_layout`); every peer places the N players evenly around the spawn circle
+## (`spawn_layout`), each facing the centre. 8 players use the `Spawns` markers (already an
+## even 45-degree ring of 4.5 m) turned the same way; fewer use SPAWN_RADIUS = that ring's
+## radius. Balance: with the markers, 3 players' slot 2 started beside the 0-vs-1 face-off.
 ## Time-out: under Session the backstop ends the round and ranks survivors equally; without
 ## a Session driving this round (tests, sandbox) the minigame finishes itself at time_limit.
 
@@ -22,6 +27,9 @@ extends Minigame
 signal ring_warned(index: int)
 ## A ring dropped and its collider is gone (every peer). `index` 1..3.
 signal ring_dropped(index: int)
+## Every peer, once the host's spawn layout is applied: the turn (radians) and the slots in
+## layout order.
+signal spawn_layout_applied(turn: float, slots: PackedInt32Array)
 
 enum RingState { PRESENT, WARNING, DROPPED }
 
@@ -33,6 +41,8 @@ const DROP_INTERVAL := 12.0
 const WARN_TIME := 2.5
 ## Players below this height are out.
 const FALL_Y := -6.0
+## Radius (m) of the spawn circle for fewer than 8 players (the markers' ring).
+const SPAWN_RADIUS := 4.5
 ## Bots keep this far inside the edge of the safe platform (m).
 const SAFE_MARGIN := 1.2
 ## Bot goals are random points within this fraction of the safe radius (plus a floor).
@@ -114,6 +124,11 @@ func _setup(setup_players: Array[Player]) -> void:
 		ring_states[3] = RingState.DROPPED
 		_set_solid(3, false)
 		(_bodies[3].get_node(^"Model") as Node3D).visible = false
+	if multiplayer.is_server():
+		var slots := PackedInt32Array()
+		for p in setup_players:
+			slots.append(p.slot)
+		_rpc_spawn_layout.rpc(randf() * TAU, slots)
 	_update_camera_bounds()
 
 
@@ -223,7 +238,37 @@ func is_ring_solid(index: int) -> bool:
 	return not shape.disabled and _bodies[index].collision_layer != 0
 
 
+## Spawn points (local to the minigame) for `count` players, turned by `turn` radians about
+## the centre, each facing the centre: the 8 markers when there are as many players (they
+## are an even ring), else point i at angle `turn + TAU * i / count` from +Z on SPAWN_RADIUS.
+func spawn_layout(count: int, turn: float) -> Array[Transform3D]:
+	var out: Array[Transform3D] = []
+	var turned := Transform3D(Basis(Vector3.UP, turn), Vector3.ZERO)
+	var markers := get_spawn_points()
+	if count == markers.size():
+		var to_local := global_transform.affine_inverse()
+		for m in markers:
+			out.append(turned * (to_local * m))
+		return out
+	for i in count:
+		var a := TAU * i / count
+		out.append(turned * Transform3D(Basis(Vector3.UP, a + PI), Vector3(sin(a), 0.0, cos(a)) * SPAWN_RADIUS))
+	return out
+
+
 # --- RPCs (host -> every peer) ----------------------------------------------------------------
+
+## The host's spawn layout: `slots[i]` goes to point i of `spawn_layout(slots.size(), turn)`.
+## Sent from `_setup` (players are frozen until the countdown ends), so it lands before play.
+@rpc("authority", "call_local", "reliable")
+func _rpc_spawn_layout(turn: float, slots: PackedInt32Array) -> void:
+	var points := spawn_layout(slots.size(), turn)
+	for i in slots.size():
+		for p in players:
+			if is_instance_valid(p) and p.slot == slots[i]:
+				p.place_at(global_transform * points[i])
+	spawn_layout_applied.emit(turn, slots)
+
 
 @rpc("authority", "call_local", "reliable")
 func _rpc_ring_warn(index: int) -> void:

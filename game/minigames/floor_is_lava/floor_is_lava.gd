@@ -13,10 +13,19 @@ extends Minigame
 ##
 ## Tiles are numbered in a fixed axial order over MAX_RINGS rings (identical on every peer);
 ## `_setup` removes the rings the player count does not need (see rings_for).
+##
+## Spawns: the `Spawns` markers (tile centres, not an even ring) only place the players
+## at load. In `_setup` the host picks a random turn and sends it with the round order
+## (`_rpc_spawn_layout`); every peer then places the N players evenly around a circle of
+## SPAWN_RADIUS (`spawn_layout`), each facing the centre, so no seat starts beside another
+## pair's face-off (balance: 3 players' slot 2 won 46 % with the markers).
 
 ## Every peer, when a tile starts cracking / falls (its collider is gone by then).
 signal tile_cracked(index: int)
 signal tile_fell(index: int)
+## Every peer, once the host's spawn layout is applied: the turn (radians) and the slots in
+## layout order.
+signal spawn_layout_applied(turn: float, slots: PackedInt32Array)
 
 enum TileState { SOLID, CRACKING, FALLEN }
 
@@ -43,6 +52,8 @@ const SQRT3 := 1.7320508
 ## A grounded player whose centre is over a hole still cracks a solid neighbour holding
 ## them up: its hex, grown by the capsule radius (hex metric, see `_hex_metric`).
 const SUPPORT_REACH := SQRT3 * 0.5 * TILE_RADIUS + 0.4
+## Radius (m) of the spawn circle: about the third ring of tiles (the markers sit at 4.9-5.5).
+const SPAWN_RADIUS := 5.2
 ## Seconds a falling tile keeps sinking (it passes under the lava surface) before it is freed.
 const FALL_TIME := 1.4
 const AXIAL_DIRS: Array[Vector2i] = [
@@ -122,6 +133,11 @@ func _setup(round_players: Array[Player]) -> void:
 	_build_decor()
 	for p in round_players:
 		p.eliminated.connect(_on_player_eliminated.bind(p))
+	if multiplayer.is_server():
+		var slots := PackedInt32Array()
+		for p in round_players:
+			slots.append(p.slot)
+		_rpc_spawn_layout.rpc(randf() * TAU, slots)
 	_frame_camera(true)
 
 
@@ -191,6 +207,18 @@ func _host_tick(delta: float) -> void:
 
 # --- Host -> every peer ---------------------------------------------------------------------
 
+## The host's spawn layout: `slots[i]` goes to point i of `spawn_layout(slots.size(), turn)`.
+## Sent from `_setup` (players are frozen until the countdown ends), so it lands before play.
+@rpc("authority", "call_local", "reliable")
+func _rpc_spawn_layout(turn: float, slots: PackedInt32Array) -> void:
+	var points := spawn_layout(slots.size(), turn)
+	for i in slots.size():
+		for p in players:
+			if is_instance_valid(p) and p.slot == slots[i]:
+				p.place_at(global_transform * points[i])
+	spawn_layout_applied.emit(turn, slots)
+
+
 @rpc("authority", "call_local", "reliable")
 func _rpc_crack(ids: PackedInt32Array) -> void:
 	for i in ids:
@@ -239,6 +267,16 @@ static func rings_for(count: int) -> int:
 	if count < FULL_FIELD_PLAYERS:
 		return MAX_RINGS - 1
 	return MAX_RINGS
+
+
+## Spawn points (local to the minigame) for `count` players: evenly around a circle of
+## SPAWN_RADIUS, point i at angle `turn + TAU * i / count` from +Z, each facing the centre.
+static func spawn_layout(count: int, turn: float) -> Array[Transform3D]:
+	var out: Array[Transform3D] = []
+	for i in count:
+		var a := turn + TAU * i / count
+		out.append(Transform3D(Basis(Vector3.UP, a + PI), Vector3(sin(a), 0.0, cos(a)) * SPAWN_RADIUS))
+	return out
 
 
 ## Number of tile slots (every ring up to MAX_RINGS, including removed ones).

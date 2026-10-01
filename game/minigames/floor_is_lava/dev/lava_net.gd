@@ -22,6 +22,8 @@ var _events: Array[String] = []
 var _rounds: Array = []
 var _cracked: Array[int] = []
 var _fell: Array[int] = []
+## The spawn layout this peer applied ("turn|slots"), from FloorIsLava.spawn_layout_applied.
+var _layout: String = ""
 var _fell_at_finish: Array = []
 var _eliminated: Array[int] = []
 var _brain: BotBrain = null
@@ -67,6 +69,8 @@ func _on_players_spawned(spawned: Array) -> void:
 		_hooked = lava
 		lava.tile_cracked.connect(func(i: int) -> void: _cracked.append(i))
 		lava.tile_fell.connect(func(i: int) -> void: _fell.append(i))
+		lava.spawn_layout_applied.connect(func(turn: float, slots: PackedInt32Array) -> void:
+			_layout = "%.5f|%s" % [turn, str(slots)])
 	for v: Variant in spawned:
 		var p := v as Player
 		p.eliminated.connect(func(_r: StringName) -> void: _eliminated.append(p.slot))
@@ -159,7 +163,7 @@ func _write() -> void:
 		"load_id": stage.net_load_id, "players": stage.players.size(),
 		"session_state": Session.state, "rounds": _rounds, "events": _events,
 		"cracked": _cracked, "fell": _fell, "fell_at_finish": _fell_at_finish, "eliminated": _eliminated,
-		"cmds_done": _cmds_done,
+		"cmds_done": _cmds_done, "layout": _layout,
 	}
 	var f := FileAccess.open(_dir.path_join(_name + ".json"), FileAccess.WRITE)
 	if f:
