@@ -272,6 +272,8 @@ func _show(v: View) -> void:
 ## The 3D name tags (Stage.name_tags) would show through the results / podium dim: hidden
 ## while those panels are up, back (their own visibility rules) after.
 func _hide_name_tags(hide: bool) -> void:
+	if not is_inside_tree():
+		return  # reset() while the app is being torn down
 	var stage := _find_stage()
 	if stage == null:
 		return
