@@ -65,6 +65,8 @@ var last_session_award: int = 0
 
 var _arg_unlock_all: bool = false
 var _arg_coins: int = -1
+## The half rate of the running session, fixed at its first round (null: no session yet).
+var _session_half: Variant = null
 
 
 func _ready() -> void:
@@ -82,6 +84,8 @@ func _ready() -> void:
 	if _arg_coins >= 0:
 		coins = _arg_coins
 		coins_changed.emit(coins)
+	Session.round_intro.connect(_on_round_intro)
+	Session.state_changed.connect(_on_session_state_changed)
 	Session.round_finished.connect(_on_round_finished)
 	Session.session_finished.connect(_on_session_finished)
 
@@ -133,6 +137,7 @@ func reset() -> void:
 	unlock_all = _arg_unlock_all
 	last_round_award = 0
 	last_session_award = 0
+	_session_half = null
 	coins_changed.emit(coins)
 
 
@@ -180,8 +185,28 @@ static func human_count() -> int:
 
 
 ## True when sessions pay the half rate: offline, or fewer than MIN_FULL_RATE_HUMANS humans.
+## Decided once per session, at round 0 (humans counted then): a friend leaving before the
+## podium does not halve everyone's bonus, a late joiner does not double it. Outside a session
+## it is the live answer.
 func is_half_rate() -> bool:
+	if _session_half != null:
+		return bool(_session_half)
+	return _half_rate_now()
+
+
+func _half_rate_now() -> bool:
 	return is_offline() or human_count() < MIN_FULL_RATE_HUMANS
+
+
+## Round 0 fixes the session's rate (a peer that first sees a later round fixes it then).
+func _on_round_intro(_info: Dictionary, index: int) -> void:
+	if index == 0 or _session_half == null:
+		_session_half = _half_rate_now()
+
+
+func _on_session_state_changed(state: int) -> void:
+	if state == Session.State.LOBBY:
+		_session_half = null
 
 
 ## Placement (1-based) of `slot` in a round: its index in `ranking`, except that slots with the
