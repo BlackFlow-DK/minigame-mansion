@@ -6,6 +6,7 @@ extends RefCounted
 const NAMES: Array[StringName] = [
 	&"dust_puff", &"land_thud", &"shove_whoosh", &"hit_stars", &"stun_swirl", &"poof",
 	&"respawn_sparkle", &"coin_pickup", &"explosion", &"confetti", &"splash_lava",
+	&"shockwave", &"ko_tag",
 ]
 
 const LIT_SHADER := preload("res://fx/materials/fx_lit.gdshader")
@@ -40,6 +41,8 @@ static func build(effect: StringName) -> FxEffect:
 		&"explosion": _explosion(fx)
 		&"confetti": _confetti(fx)
 		&"splash_lava": _splash_lava(fx)
+		&"shockwave": _shockwave(fx)
+		&"ko_tag": _ko_tag(fx)
 		_:
 			fx.free()
 			return null
@@ -491,6 +494,65 @@ static func _splash_lava(fx: FxEffect) -> void:
 	fx.add_emitter(smoke, false)
 
 
+## A ground ring blasting outward (tinted) with a thin white leading ring and a skirt of
+## dust: eliminations, respawns, big landings. Scale the node for bigger blasts.
+static func _shockwave(fx: FxEffect) -> void:
+	fx.duration = 0.75
+	var ring := _emitter(1, 0.55, _mesh(&"ring"), _glow(1.1), Color(1, 0.95, 0.85))
+	ring.color_ramp = _gradient(&"fade")
+	ring.scale_amount_min = 3.4
+	ring.scale_amount_max = 3.4
+	ring.scale_amount_curve = _curve(&"blast")
+	ring.position.y = 0.06
+	fx.add_emitter(ring, true)
+	var lead := _emitter(1, 0.22, _mesh(&"ring"), _glow(1.2), Color(1, 1, 1, 0.7))
+	lead.color_ramp = _gradient(&"fade")
+	lead.scale_amount_min = 4.2
+	lead.scale_amount_max = 4.2
+	lead.scale_amount_curve = _curve(&"blast")
+	lead.position.y = 0.1
+	fx.add_emitter(lead, false)
+	var dust := _emitter(14, 0.6, _mesh(&"puff"), _lit(), DUST)
+	dust.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+	dust.emission_ring_axis = Vector3.UP
+	dust.emission_ring_radius = 0.5
+	dust.emission_ring_inner_radius = 0.4
+	dust.emission_ring_height = 0.05
+	dust.direction = Vector3(1, 0.15, 0)
+	dust.spread = 180.0
+	dust.flatness = 0.85
+	dust.initial_velocity_min = 4.0
+	dust.initial_velocity_max = 6.0
+	dust.damping_min = 7.0
+	dust.damping_max = 9.0
+	dust.scale_amount_min = 0.22
+	dust.scale_amount_max = 0.36
+	dust.scale_amount_curve = _curve(&"puff")
+	fx.add_emitter(dust, false)
+
+
+## "OUT!" popping up over the spot where a player was knocked out, with a burst of stars.
+static func _ko_tag(fx: FxEffect) -> void:
+	fx.duration = 1.15
+	fx.add_tag("OUT!", Look.RED, _font(), 110, 0.55)
+	var stars := _emitter(6, 0.7, _mesh(&"star"), _star(0.9), Look.GOLD)
+	stars.position.y = 1.35
+	stars.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	stars.emission_sphere_radius = 0.2
+	stars.direction = Vector3.UP
+	stars.spread = 80.0
+	stars.initial_velocity_min = 2.5
+	stars.initial_velocity_max = 4.0
+	stars.damping_min = 4.0
+	stars.damping_max = 6.0
+	stars.angular_velocity_min = -400.0
+	stars.angular_velocity_max = 400.0
+	stars.scale_amount_min = 0.14
+	stars.scale_amount_max = 0.2
+	stars.scale_amount_curve = _curve(&"pop")
+	fx.add_emitter(stars, false)
+
+
 # --- Shared parts ------------------------------------------------------------------------
 
 static func _emitter(amount: int, lifetime: float, mesh: Mesh, material: Material, color: Color) -> CPUParticles3D:
@@ -658,6 +720,16 @@ static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, outward: V
 	st.add_vertex(c)
 
 
+## The chunky rounded UI font (same family as the round UI), for text tags.
+static func _font() -> Font:
+	if not _cache.has("font"):
+		var f := SystemFont.new()
+		f.font_names = PackedStringArray(["Segoe UI Black", "Arial Rounded MT Bold", "Arial Black", "Segoe UI"])
+		f.font_weight = 800
+		_cache["font"] = f
+	return _cache["font"]
+
+
 static func _curve(kind: StringName) -> Curve:
 	var key := "curve_%s" % kind
 	if _cache.has(key):
@@ -688,6 +760,10 @@ static func _curve(kind: StringName) -> Curve:
 		&"grow":
 			c.add_point(Vector2(0.0, 0.15))
 			c.add_point(Vector2(0.4, 0.8))
+			c.add_point(Vector2(1.0, 1.0))
+		&"blast":
+			c.add_point(Vector2(0.0, 0.08))
+			c.add_point(Vector2(0.25, 0.75))
 			c.add_point(Vector2(1.0, 1.0))
 	c.bake()
 	_cache[key] = c

@@ -3,7 +3,10 @@ extends PlayerComponent
 ## Effects for one player, on every peer: listens to the Player events and plays `Fx`
 ## effects, puffs footstep dust while running on the floor, keeps a blob shadow under the
 ## player and a star swirl over a stunned head. Never touches gameplay state.
-## Owner: look and effects.
+## Juice: hits shake the screen a little (more when this peer's player is involved),
+## knockouts get a poof, a ring shockwave in the player's colour and an "OUT!" tag, with
+## their own flourish for lava, cannon and bomb; respawns land with a small ring.
+## Quality LOW skips the rings and extra bursts. Owner: look and effects.
 
 ## Landing below this impact speed makes no effect; above `thud_speed` it is a big thud.
 @export var land_min_speed: float = 3.0
@@ -15,6 +18,12 @@ extends PlayerComponent
 @export var blob_shadow: bool = true
 ## Height of the stun stars above the player's origin.
 @export var head_height: float = 1.12
+## Screen shake (ArenaCamera trauma) when this player is hit / knocked out; the `_local`
+## values apply when this peer's own player is the victim or the attacker.
+@export var hit_shake: float = 0.2
+@export var hit_shake_local: float = 0.38
+@export var ko_shake: float = 0.38
+@export var ko_shake_local: float = 0.6
 
 var _step_timer: float = 0.0
 var _last_pos: Vector3 = Vector3.ZERO
@@ -121,6 +130,9 @@ func _on_got_hit(impulse: Vector3, source_slot: int) -> void:
 	if dir.length_squared() > 0.0001:
 		at -= dir.normalized() * 0.35  # on the side the blow came from
 	Fx.play(&"hit_stars", at, slot_color(source_slot))
+	var mine := Net.local_slot()
+	var local := mine >= 0 and (mine == player.slot or mine == source_slot)
+	Feel.shake(hit_shake_local if local else hit_shake)
 
 
 func _on_stunned(duration: float) -> void:
@@ -135,14 +147,42 @@ func _on_stunned(duration: float) -> void:
 func _on_eliminated(reason: StringName) -> void:
 	_stop_swirl()
 	var pos := _feet()
-	if String(reason).contains("lava"):
-		Fx.play(&"splash_lava", pos, Color.WHITE)
-	Fx.play(&"poof", pos + Vector3.UP * 0.5, primary_color())
+	# A player who fell far is flourished where the arena can see it, not deep in the void.
+	var spot := Vector3(pos.x, maxf(pos.y, -0.4), pos.z)
+	var why := String(reason)
+	var high := Look.is_high()
+	var ring_color := primary_color()
+	var ring_size := 1.0
+	if why.contains("lava"):
+		var fx := Fx.play(&"splash_lava", pos, Color.WHITE)
+		if fx:
+			fx.scale = Vector3.ONE * 1.35
+		ring_color = Look.LAVA
+		ring_size = 1.2
+	elif why.contains("cannon") and high:
+		var fx := Fx.play(&"explosion", spot + Vector3.UP * 0.5, Color.WHITE)
+		if fx:
+			fx.scale = Vector3.ONE * 0.6
+	elif why.contains("bomb"):
+		ring_color = Color(1.0, 0.6, 0.25)
+		ring_size = 1.6  # the minigame plays the explosion itself
+	Fx.play(&"poof", spot + Vector3.UP * 0.5, primary_color())
+	if high:
+		var ring := Fx.play(&"shockwave", spot, ring_color)
+		if ring:
+			ring.scale = Vector3.ONE * ring_size
+	Fx.play(&"ko_tag", spot, Color.WHITE)
+	var mine := Net.local_slot()
+	Feel.shake(ko_shake_local if mine >= 0 and mine == player.slot else ko_shake)
 
 
 func _on_respawned(xform: Transform3D) -> void:
 	_has_last = false
 	Fx.play(&"respawn_sparkle", xform.origin, primary_color())
+	if Look.is_high():
+		var ring := Fx.play(&"shockwave", xform.origin, primary_color())
+		if ring:
+			ring.scale = Vector3.ONE * 0.55
 
 
 func _stop_swirl() -> void:

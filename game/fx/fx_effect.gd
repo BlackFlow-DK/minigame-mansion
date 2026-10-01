@@ -1,7 +1,8 @@
 class_name FxEffect
 extends Node3D
 ## One pooled, re-playable effect: a few one-shot CPUParticles3D bursts plus optional
-## orbiting meshes and a light flash. Built by FxLibrary, owned and recycled by the `Fx`
+## orbiting meshes, a light flash and a popping text tag ("OUT!").
+## Runs on FeelTime (visual slow-motion): its clock and its particles follow FeelTime.scale. Built by FxLibrary, owned and recycled by the `Fx`
 ## autoload. The node is top level in world space; `hold()` makes it follow a target.
 ## Owner: look and effects.
 
@@ -32,6 +33,10 @@ var _end: float = 1.0
 var _follow: Node3D = null
 var _following: bool = false
 var _follow_offset: Vector3 = Vector3.ZERO
+var _speed: float = 1.0
+var _tag: Label3D = null
+var _tag_color: Color = Color.WHITE
+var _tag_rise: float = 0.5
 
 
 func _init() -> void:
@@ -84,6 +89,30 @@ func add_flash(color: Color, energy: float, radius: float, seconds: float) -> vo
 	add_child(_light)
 
 
+## Adds a camera-facing text tag that pops in, rises `rise` metres and fades out at the end.
+## `tint`: the play() colour replaces its text colour. Drawn on top of the world.
+func add_tag(text: String, color: Color, font: Font, font_size: int = 96, rise: float = 0.5) -> Label3D:
+	_tag = Label3D.new()
+	_tag.name = "Tag"
+	_tag.text = text
+	_tag.font = font
+	_tag.font_size = font_size
+	_tag.outline_size = maxi(8, int(font_size * 0.25))
+	_tag.modulate = color
+	_tag.outline_modulate = Look.CHARCOAL
+	_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_tag.no_depth_test = true
+	_tag.fixed_size = false
+	_tag.pixel_size = 0.0078
+	_tag.render_priority = 10
+	_tag.outline_render_priority = 9
+	_tag.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tag_color = color
+	_tag_rise = rise
+	add_child(_tag)
+	return _tag
+
+
 ## Starts (or restarts) the effect where the node is. `color` tints the tintable parts;
 ## WHITE keeps the effect's own colours.
 func play(color: Color = Color.WHITE) -> void:
@@ -108,6 +137,10 @@ func play(color: Color = Color.WHITE) -> void:
 	if _light:
 		_light.visible = Look.is_high()
 		_light.light_energy = _light_energy
+	if _tag:
+		_tag.modulate = color if use_tint else _tag_color
+		_update_tag()
+	_apply_speed(true)
 
 
 ## Keeps the effect alive for `seconds` from now, following `target` (at `offset`) if given.
@@ -138,6 +171,8 @@ func stop() -> void:
 
 
 func _process(delta: float) -> void:
+	_apply_speed(false)
+	delta *= _speed
 	_time += delta
 	_update_follow()
 	if _orbit:
@@ -148,8 +183,37 @@ func _process(delta: float) -> void:
 		_orbit.position.y = sin(_time * 5.0) * 0.04
 	if _light and _light.visible:
 		_light.light_energy = _light_energy * clampf(1.0 - _time / _light_time, 0.0, 1.0)
+	if _tag:
+		_update_tag()
 	if _time >= _end:
 		stop()
+
+
+func _apply_speed(force: bool) -> void:
+	var s := FeelTime.scale
+	if not force and is_equal_approx(s, _speed):
+		return
+	_speed = s
+	for p in _emitters:
+		p.speed_scale = s
+
+
+## Tag: overshooting pop (0..0.22 s), slow rise, fade over the last 0.3 s.
+func _update_tag() -> void:
+	var t := _time
+	var s: float
+	if t < 0.1:
+		s = lerpf(0.2, 1.35, t / 0.1)
+	elif t < 0.22:
+		s = lerpf(1.35, 1.0, (t - 0.1) / 0.12)
+	else:
+		s = 1.0
+	_tag.scale = Vector3.ONE * s
+	var life := clampf(t / maxf(_end, 0.01), 0.0, 1.0)
+	_tag.position = Vector3(0.0, 1.35 + _tag_rise * (1.0 - pow(1.0 - life, 2.0)), 0.0)
+	var a := clampf((_end - t) / 0.3, 0.0, 1.0)
+	_tag.modulate.a = a
+	_tag.outline_modulate.a = a
 
 
 func _update_follow() -> void:

@@ -176,7 +176,12 @@ func play(ranking: Array, totals: Dictionary, p_coins_bonus: int = 0) -> void:
 		var piece := _build_column(place_i, slot, int(totals.get(slot, 0)))
 		var target_y := piece.position.y
 		piece.position.y = STAGE_SIZE.y + 40.0
-		_seq.tween_property(piece, ^"position:y", target_y, RISE).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(RISE_GAP)
+		piece.pivot_offset = Vector2(piece.size.x * 0.5, piece.size.y)
+		# One at a time: shoots up, lands with a thump (sound + squash), winner last.
+		_seq.tween_interval(RISE_GAP)
+		_seq.tween_property(piece, ^"position:y", target_y, RISE * 0.6).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_seq.tween_callback(_thump.bind(piece, place_i == 0))
+		_seq.tween_interval(RISE * 0.4)
 	for i in range(3, ranking.size()):
 		var slot := int(ranking[i])
 		_others.add_child(_build_other(i + 1, slot, int(totals.get(slot, 0))))
@@ -192,6 +197,18 @@ func play(ranking: Array, totals: Dictionary, p_coins_bonus: int = 0) -> void:
 		_seq.tween_callback(func() -> void: _coins_tick_sound = true)
 		_seq.tween_method(_set_coins_total, 0.0, 1.0, COINS_COUNT_SECONDS).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		_seq.tween_callback(_coins_done)
+
+
+## A podium block lands: the land_hard thump and a squash from its base (bigger for the winner).
+func _thump(piece: Control, winner: bool) -> void:
+	if not is_instance_valid(piece):
+		return
+	Sfx.play(&"land_hard", Vector3.INF, 0.0 if winner else -3.0, 0.85 if winner else 1.0)
+	var k := 1.6 if winner else 1.0
+	piece.scale = Vector2(1.0 + 0.09 * k, 1.0 - 0.12 * k)
+	var t := piece.create_tween()
+	t.tween_property(piece, ^"scale", Vector2(1.0 - 0.03 * k, 1.0 + 0.05 * k), 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_property(piece, ^"scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func is_coins_card_shown() -> bool:
