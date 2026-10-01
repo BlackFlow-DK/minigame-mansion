@@ -74,6 +74,11 @@ class RaceRow extends Control:
 
 
 var _dim: ColorRect
+## Bottom centre: "+N coins" the local player earned this round (hidden when none).
+var _coins_pill: PanelContainer
+var _coins_label: Label
+## Coins shown on the pill by the last play().
+var coins_shown: int = 0
 var _ranking_view: CenterContainer
 var _ranking_list: VBoxContainer
 var _race_view: CenterContainer
@@ -121,6 +126,7 @@ func _ready() -> void:
 	_race_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	race_box.add_child(_race_area)
 	_race_view.visible = false
+	_build_coins_pill()
 
 
 func _process(delta: float) -> void:
@@ -136,7 +142,8 @@ func _process(delta: float) -> void:
 
 ## Shows the round's `ranking` (slots, best first) with `points` (slot -> points this
 ## round), then races total scores from `totals - points` up to `totals` (slot -> total).
-func play(ranking: Array, points: Dictionary, totals: Dictionary) -> void:
+## `coins`: Mansion Coins this player earned this round, popped in under the ranking (0: none).
+func play(ranking: Array, points: Dictionary, totals: Dictionary, coins: int = 0) -> void:
 	stop()
 	_build_ranking(ranking, points)
 	_build_race(ranking, points, totals)
@@ -144,6 +151,9 @@ func play(ranking: Array, points: Dictionary, totals: Dictionary) -> void:
 	_ranking_view.modulate.a = 1.0
 	_race_view.visible = false
 	_race_view.modulate.a = 0.0
+	coins_shown = maxi(0, coins)
+	_coins_label.text = "+%d coin%s" % [coins_shown, "" if coins_shown == 1 else "s"]
+	_coins_pill.visible = false
 
 	var rows := _ranking_list.get_children()
 	_seq = create_tween()
@@ -153,6 +163,8 @@ func play(ranking: Array, points: Dictionary, totals: Dictionary) -> void:
 		row.modulate.a = 0.0
 		_seq.tween_callback(_pop_row.bind(row))
 		_seq.tween_interval(0.12 if i > 2 else 0.3)
+	if coins_shown > 0:
+		_seq.tween_callback(_pop_coins)
 	_seq.tween_interval(maxf(0.1, RANKING_SECONDS - _seq_duration_estimate(rows.size())))
 	_seq.tween_property(_ranking_view, ^"modulate:a", 0.0, SWAP_SECONDS * 0.5)
 	_seq.tween_callback(_ranking_view.hide)
@@ -196,6 +208,10 @@ func get_bar_screen_order() -> Array[int]:
 	return order
 
 
+func is_coins_shown() -> bool:
+	return _coins_pill.visible
+
+
 func is_race_done() -> bool:
 	return _racing and race_progress >= 1.0
 
@@ -214,6 +230,45 @@ func _pop_row(row: Control) -> void:
 	var t := create_tween()
 	t.tween_property(row, ^"modulate:a", 1.0, 0.12)
 	t.parallel().tween_property(row, ^"scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _pop_coins() -> void:
+	_coins_pill.visible = true
+	_coins_pill.pivot_offset = _coins_pill.size * 0.5
+	_coins_pill.scale = Vector2(0.3, 0.3)
+	_coins_pill.rotation_degrees = -8.0
+	var t := create_tween()
+	t.tween_property(_coins_pill, ^"scale", Vector2.ONE, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(_coins_pill, ^"rotation_degrees", 0.0, 0.5).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+	Sfx.play(&"coin")
+
+
+func _build_coins_pill() -> void:
+	var holder := CenterContainer.new()
+	holder.name = "Coins"
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.anchor_left = 0.0
+	holder.anchor_right = 1.0
+	holder.anchor_top = 1.0
+	holder.anchor_bottom = 1.0
+	holder.offset_top = -82.0
+	holder.offset_bottom = -18.0
+	add_child(holder)
+	var style := RoundStyle.box(Color(RoundStyle.CHARCOAL, 0.96), RoundStyle.GOLD, 4, 30)
+	style.content_margin_left = 14.0
+	style.content_margin_right = 24.0
+	style.content_margin_top = 4.0
+	style.content_margin_bottom = 4.0
+	_coins_pill = RoundStyle.panel(style)
+	holder.add_child(_coins_pill)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override(&"separation", 10)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coins_pill.add_child(row)
+	row.add_child(CoinIcon.make(38))
+	_coins_label = RoundStyle.label("+0 coins", 32, RoundStyle.GOLD, 8)
+	row.add_child(_coins_label)
+	_coins_pill.visible = false
 
 
 func _build_ranking(ranking: Array, points: Dictionary) -> void:

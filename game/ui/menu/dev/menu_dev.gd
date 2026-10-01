@@ -2,6 +2,7 @@ extends Node3D
 ## Dev scene for looking at the menu screens (and screenshots). Offline; fakes the network
 ## paths by emitting the autoload signals. User args:
 ##   --menu-screen=title|title_msg|join|join_error|join_connecting|lobby|lobby_full|lobby_client|lobby_offline|pause
+##   --coins=N   Mansion Coin balance shown (never saved)
 ## e.g. tools/godot-screenshot.ps1 -Scene res://ui/menu/dev/menu_dev.tscn -GameArgs "--menu-screen=lobby"
 
 const MENU_SCENE: PackedScene = preload("res://ui/menu/menu_root.tscn")
@@ -10,6 +11,7 @@ var menu: MenuRoot
 
 
 func _ready() -> void:
+	Progression.persist = false  # `--coins=N` sets the balance shown (Progression reads it)
 	_build_world()
 	menu = MENU_SCENE.instantiate() as MenuRoot
 	add_child(menu)

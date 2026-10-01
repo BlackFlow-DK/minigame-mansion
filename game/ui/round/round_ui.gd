@@ -8,9 +8,11 @@ extends CanvasLayer
 ##                        RoundIntroCard.LEAD_SECONDS later; an earlier one cuts it short)
 ##   round_started     -> HUD: GO!, round x/y, time left (Minigame.time_limit > 0), player strip
 ##   round_finished    -> results: round ranking with points, then a bar race of totals
-##                        (reads Session.scores as totals INCLUDING this round's points)
+##                        (reads Session.scores as totals INCLUDING this round's points);
+##                        "+N coins" this player earned (Progression.local_round_award)
 ##   session_finished  -> podium with confetti; "Back to lobby" shows for the host after
-##                        BACK_BUTTON_HOST_DELAY s, and for everyone once state is LOBBY
+##                        BACK_BUTTON_HOST_DELAY s, and for everyone once state is LOBBY;
+##                        a coins card: the session bonus and the balance counting up
 ##   state_changed(LOBBY) with no podium up -> everything hidden
 ##
 ## Minigame-facing API (the only calls a minigame makes; local to this peer, so call it on
@@ -221,7 +223,7 @@ func _on_round_finished(ranking: Array, points: Dictionary) -> void:
 	for s: Variant in points:
 		if not totals.has(int(s)):
 			totals[int(s)] = int(points[s])
-	results.play(ranking, points, totals)
+	results.play(ranking, points, totals, Progression.local_round_award(ranking, points))
 	_show(View.RESULTS)
 
 
@@ -230,7 +232,7 @@ func _on_session_finished(final_ranking: Array) -> void:
 	var totals: Dictionary = {}
 	for slot: int in Session.scores:
 		totals[slot] = Session.scores[slot]
-	podium.play(final_ranking, totals)
+	podium.play(final_ranking, totals, Progression.local_session_award(final_ranking))
 	_show(View.PODIUM)
 	if _podium_tween and _podium_tween.is_valid():
 		_podium_tween.kill()

@@ -92,9 +92,10 @@ func test_sanitize() -> void:
 	assert_eq(NetProtocol.sanitize_name("", "P"), "P", "empty")
 	assert_eq(NetProtocol.sanitize_name(5, "P"), "P", "not a string")
 	assert_eq(NetProtocol.sanitize_name("abcdefghijklmnopqrstuvwxyz", "P").length(), NetProtocol.MAX_NAME_LENGTH, "capped")
-	var fallback := {"primary": "#ff0000", "secondary": "#00ff00", "hat": "", "face": "", "neck": "", "back": ""}
-	var l := NetProtocol.sanitize_loadout({"primary": "red", "secondary": "#0000ff", "hat": "tophat", "evil": 1, "face": 3}, fallback)
-	assert_eq(l, {"primary": "#ff0000", "secondary": "#0000ff", "hat": "tophat", "face": "", "neck": "", "back": ""}, "loadout")
+	var fallback := {"primary": "#ff0000", "secondary": "#00ff00", "hat": "", "face": "", "neck": "", "back": "", "size": "normal"}
+	var l := NetProtocol.sanitize_loadout({"primary": "red", "secondary": "#0000ff", "hat": "tophat", "evil": 1, "face": 3, "size": "small"}, fallback)
+	assert_eq(l, {"primary": "#ff0000", "secondary": "#0000ff", "hat": "tophat", "face": "", "neck": "", "back": "", "size": "small"}, "loadout")
+	assert_eq(NetProtocol.sanitize_loadout({"size": 7}, fallback)["size"], "normal", "bad size -> fallback")
 	assert_eq(NetProtocol.sanitize_loadout("nope", fallback), fallback, "not a dictionary")
 
 

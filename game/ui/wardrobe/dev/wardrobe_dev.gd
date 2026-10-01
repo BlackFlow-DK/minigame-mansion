@@ -1,16 +1,21 @@
 extends Node3D
 ## Dev scene for the wardrobe (and screenshots). Uses its own profile file, so the real one is
 ## never touched. User args (all optional):
-##   --tab=colour|hat|face|neck|back      page to open
+##   --tab=colour|body|hat|face|neck|back page to open
 ##   --primary=#hex --secondary=#hex       saved colours to open with
-##   --hat=id --face=id --neck=id --back=id   saved items to open with
+##   --hat=id --face=id --neck=id --back=id --size=small|normal|big   saved items to open with
 ##   --name=Text                           saved name
 ##   --random=<seed>                       open with a random look (seeded)
 ##   --turn=<radians>                      turn the blob
 ##   --focus=tab|item|name|done            where the keyboard focus sits
 ##   --bg=title|world|menu                 plum backdrop (default), a 3D lobby stand-in, or the
 ##                                         real title menu opening it (as players reach it)
-##   --equip=slot:id                       equip after opening (the preview reacts)
+##   --equip=slot:id                       equip after opening (the preview reacts; size:big too)
+##   --coins=N                             Mansion Coins for this run (default 0; never saved)
+##   --owned=slot:id,slot:id               items already unlocked
+##   --try=slot:id                         click that tile after --try-delay=S seconds (default
+##                                         1.5): unlocks it with the fanfare, or wobbles
+## Progression never saves here; the frame rate is capped at 60 so -Frames maps to seconds.
 ## e.g. tools/godot-screenshot.ps1 -Scene res://ui/wardrobe/dev/wardrobe_dev.tscn -Frames 120 -GameArgs "--tab=hat --hat=crown"
 
 const WARDROBE_SCENE := "res://ui/wardrobe/wardrobe.tscn"
@@ -26,7 +31,16 @@ func _ready() -> void:
 		if arg.begins_with("--") and arg.contains("="):
 			var kv := arg.trim_prefix("--").split("=", true, 1)
 			_args[kv[0]] = kv[1]
+	Engine.max_fps = 60
 	Cosmetics.profile_path = DEV_PROFILE
+	Progression.persist = false
+	Progression.reset()
+	for key: String in String(_args.get("owned", "")).split(",", false):
+		var parts := key.split(":")
+		if parts.size() == 2:
+			Progression.unlocked.append(Cosmetics.unlock_key(StringName(parts[0]), parts[1]))
+	Progression.coins = maxi(0, int(_args.get("coins", "0")))
+	Progression.coins_changed.emit(Progression.coins)
 	var look := Cosmetics.default_loadout(0)
 	look["hat"] = ""
 	if _args.has("random"):
@@ -37,7 +51,7 @@ func _ready() -> void:
 		for slot: StringName in Cosmetics.SLOTS:
 			var items := Cosmetics.catalog(slot)
 			look[String(slot)] = items[rng.randi_range(0, items.size() - 1)]["id"]
-	for key in ["primary", "secondary", "hat", "face", "neck", "back"]:
+	for key in ["primary", "secondary", "hat", "face", "neck", "back", "size"]:
 		if _args.has(key):
 			look[key] = _args[key]
 	Cosmetics.save_profile(_args.get("name", "Sander"), look)
@@ -86,7 +100,9 @@ func _setup() -> void:
 		wardrobe.preview.turn(float(_args["turn"]))
 	if _args.has("equip"):
 		var parts := String(_args["equip"]).split(":")
-		if parts.size() == 2:
+		if parts.size() == 2 and parts[0] == "size":
+			wardrobe.select_size(parts[1])
+		elif parts.size() == 2:
 			wardrobe.select_item(StringName(parts[0]), parts[1])
 	await get_tree().process_frame
 	match _args.get("focus", "tab"):
@@ -100,6 +116,14 @@ func _setup() -> void:
 			wardrobe.name_edit.grab_focus()
 		"done":
 			wardrobe.done_button.grab_focus()
+	if _args.has("try"):
+		var parts := String(_args["try"]).split(":")
+		for i in int(float(_args.get("try-delay", "1.5")) * 60.0):  # frames, so -Frames can time it
+			await get_tree().process_frame
+		if parts.size() == 2 and is_instance_valid(wardrobe):
+			var tile := wardrobe.get_tile(StringName(parts[0]), parts[1])
+			if tile:
+				tile.pressed.emit()
 
 
 func _on_closed() -> void:

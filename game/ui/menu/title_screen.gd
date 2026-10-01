@@ -1,6 +1,7 @@
 class_name MenuTitleScreen
 extends Control
-## Title screen: logo, name entry, Host / Join / Play offline / Wardrobe / Quit. Pure view; MenuRoot acts on the signals.
+## Title screen: logo, name entry, Host / Join / Play offline / Wardrobe (with the Mansion Coin
+## balance) / Quit. Pure view; MenuRoot acts on the signals.
 
 signal host_pressed
 signal join_pressed
@@ -19,6 +20,9 @@ var join_button: Button
 var offline_button: Button
 var wardrobe_button: Button
 var quit_button: Button
+## Wardrobe button + the Mansion Coin balance.
+var wardrobe_row: HBoxContainer
+var coin_balance: CoinBalance
 var message_panel: PanelContainer
 var message_label: Label
 
@@ -82,8 +86,17 @@ func _init() -> void:
 	offline_button = MenuUI.button("Play offline")
 	wardrobe_button = MenuUI.button("Wardrobe")
 	quit_button = MenuUI.button("Quit", &"DangerButton")
-	for b: Button in [host_button, join_button, offline_button, wardrobe_button, quit_button]:
+	for b: Button in [host_button, join_button, offline_button]:
 		col.add_child(b)
+	# Wardrobe with the Mansion Coin balance beside it (where the coins get spent).
+	wardrobe_row = MenuUI.hbox(10)
+	col.add_child(wardrobe_row)
+	wardrobe_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wardrobe_row.add_child(wardrobe_button)
+	coin_balance = CoinBalance.make(20)
+	coin_balance.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	wardrobe_row.add_child(coin_balance)
+	col.add_child(quit_button)
 
 	host_button.pressed.connect(func() -> void: host_pressed.emit())
 	join_button.pressed.connect(func() -> void: join_pressed.emit())
@@ -123,6 +136,7 @@ func set_player_name(n: String) -> void:
 
 func set_wardrobe_available(available: bool) -> void:
 	wardrobe_button.visible = available
+	wardrobe_row.visible = available
 	refresh_focus()
 
 
