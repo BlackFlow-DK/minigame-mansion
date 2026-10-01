@@ -30,8 +30,8 @@ var _shown_second: int = -1
 func _init() -> void:
 	checklist_name = "Hot potato"
 	card_title = "Hot potato"
-	card_line = "Grab the bomb, then pass it to the Catcher before it blows!"
-	card_tip = "Touch or shove someone to pass the bomb."
+	card_line = "Grab the bomb and pass it to the Catcher. Quick!"
+	card_tip = "Touch or shove someone to pass the bomb before the fuse runs out."
 	glyphs = [&"move", &"shove"]
 	length = 13.0
 

@@ -5,6 +5,7 @@ extends Node
 ##   --finish      reach the finish at once (the "You're ready!" panel)
 ##   --pad         show the gamepad glyphs first
 ##   --hold        do not let the player move (screenshots: the camera stays put)
+##   --prompt      instead: the title screen with the first-run "New here?" prompt
 
 const STAGE_SCENE := "res://stage/stage.tscn"
 const ROOM_SCENE := "res://tutorial/training_room.tscn"
@@ -18,6 +19,12 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		var kv := arg.trim_prefix("--").split("=", true, 1)
 		_args[kv[0]] = kv[1] if kv.size() > 1 else ""
+	if _args.has("prompt"):
+		var menu := (load("res://ui/menu/menu_root.tscn") as PackedScene).instantiate() as MenuRoot
+		add_child(menu)
+		menu.persist_profile = false
+		menu.title.show_training_prompt()
+		return
 	Net.start_offline()
 	for i in TrainingRoom.DUMMY_COUNT:
 		Net.add_bot()
