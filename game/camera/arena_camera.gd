@@ -103,7 +103,17 @@ func _process(delta: float) -> void:
 
 ## Adds screen shake trauma (0..1 is meaningful; the total is capped at 1).
 func add_shake(amount: float) -> void:
+	if not shake_allowed():
+		return
 	trauma = clampf(trauma + amount, 0.0, 1.0)
+
+
+## False when the player turned Screen shake off (Settings autoload; on without one).
+func shake_allowed() -> bool:
+	if not is_inside_tree():
+		return true
+	var s := get_tree().root.get_node_or_null(^"Settings")
+	return s == null or s.get(&"screen_shake") != false
 
 
 ## Looks at `node` from `close_up_distance` (or `at_distance` when > 0) for `seconds`,

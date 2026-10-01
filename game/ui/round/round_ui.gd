@@ -266,6 +266,26 @@ func _show(v: View) -> void:
 			_podium_tween.kill()
 	if v != View.HUD:
 		hud.stop()
+	_hide_name_tags(v == View.RESULTS or v == View.PODIUM)
+
+
+## The 3D name tags (Stage.name_tags) would show through the results / podium dim: hidden
+## while those panels are up, back (their own visibility rules) after.
+func _hide_name_tags(hide: bool) -> void:
+	if not is_inside_tree():
+		return  # reset() while the app is being torn down
+	var stage := _find_stage()
+	if stage == null:
+		return
+	for p: Player in stage.players.values():
+		if not is_instance_valid(p):
+			continue
+		var tag := p.get_node_or_null(^"NameTag") as Node3D
+		if tag == null:
+			continue
+		tag.set_process(not hide)
+		if hide:
+			tag.visible = false
 
 
 func _find_stage() -> Stage:

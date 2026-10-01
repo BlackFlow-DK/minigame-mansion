@@ -214,8 +214,9 @@ const TEST_PROFILE := "user://test_size_profile.json"
 func _open_wardrobe() -> Wardrobe:
 	Net.leave()
 	Cosmetics.profile_path = TEST_PROFILE
-	if FileAccess.file_exists(TEST_PROFILE):
-		DirAccess.remove_absolute(TEST_PROFILE)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		if FileAccess.file_exists(TEST_PROFILE + suffix):
+			DirAccess.remove_absolute(TEST_PROFILE + suffix)
 	var w := (load("res://ui/wardrobe/wardrobe.tscn") as PackedScene).instantiate() as Wardrobe
 	add_child(w)
 	await step(2)
@@ -227,8 +228,9 @@ func _close_wardrobe(w: Wardrobe) -> void:
 	w.queue_free()
 	Net.leave()
 	Cosmetics.profile_path = Cosmetics.PROFILE_PATH
-	if FileAccess.file_exists(TEST_PROFILE):
-		DirAccess.remove_absolute(TEST_PROFILE)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		if FileAccess.file_exists(TEST_PROFILE + suffix):
+			DirAccess.remove_absolute(TEST_PROFILE + suffix)
 
 
 func test_wardrobe_body_tab_picks_size() -> void:

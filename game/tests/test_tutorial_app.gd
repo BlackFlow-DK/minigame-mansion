@@ -44,8 +44,9 @@ func after_each() -> void:
 
 
 static func _remove(path: String) -> void:
-	if FileAccess.file_exists(path):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the file and its crash-safe save sidecars
+		if FileAccess.file_exists(path + suffix):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path + suffix))
 
 
 func _room() -> TrainingRoom:

@@ -13,6 +13,11 @@ const Spinner := preload("res://cosmetics/spinner.gd")
 ## Item slots, in the order the wardrobe shows them.
 const SLOTS: Array[StringName] = CatalogData.SLOTS
 const PROFILE_PATH := "user://profile.json"
+## Crash-safe save sidecars (see `write_json_atomic`): previous good save, in-flight write,
+## and a corrupt file set aside instead of being overwritten.
+const BACKUP_SUFFIX := ".bak"
+const TMP_SUFFIX := ".tmp"
+const CORRUPT_SUFFIX := ".corrupt"
 ## 1: name + loadout. 2: also coins, unlocked, stats, claimed (Mansion Coins).
 const PROFILE_VERSION := 2
 const NAME_MAX := 16
@@ -275,29 +280,68 @@ func sanitize_progress(src: Variant) -> Dictionary:
 
 
 ## The parsed profile Dictionary, or null when the file is missing or unreadable (warns once).
+## A missing or corrupt profile falls back to `<file>.bak` (the previous save) before defaults.
 func _read_profile_data() -> Variant:
-	if not FileAccess.file_exists(profile_path):
-		return null
-	var text := FileAccess.get_file_as_string(profile_path)
-	var json := JSON.new()
-	if text == "" or json.parse(text) != OK or not (json.data is Dictionary):
+	var data: Variant = read_json_dict(profile_path)
+	if data != null:
+		return data
+	var exists := FileAccess.file_exists(profile_path)
+	var bak: Variant = read_json_dict(profile_path + BACKUP_SUFFIX)
+	if bak != null:
+		_warn_once("profile:" + profile_path, "Cosmetics: profile %s is %s, using the backup" % [profile_path, "unreadable" if exists else "missing"])
+		return bak
+	if exists:
 		_warn_once("profile:" + profile_path, "Cosmetics: profile %s is unreadable, using defaults" % profile_path)
-		return null
-	return json.data
+	return null
 
 
 func _write_profile(player_name: String, loadout: Dictionary, progress: Dictionary) -> Error:
 	var data := {"version": PROFILE_VERSION, "name": player_name, "loadout": loadout,
 		"coins": progress["coins"], "unlocked": progress["unlocked"], "stats": progress["stats"],
 		"claimed": progress["claimed"]}
-	var f := FileAccess.open(profile_path, FileAccess.WRITE)
-	if f == null:
-		var err := FileAccess.get_open_error()
+	var err := write_json_atomic(profile_path, JSON.stringify(data, "\t"))
+	if err != OK:
 		push_warning("Cosmetics: cannot write profile %s (%s)" % [profile_path, error_string(err)])
-		return err
-	f.store_string(JSON.stringify(data, "\t"))
+	return err
+
+
+## The JSON Dictionary in `file`, or null when it is missing, empty or not a JSON object.
+static func read_json_dict(file: String) -> Variant:
+	if not FileAccess.file_exists(file):
+		return null
+	var text := FileAccess.get_file_as_string(file)
+	var json := JSON.new()
+	if text == "" or json.parse(text) != OK or not (json.data is Dictionary):
+		return null
+	return json.data
+
+
+## Crash-safe write of `text` to `file`: writes `<file>.tmp`, then moves the current file to
+## `<file>.bak` (or, when it is corrupt, to `<file>.corrupt`, so a good backup is never replaced
+## by a broken one and nothing is overwritten unseen), then renames the tmp into place. A crash
+## at any point leaves the old file or its `.bak` readable. Returns OK or the file error.
+static func write_json_atomic(file: String, text: String) -> Error:
+	var tmp := file + TMP_SUFFIX
+	var f := FileAccess.open(tmp, FileAccess.WRITE)
+	if f == null:
+		return FileAccess.get_open_error()
+	var ok := f.store_string(text)
 	f.close()
-	return OK
+	if not ok or FileAccess.get_file_as_string(tmp) != text:
+		DirAccess.remove_absolute(tmp)
+		return ERR_FILE_CANT_WRITE
+	if FileAccess.file_exists(file):
+		var keep := file + (BACKUP_SUFFIX if read_json_dict(file) != null else CORRUPT_SUFFIX)
+		if FileAccess.file_exists(keep):
+			DirAccess.remove_absolute(keep)
+		var err := DirAccess.rename_absolute(file, keep)
+		if err != OK:
+			DirAccess.remove_absolute(tmp)
+			return err
+	var moved := DirAccess.rename_absolute(tmp, file)
+	if moved != OK:
+		DirAccess.remove_absolute(tmp)
+	return moved
 
 
 # --- Applying a loadout ----------------------------------------------------------------------

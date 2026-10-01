@@ -181,6 +181,15 @@ func is_transitioning() -> bool:
 	return _closing or _opening or curtain > 0.0
 
 
+## True when the player asked for reduced motion (Settings autoload; off without one): no intro
+## sweep, no knockout slow-mo or vignette push.
+func reduced_motion() -> bool:
+	if not is_inside_tree():
+		return false
+	var s := get_tree().root.get_node_or_null(^"Settings")
+	return s != null and bool(s.get(&"reduced_motion"))
+
+
 ## True while a knockout slow-motion runs.
 func is_slowmo() -> bool:
 	return _slowmo_left > 0.0
@@ -222,7 +231,7 @@ func _on_round_intro(_info: Dictionary, _index: int) -> void:
 	open_curtain(true)
 	letterbox = 1.0  # behind the curtain; lifts at GO
 	var cam := arena_camera()
-	if cam:
+	if cam and not reduced_motion():
 		cam.intro_sweep(INTRO_SWEEP_TIME)
 	intro_started.emit()
 
@@ -288,6 +297,15 @@ func _celebrate(winner: Player) -> void:
 func _start_knockout(winner: Player) -> void:
 	_ko_slot = winner.slot
 	_ko_target = weakref(winner)
+	if reduced_motion():
+		# Reduced motion: no slow-mo, no vignette push; the moment ends (confetti) at once.
+		var calm_cam := arena_camera()
+		if calm_cam:
+			calm_cam.focus_on(winner, KO_FOCUS_TIME, maxf(calm_cam.close_up_distance * 0.85, 4.5))
+			calm_cam.add_shake(KO_SHAKE)  # Screen shake has its own setting
+		knockout_started.emit(_ko_slot)
+		_end_knockout()
+		return
 	_slowmo_left = SLOWMO_TIME
 	FeelTime.set_scale(SLOWMO_SCALE)
 	var cam := arena_camera()

@@ -7,14 +7,17 @@ const CAMERA_SCENE: PackedScene = preload("res://camera/arena_camera.tscn")
 
 var _feel: Node
 var _cam: ArenaCamera = null
+var _saved_reduced_motion: bool = false
 
 
 func before_each() -> void:
 	_feel = get_node(^"/root/Feel")
+	_saved_reduced_motion = get_node(^"/root/Settings").get(&"reduced_motion")
 	_reset_session()
 
 
 func after_each() -> void:
+	get_node(^"/root/Settings").set(&"reduced_motion", _saved_reduced_motion)
 	_feel.call(&"reset_moment")
 	_feel.call(&"open_curtain", false)
 	_feel.set(&"curtain", 0.0)
@@ -156,6 +159,34 @@ func test_knockout_slow_motion_then_confetti_and_clocks_return() -> void:
 	_assert_clocks_normal("after the knockout")
 	await step(_seconds(2.0))
 	assert_eq(_feel.get(&"vignette"), 0.0, "vignette gone")
+
+
+func test_reduced_motion_skips_intro_sweep_and_knockout_slow_motion() -> void:
+	var settings := get_node(^"/root/Settings")
+	var was: bool = settings.get(&"reduced_motion")
+	settings.set(&"reduced_motion", true)
+	var ps := _arena_with_camera(3)
+	await step(3)
+	var intro := watch(_feel, &"intro_started")
+	Session.round_intro.emit({"id": &"test", "title": "T", "rule_text": ""}, 0)
+	assert_eq(intro.size(), 1, "intro hook still fires")
+	assert_false(_cam.is_sweeping(), "reduced motion: no intro sweep")
+	Session.round_started.emit()
+	ps[1].eliminate(&"fell")
+	ps[2].eliminate(&"fell")
+	var started := watch(_feel, &"knockout_started")
+	var finished := watch(_feel, &"knockout_finished")
+	var played := watch(Fx, &"played")
+	Session.round_finished.emit([0, 2, 1] as Array[int], {0: 4, 2: 3, 1: 2})
+	assert_eq(started.size(), 1, "knockout moment still starts")
+	assert_false(_feel.call(&"is_slowmo"), "reduced motion: no slow-motion")
+	_assert_clocks_normal("reduced-motion knockout")
+	assert_eq(finished.size(), 1, "moment ends at once")
+	var names: Array = played.map(func(a: Array) -> StringName: return a[0])
+	assert_true(names.has(&"confetti"), "confetti still plays (%s)" % [names])
+	await step(_seconds(0.3))
+	assert_eq(_feel.get(&"vignette"), 0.0, "reduced motion: no vignette push")
+	settings.set(&"reduced_motion", was)
 
 
 func test_round_end_without_knockout_only_celebrates() -> void:

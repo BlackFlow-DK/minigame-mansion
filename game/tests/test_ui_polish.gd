@@ -319,5 +319,6 @@ func test_reset_tutorial_prompt_offers_it_again() -> void:
 	assert_true(menu.title.is_training_prompt_visible(), "the prompt greets the player again")
 	menu.title.answer_training_prompt(false)
 	assert_false(menu.offer_training_once(), "and only once")
-	DirAccess.remove_absolute(Cosmetics.profile_path)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		DirAccess.remove_absolute(Cosmetics.profile_path + suffix)
 	Cosmetics.profile_path = saved_profile

@@ -90,6 +90,10 @@ const BOT_AGGRESSION_WARNING := 0.25
 ## Tuning applied to every player on every peer in _setup.
 const SHOVE_COOLDOWN := 0.5
 
+## Round music for the music director: none. The waltz above is the round's music, and its
+## stopping is the cue; a director track underneath would hide it.
+var music_track := &"none"
+
 ## Test/dev only: multiplies how fast the host's music, warning and pause clocks run.
 var time_scale: float = 1.0
 ## Host randomness (music lengths, layouts, loser tie order). Tests may seed it.

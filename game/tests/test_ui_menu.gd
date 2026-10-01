@@ -297,6 +297,64 @@ func test_join_failed_shows_error() -> void:
 	assert_false(menu.join.ip_join_button.disabled, "join enabled again")
 
 
+func test_settings_focus_chain_has_no_dead_ends() -> void:
+	menu.open_settings()
+	await step(2)
+	var screen := menu.settings
+	assert_true(screen.visible, "settings open")
+	var chain := screen.refresh_focus()
+	var vp := get_viewport()
+	var start := vp.gui_get_focus_owner()
+	assert_true(start != null and chain.has(start), "a settings control has focus on open")
+	# 13 rows (Back, 4 volumes, name, tutorial, fullscreen, sizes, quality, fps, shake, motion).
+	for action: StringName in [&"ui_down", &"ui_up"]:
+		var at := start
+		var rows_seen: Array[Control] = [at]
+		for i in 13:
+			await _action(action)
+			var now := vp.gui_get_focus_owner()
+			if not assert_true(now != null and now != at, "%s from %s moves focus (now %s)" % [action, at.name if at else "null", now.name if now else "null"]):
+				break
+			assert_true(chain.has(now), "%s stays inside the settings (%s)" % [action, now.name])
+			at = now
+			rows_seen.append(now)
+		assert_true(rows_seen.has(screen.back_button), "%s reaches Back" % action)
+		assert_eq(at, start, "%s walks the whole column and wraps to the start" % action)
+	screen.back_button.grab_focus()
+	await _action(&"ui_accept")
+	assert_false(screen.visible, "Back closes the settings")
+
+
+func test_title_backdrop_only_outside_a_game() -> void:
+	menu.persist_profile = false  # opening the wardrobe from the title commits the profile
+	assert_true(menu.backdrop.visible, "title: live backdrop")
+	menu.open_wardrobe()
+	await step(2)
+	assert_eq(menu.screen, MenuRoot.WARDROBE, "wardrobe from the title")
+	assert_true(menu.backdrop.visible, "wardrobe from the title keeps the backdrop")
+	menu.close_wardrobe()
+	await step(2)
+	assert_eq(menu.screen, MenuRoot.TITLE, "back on the title")
+	Net.start_offline()
+	menu.show_screen(MenuRoot.LOBBY)
+	assert_false(menu.backdrop.visible, "lobby: no title backdrop")
+	menu.open_wardrobe()
+	await step(2)
+	assert_false(menu.backdrop.visible, "lobby wardrobe: no title backdrop")
+	menu.close_wardrobe()
+	await step(2)
+	Net.leave()
+
+
+func test_version_mismatch_shows_clear_message() -> void:
+	menu.title.join_button.pressed.emit()
+	await step(1)
+	menu.set_connecting("192.168.1.10")
+	Net.join_failed.emit(NetProtocol.REASON_VERSION)
+	assert_true(menu.join.error_panel.visible, "error shown")
+	assert_true(menu.join.error_label.text.contains("different game version"), "clear version text: %s" % menu.join.error_label.text)
+
+
 func test_empty_ip_shows_error() -> void:
 	menu.title.join_button.pressed.emit()
 	await step(1)

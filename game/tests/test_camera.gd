@@ -268,3 +268,19 @@ func test_shake_decays_to_zero() -> void:
 	assert_eq(cam.h_offset, 0.0, "h_offset back to zero")
 	assert_eq(cam.v_offset, 0.0, "v_offset back to zero")
 	_free_camera(cam)
+
+
+func test_shake_off_in_settings_is_a_no_op() -> void:
+	var settings := get_node(^"/root/Settings")
+	var was: bool = settings.get(&"screen_shake")
+	var cam := _make_camera()
+	settings.set(&"screen_shake", false)
+	cam.add_shake(0.8)
+	assert_eq(cam.trauma, 0.0, "Screen shake off: no trauma")
+	cam.update_camera(DT)
+	assert_eq(cam.h_offset, 0.0, "no offset")
+	settings.set(&"screen_shake", true)
+	cam.add_shake(0.5)
+	assert_near(cam.trauma, 0.5, 0.0001, "Screen shake on: shakes")
+	settings.set(&"screen_shake", was)
+	_free_camera(cam)

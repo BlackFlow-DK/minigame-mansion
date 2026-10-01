@@ -39,8 +39,9 @@ func after_each() -> void:
 	Session.order_seed = -1
 	Session.scene_override = null
 	Session.podium_time = _saved_podium_time
-	if FileAccess.file_exists(Cosmetics.profile_path):
-		DirAccess.remove_absolute(Cosmetics.profile_path)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		if FileAccess.file_exists(Cosmetics.profile_path + suffix):
+			DirAccess.remove_absolute(Cosmetics.profile_path + suffix)
 	Cosmetics.profile_path = _saved_profile_path
 	if is_instance_valid(app):
 		app.stage.clear()

@@ -13,6 +13,12 @@ signal done(effect: FxEffect)
 var effect_name: StringName = &""
 ## Seconds until the effect is over (covers the longest particle lifetime).
 var duration: float = 1.0
+
+## Text tags (add_tag): metres per font pixel (the name tags' size), the height they pop in at,
+## and their render priority (below the name tags' 10).
+const TAG_PIXEL_SIZE := 0.0065
+const TAG_BASE_HEIGHT := 0.95
+const TAG_RENDER_PRIORITY := 8
 ## Increments on every play(); lets holders tell their play apart from a later reuse.
 var serial: int = 0
 var playing: bool = false
@@ -37,6 +43,8 @@ var _speed: float = 1.0
 var _tag: Label3D = null
 var _tag_color: Color = Color.WHITE
 var _tag_rise: float = 0.5
+## The tag's own clock: real time, so it reads for `duration` seconds even in slow-motion.
+var _tag_time: float = 0.0
 
 
 func _init() -> void:
@@ -89,8 +97,10 @@ func add_flash(color: Color, energy: float, radius: float, seconds: float) -> vo
 	add_child(_light)
 
 
-## Adds a camera-facing text tag that pops in, rises `rise` metres and fades out at the end.
-## `tint`: the play() colour replaces its text colour. Drawn on top of the world.
+## Adds a camera-facing text tag that pops in at TAG_BASE_HEIGHT, rises `rise` metres and fades
+## out after `duration` seconds of real time (FeelTime slow-motion does not stretch it).
+## `tint`: the play() colour replaces its text colour. Drawn on top of the world but under the
+## name tags (render priority 10/9), so a name is never hidden by it.
 func add_tag(text: String, color: Color, font: Font, font_size: int = 96, rise: float = 0.5) -> Label3D:
 	_tag = Label3D.new()
 	_tag.name = "Tag"
@@ -103,9 +113,9 @@ func add_tag(text: String, color: Color, font: Font, font_size: int = 96, rise: 
 	_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_tag.no_depth_test = true
 	_tag.fixed_size = false
-	_tag.pixel_size = 0.0078
-	_tag.render_priority = 10
-	_tag.outline_render_priority = 9
+	_tag.pixel_size = TAG_PIXEL_SIZE
+	_tag.render_priority = TAG_RENDER_PRIORITY
+	_tag.outline_render_priority = TAG_RENDER_PRIORITY - 1
 	_tag.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_tag_color = color
 	_tag_rise = rise
@@ -138,6 +148,7 @@ func play(color: Color = Color.WHITE) -> void:
 		_light.visible = Look.is_high()
 		_light.light_energy = _light_energy
 	if _tag:
+		_tag_time = 0.0
 		_tag.modulate = color if use_tint else _tag_color
 		_update_tag()
 	_apply_speed(true)
@@ -172,6 +183,7 @@ func stop() -> void:
 
 func _process(delta: float) -> void:
 	_apply_speed(false)
+	_tag_time += delta
 	delta *= _speed
 	_time += delta
 	_update_follow()
@@ -200,7 +212,8 @@ func _apply_speed(force: bool) -> void:
 
 ## Tag: overshooting pop (0..0.22 s), slow rise, fade over the last 0.3 s.
 func _update_tag() -> void:
-	var t := _time
+	var t := _tag_time
+	var end := duration
 	var s: float
 	if t < 0.1:
 		s = lerpf(0.2, 1.35, t / 0.1)
@@ -209,9 +222,9 @@ func _update_tag() -> void:
 	else:
 		s = 1.0
 	_tag.scale = Vector3.ONE * s
-	var life := clampf(t / maxf(_end, 0.01), 0.0, 1.0)
-	_tag.position = Vector3(0.0, 1.35 + _tag_rise * (1.0 - pow(1.0 - life, 2.0)), 0.0)
-	var a := clampf((_end - t) / 0.3, 0.0, 1.0)
+	var life := clampf(t / maxf(end, 0.01), 0.0, 1.0)
+	_tag.position = Vector3(0.0, TAG_BASE_HEIGHT + _tag_rise * (1.0 - pow(1.0 - life, 2.0)), 0.0)
+	var a := clampf((end - t) / 0.3, 0.0, 1.0)
 	_tag.modulate.a = a
 	_tag.outline_modulate.a = a
 

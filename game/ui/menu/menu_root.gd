@@ -34,6 +34,8 @@ const TRAINING_FLAG_PATH := "user://training_prompt.cfg"
 ## Appended to join failures that can be a firewall block.
 const FIREWALL_HINT := " Check that both PCs allow Minigame Mansion through Windows Firewall on Private AND Public networks, and try the host's IP address (shown in the host's lobby)."
 
+const VERSION_MISMATCH_TEXT := "Could not join: the host is running a different game version. Everyone needs the same version of Minigame Mansion."
+
 const TITLE := &"title"
 const JOIN := &"join"
 const LOBBY := &"lobby"
@@ -156,7 +158,9 @@ func show_screen(s: StringName) -> void:
 	screen = s
 	if settings.visible:
 		settings.visible = false  # a screen change (left the game, a round began) closes it
-	backdrop.visible = s == TITLE or s == JOIN or s == WARDROBE
+	# The live 3D hall only outside a game: in a game (lobby wardrobe) the stage already renders
+	# one, and a second world would cost a full extra 3D render for nothing.
+	backdrop.visible = s == TITLE or s == JOIN or (s == WARDROBE and _wardrobe_return == TITLE and not _in_game())
 	title.visible = s == TITLE
 	join.visible = s == JOIN
 	lobby.visible = s == LOBBY
@@ -321,6 +325,7 @@ func open_wardrobe() -> void:
 		title.show_message("The wardrobe could not be opened.")
 		return
 	_wardrobe = ps.instantiate()
+	_wardrobe.set(&"persist_profile", persist_profile)
 	_wardrobe.add_to_group(&"blocks_player_input")
 	_wardrobe.tree_exited.connect(_on_wardrobe_closed, CONNECT_ONE_SHOT)
 	for sig: StringName in [&"closed", &"close_requested", &"done", &"back_pressed"]:
@@ -427,6 +432,18 @@ func _load_profile() -> void:
 	title.set_player_name(n)
 	var l: Variant = p.get("loadout", {})
 	_loadout = l as Dictionary if l is Dictionary and not (l as Dictionary).is_empty() else Cosmetics.default_loadout(0)
+	_loadout = strip_locked(_loadout)
+
+
+## `loadout` with every item this player has not unlocked taken off (""): a profile saved by a
+## `--unlock-all` run, or edited by hand, cannot wear what was never bought. Colours and size stay.
+static func strip_locked(loadout: Dictionary) -> Dictionary:
+	var out := loadout.duplicate()
+	for slot: StringName in Cosmetics.SLOTS:
+		var id: String = str(out.get(String(slot), ""))
+		if id != "" and not Progression.is_unlocked(slot, id):
+			out[String(slot)] = ""
+	return out
 
 
 func _commit_profile() -> void:
@@ -439,10 +456,16 @@ func _commit_profile() -> void:
 
 
 func _on_wardrobe_closed() -> void:
+	var closed_wardrobe := _wardrobe
 	_wardrobe = null
 	if not is_inside_tree() or not Net.is_inside_tree():
 		return  # the app is quitting with the wardrobe open
-	_load_profile()
+	if persist_profile or not is_instance_valid(closed_wardrobe) or not (closed_wardrobe.get(&"loadout") is Dictionary):
+		_load_profile()
+	else:
+		# Nothing was saved (dev/test run): keep the edits in memory for this run.
+		title.set_player_name(str(closed_wardrobe.get(&"player_name")))
+		_loadout = strip_locked(Cosmetics.sanitize(closed_wardrobe.get(&"loadout")))
 	if screen == WARDROBE:
 		if _wardrobe_return == LOBBY and _in_game():
 			_enter_lobby()
@@ -473,7 +496,9 @@ func _on_join_failed(reason: String) -> void:
 		return
 	_join_timer.stop()
 	var text := "Could not join: %s" % (reason if reason.strip_edges() != "" else "the host did not accept the connection.")
-	if reason == "timeout" or reason == "could not connect":
+	if reason == NetProtocol.REASON_VERSION:
+		text = VERSION_MISMATCH_TEXT
+	elif reason == "timeout" or reason == "could not connect":
 		text += "." + FIREWALL_HINT
 	join.show_error(text)
 

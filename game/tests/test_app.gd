@@ -25,7 +25,8 @@ func before_each() -> void:
 	# The wardrobe saves on Done: keep the player's real profile out of it.
 	_saved_profile_path = Cosmetics.profile_path
 	Cosmetics.profile_path = "user://test_app_profile.json"
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path))
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path + suffix))
 	app = (load(MAIN_SCENE_PATH) as PackedScene).instantiate() as MainApp
 	add_child(app)
 	app.menu.persist_profile = false  # never write the real user://profile.json
@@ -43,7 +44,8 @@ func after_each() -> void:
 	Session.order_seed = -1
 	Session.scene_override = null
 	Session.podium_time = _saved_podium_time
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path))
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path + suffix))
 	Cosmetics.profile_path = _saved_profile_path
 	if is_instance_valid(app):
 		app.stage.clear()
@@ -257,6 +259,7 @@ func test_lobby_wardrobe_changes_the_look_live() -> void:
 	app.menu.lobby.wardrobe_button.pressed.emit()
 	await step(2)
 	assert_eq(app.menu.screen, MenuRoot.WARDROBE, "wardrobe open")
+	assert_false(app.menu.backdrop.visible, "no second 3D hall (title backdrop) behind the lobby wardrobe")
 	assert_true(ControllerComponent.ui_has_input(app.get_viewport()), "blob input blocked while the wardrobe is open")
 	var w := app.menu.find_child("Wardrobe", true, false) as Wardrobe
 	assert_true(w != null, "wardrobe instanced under the menu")

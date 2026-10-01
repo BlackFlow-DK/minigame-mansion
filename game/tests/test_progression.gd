@@ -30,8 +30,9 @@ func after_each() -> void:
 
 
 func _remove_profile() -> void:
-	if FileAccess.file_exists(TEST_PROFILE):
-		DirAccess.remove_absolute(TEST_PROFILE)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		if FileAccess.file_exists(TEST_PROFILE + suffix):
+			DirAccess.remove_absolute(TEST_PROFILE + suffix)
 
 
 ## Hosts a LAN game with a second human (a full-rate session): this peer is slot 0, the friend
@@ -176,6 +177,30 @@ func test_fewer_than_two_humans_earn_half() -> void:
 	Net.start_offline()
 	_friend()
 	assert_true(Progression.is_half_rate(), "offline is always half rate")
+
+
+func test_half_rate_is_decided_at_round_zero() -> void:
+	if not _host():
+		return
+	var info := {"id": &"test", "title": "T", "rule_text": ""}
+	var ranking: Array[int] = [0, 7]
+	Session.round_intro.emit(info, 0)
+	assert_false(Progression.is_half_rate(), "two humans at round 0: full rate")
+	Net.roster.erase(7)  # the friend leaves before the podium
+	assert_eq(Progression.human_count(), 1, "one human left")
+	assert_false(Progression.is_half_rate(), "still full rate: decided at round 0")
+	Session.round_intro.emit(info, 1)
+	assert_false(Progression.is_half_rate(), "a later round does not re-decide")
+	Session.session_finished.emit([0, 1] as Array[int])
+	assert_eq(Progression.coins, 40, "full session bonus")
+	Session.state_changed.emit(Session.State.LOBBY)
+	assert_true(Progression.is_half_rate(), "back in the lobby: live again (alone)")
+	# Alone at round 0, a friend joining mid-session does not double the rate.
+	Session.round_intro.emit(info, 0)
+	_friend()
+	assert_true(Progression.is_half_rate(), "half rate fixed at round 0")
+	assert_eq(Progression.local_round_award(ranking, _points(ranking)), 3, "round win at half rate")
+	Session.state_changed.emit(Session.State.LOBBY)
 
 
 func test_bots_never_earn() -> void:

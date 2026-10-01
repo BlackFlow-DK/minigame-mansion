@@ -13,6 +13,7 @@ func before_each() -> void:
 
 
 func after_each() -> void:
+	FeelTime.set_scale(1.0)
 	_fx.set(&"headless_spawn", false)
 	_fx.clear()
 	Look.set_quality(Look.Quality.HIGH)
@@ -42,6 +43,28 @@ func test_every_effect_spawns_plays_and_pools() -> void:
 		assert_true(again == first.get(effect), "%s reused from the pool" % effect)
 	_fx.call(&"stop_all")
 	assert_eq(_fx.call(&"live_count"), 0, "stop_all")
+
+
+func test_ko_tag_is_name_sized_under_names_short_and_low() -> void:
+	_fx.set(&"headless_spawn", true)
+	FeelTime.set_scale(0.3)  # a knockout slow-motion must not stretch the tag
+	var node := _fx.call(&"play", &"ko_tag", Vector3.ZERO, Color.WHITE) as FxEffect
+	var tag := node.get_node(^"Tag") as Label3D
+	var name_tag := (load("res://ui/round/name_tag.tscn") as PackedScene).instantiate()
+	var name_label := name_tag.get_node(^"Name") as Label3D
+	assert_near(tag.font_size * tag.pixel_size, 0.42, 0.03, "OUT! about as tall as a name (%.2f m)" % (tag.font_size * tag.pixel_size))
+	assert_true(tag.render_priority < name_label.render_priority, "names draw over OUT!")
+	assert_true(tag.outline_render_priority < name_label.outline_render_priority, "name outlines too")
+	assert_near(node.duration, 0.8, 0.05, "about 0.8 s")
+	var top := 0.0
+	for i in ceili(0.8 * 60.0) - 2:
+		await step(1)
+		top = maxf(top, tag.position.y)
+	assert_true(top <= 1.35 and top >= 1.2, "rises to about 1.3 m (%.2f)" % top)
+	await step(4)
+	assert_true(tag.modulate.a <= 0.01, "faded after 0.8 s real time even in slow-motion (a=%.2f)" % tag.modulate.a)
+	FeelTime.set_scale(1.0)
+	name_tag.free()
 
 
 func test_pool_is_capped() -> void:

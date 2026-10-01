@@ -101,6 +101,21 @@ func test_music_track_override_and_none() -> void:
 	assert_eq(Music.current, &"", "music stopped for the round")
 
 
+func test_spotlight_chairs_round_is_silent() -> void:
+	var scene := load(MinigameRegistry.scene_path(&"spotlight_chairs")) as PackedScene
+	var mg := scene.instantiate() as Minigame
+	_minigames.append(mg)
+	assert_eq(MusicDirector.track_for_minigame(mg), &"", "no director track under the waltz")
+	Net.start_offline()
+	_spawn_director()
+	assert_eq(Music.current, &"lobby_waltz", "lobby music first")
+	_enter_round(0, mg)
+	assert_eq(_picked().back(), &"", "director asks for silence")
+	assert_eq(Music.current, &"", "no night_party under the chairs waltz")
+	Session.state_changed.emit(Session.State.PLAYING)
+	assert_eq(Music.current, &"", "still silent while playing")
+
+
 func test_every_registry_minigame_gets_a_round_track() -> void:
 	for id: StringName in MinigameRegistry.IDS:
 		var scene := load(MinigameRegistry.scene_path(id)) as PackedScene
@@ -109,6 +124,9 @@ func test_every_registry_minigame_gets_a_round_track() -> void:
 		var mg := scene.instantiate()
 		_minigames.append(mg)
 		var track := MusicDirector.track_for_minigame(mg)
+		if id == &"spotlight_chairs":
+			assert_eq(track, &"", "spotlight_chairs plays its own waltz: director silent")
+			continue
 		assert_true(Music.has_track(track), "%s -> %s exists" % [id, track])
 
 

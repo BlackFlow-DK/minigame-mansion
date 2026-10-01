@@ -49,7 +49,7 @@ const SANDBOX_SCENE := "res://dev/sandbox.tscn"
 const TRAINING_SCENE := "res://tutorial/training_room.tscn"
 ## Dev / test args; any of them makes this run leave the saved profile alone.
 const DEV_ARGS: Array[String] = ["name", "offline", "auto-host", "auto-join", "bots", "auto-start", "round-time",
-	"time-scale", "round-minigame", "open-wardrobe"]
+	"time-scale", "round-minigame", "open-wardrobe", "unlock-all", "coins"]
 
 var app_state: AppState = AppState.TITLE
 
