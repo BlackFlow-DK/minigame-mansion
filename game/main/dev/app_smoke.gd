@@ -5,7 +5,8 @@ extends Node
 ##       [--port=PORT] [--bind-ip=127.0.0.1] [--life=SEC] [--time-scale=X] [--round-time=S] [--size=small]
 ## (`--name`, `--time-scale`, `--round-time` are read by main.gd itself.)
 ## Writes <dir>/<name>.json (what this peer's app shows: menu screen, message, Session, round
-## UI panel, Stage players) ten times a second and runs new lines of <dir>/<name>.cmd:
+## UI panel, Stage players) ten times a second and runs each command file <dir>/<name>.cmd.<seq>
+## (one command per file, in seq order, deleted once read):
 ##   host                    title: Host game
 ##   discover                title: Join game (LAN discovery starts)
 ##   join_found <port>       join screen: join the discovered game on <port>
@@ -156,13 +157,23 @@ func _process(delta: float) -> void:
 	if _poll < 0.1:
 		return
 	_poll = 0.0
-	var path := _dir.path_join(_name + ".cmd")
-	if not FileAccess.file_exists(path):
-		return
-	var lines := FileAccess.get_file_as_string(path).split("\n")
-	lines.remove_at(lines.size() - 1)
-	while _cmds_done < lines.size() and not _quitting:
-		_run(lines[_cmds_done].strip_edges())
+	# One file per command: the runner writes <name>.cmd.<seq>.tmp and renames it to
+	# <name>.cmd.<seq> (atomic), so a command file is complete when it appears and no file
+	# is ever shared between writer and reader. Read whole, close, delete, run, in seq order.
+	var prefix := _name + ".cmd."
+	var files: Array[String] = []
+	for f in DirAccess.get_files_at(_dir):
+		if f.begins_with(prefix) and f.trim_prefix(prefix).is_valid_int():
+			files.append(f)
+	files.sort_custom(func(a: String, b: String) -> bool: return a.trim_prefix(prefix).to_int() < b.trim_prefix(prefix).to_int())
+	for f in files:
+		if _quitting:
+			break
+		var path := _dir.path_join(f)
+		var cmd := FileAccess.get_file_as_string(path).strip_edges()
+		if DirAccess.remove_absolute(path) != OK:
+			return  # not released yet: next poll
+		_run(cmd)
 		_cmds_done += 1
 		_write()
 

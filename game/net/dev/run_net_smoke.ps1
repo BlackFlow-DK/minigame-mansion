@@ -32,25 +32,38 @@ function Read-State([string]$Name) {
     try { return (Get-Content -LiteralPath $f -Raw | ConvertFrom-Json) } catch { return $null }
 }
 
+# The actor re-reads <name>.cmd every 0.1 s; an append that lands while it has the file
+# open fails with "being used by another process": retry for up to 2 s.
 function Send-Cmd([string]$Name, [string]$Line) {
-    Add-Content -LiteralPath (Join-Path $Dir "$Name.cmd") -Value $Line -Encoding Ascii
+    $path = Join-Path $Dir "$Name.cmd"
+    $deadline = (Get-Date).AddSeconds(2)
+    while ($true) {
+        try { Add-Content -LiteralPath $path -Value $Line -Encoding Ascii -ErrorAction Stop; break }
+        catch {
+            if ((Get-Date) -gt $deadline) { $script:Check = "send '$Line' to $Name"; throw }
+            Start-Sleep -Milliseconds 50
+        }
+    }
     Write-Host "cmd $Name <- $Line"
 }
 
+# Name of the check in progress, for the FAIL line when anything throws.
+$script:Check = '(setup)'
+
 function Wait-For([string]$Desc, [scriptblock]$Cond) {
+    $script:Check = $Desc
     $deadline = (Get-Date).AddSeconds($StepTimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $ok = $false
         try { $ok = [bool](& $Cond) } catch { $ok = $false }
-        if ($ok) { Write-Host "PASS $Desc"; return }
+        if ($ok) { Write-Host "PASS $Desc"; $script:Check = "(after: $Desc)"; return }
         Start-Sleep -Milliseconds 200
     }
-    Write-Host "FAIL $Desc"
     foreach ($n in $script:Procs.Keys) {
         $s = Read-State $n
         if ($s) { Write-Host "  $n : slot=$($s.local_slot) roster=$($s.roster_key) events=$(($s.events | Select-Object -Last 6) -join ',')" }
     }
-    throw "smoke step failed: $Desc"
+    throw "not true within $StepTimeoutSec s"
 }
 
 function Get-Events([string]$Name) { $s = Read-State $Name; if ($s) { return @($s.events) } else { return @() } }
@@ -136,6 +149,7 @@ try {
     Send-Cmd 'Scan' 'quit'
     Wait-For 'every process exited on its own' { @($script:Procs.Values | Where-Object { -not $_.HasExited }).Count -eq 0 }
 
+    $script:Check = 'no error lines in actor logs'
     $bad = @()
     foreach ($n in $script:Procs.Keys) {
         foreach ($f in @("$n.out", "$n.err")) {
@@ -153,7 +167,7 @@ try {
     Write-Host 'PASS no error lines in actor logs'
     $exit = 0
 } catch {
-    Write-Host "net-smoke: $($_.Exception.Message)"
+    Write-Host "FAIL ${script:Check}: $($_.Exception.Message)"
 } finally {
     $ErrorActionPreference = 'Continue'
     foreach ($n in $script:Procs.Keys) {

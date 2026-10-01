@@ -1,7 +1,7 @@
 # Full-game multi-process smoke test: one headless host and two headless clients on this PC
 # (127.0.0.1), each running the REAL main scene (game/main/dev/app_smoke.tscn wraps it and
 # drives its menus). Each actor writes what its app shows to build/app-smoke/<stamp>/<name>.json;
-# this runner drives them through <name>.cmd files and asserts:
+# this runner drives them through command files (<name>.cmd.<seq>) and asserts:
 #   host + a bot in the lobby; Alice finds the game by LAN discovery, Bob joins by address;
 #   all three see 3 humans + 1 bot, Alice (who joins wearing body size small) small on every
 #   peer, at agreeing positions after scripted walking; the host
@@ -36,14 +36,42 @@ function Start-Actor([string]$Name, [string[]]$Extra = @()) {
     Write-Host "started $Name (pid $($p.Id))"
 }
 
+# The actor rewrites <name>.json ten times a second (truncate, then write), so a read can
+# catch it empty or half-written: retry for up to ~0.5 s before giving up with $null. A
+# bare $null used to slip through as "1 element" in @($s.list) checks.
 function Read-State([string]$Name) {
     $f = Join-Path $Dir "$Name.json"
     if (-not (Test-Path -LiteralPath $f)) { return $null }
-    try { return (Get-Content -LiteralPath $f -Raw | ConvertFrom-Json) } catch { return $null }
+    for ($i = 0; $i -lt 20; $i++) {
+        try {
+            $s = Get-Content -LiteralPath $f -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($null -ne $s) { return $s }
+        } catch { }
+        Start-Sleep -Milliseconds 25
+    }
+    return $null
 }
 
+# Command handoff: one file per command, written under a temp name and renamed into place
+# (atomic), so the actor never sees a half-written command and runner and actor never hold
+# the same file (the old shared <name>.cmd, appended here while the actor read it, hit
+# "file is being used by another process"). The actor deletes each file after reading it;
+# <name>.cmdlog keeps the record.
+$script:CmdSeq = 0
 function Send-Cmd([string]$Name, [string]$Line) {
-    Add-Content -LiteralPath (Join-Path $Dir "$Name.cmd") -Value $Line -Encoding Ascii
+    $script:CmdSeq += 1
+    $final = Join-Path $Dir ('{0}.cmd.{1}' -f $Name, $script:CmdSeq)
+    $tmp = "$final.tmp"
+    [System.IO.File]::WriteAllText($tmp, $Line)
+    $deadline = (Get-Date).AddSeconds(2)
+    while ($true) {
+        try { [System.IO.File]::Move($tmp, $final); break }
+        catch {
+            if ((Get-Date) -gt $deadline) { throw "could not hand '$Line' to ${Name}: $($_.Exception.Message)" }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+    Add-Content -LiteralPath (Join-Path $Dir "$Name.cmdlog") -Value $Line -Encoding Ascii
     Write-Host "cmd $Name <- $Line"
 }
 
@@ -223,6 +251,7 @@ try {
     if ((Read-State 'Host').rounds[0].scene -notmatch $FirstRound) { throw "round 1 was not $FirstRound" }
     foreach ($n in $All) {
         $s = Read-State $n
+        if ($null -eq $s) { throw "${n}: state file unreadable" }
         $starts = @($s.round_starts)
         if ($starts.Count -ne 2) { throw "${n}: expected 2 round starts, got $($starts.Count)" }
         foreach ($r in $starts) {
