@@ -41,7 +41,7 @@ const MIN_FULL_RATE_HUMANS := 2
 ## User args that make a run a dev/test run (no saving). Mirrors MainApp.DEV_ARGS plus tooling.
 const DEV_ARGS: Array[String] = ["name", "offline", "auto-host", "auto-join", "bots", "auto-start",
 	"round-time", "time-scale", "round-minigame", "open-wardrobe", "min-players", "fps", "screenshot",
-	"sandbox", "minigame", "players", "coins"]
+	"sandbox", "minigame", "players", "coins", "unlock-all"]
 
 ## Mansion Coins of the local player.
 var coins: int = 0

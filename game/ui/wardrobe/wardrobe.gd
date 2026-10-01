@@ -41,6 +41,9 @@ const CHARCOAL := Color("#2e2a33")
 const PAPER := Color("#fffaf0")
 
 var player_name: String = ""
+## Save the profile on Done. MenuRoot passes its `persist_profile` (off for dev/test runs, so
+## `--unlock-all` looks never reach the real profile).
+var persist_profile: bool = true
 ## The loadout being edited (always sanitized).
 var loadout: Dictionary = {}
 var current_tab: StringName = &"colour"
@@ -218,7 +221,8 @@ func done() -> void:
 	_closing = true
 	player_name = Cosmetics.sanitize_name(name_edit.text)
 	name_edit.text = player_name
-	Cosmetics.save_profile(player_name, loadout)
+	if persist_profile:
+		Cosmetics.save_profile(player_name, loadout)
 	Net.set_local_profile(player_name, loadout)
 	closed.emit()
 

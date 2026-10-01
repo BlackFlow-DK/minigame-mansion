@@ -46,6 +46,60 @@ func _open() -> Wardrobe:
 	return w
 
 
+# --- Dev unlocks never reach the profile ------------------------------------------------------
+
+func test_unlock_all_and_coins_are_dev_args() -> void:
+	for key: String in ["unlock-all", "coins"]:
+		assert_true(MainApp.DEV_ARGS.has(key), "MainApp.DEV_ARGS has %s" % key)
+		assert_true(Progression.DEV_ARGS.has(key), "Progression.DEV_ARGS has %s" % key)
+	assert_true(Progression.parse_args(PackedStringArray(["--unlock-all"]))["dev"], "--unlock-all is a dev run")
+	assert_true(Progression.parse_args(PackedStringArray(["--coins=500"]))["dev"], "--coins is a dev run")
+	assert_false(Progression.parse_args(PackedStringArray([]))["dev"], "plain run saves")
+
+
+func test_wardrobe_done_saves_only_when_persisting() -> void:
+	Progression.set_unlock_all_arg(true)
+	w = (load(WARDROBE) as PackedScene).instantiate() as Wardrobe
+	w.persist_profile = false
+	add_child(w)
+	await step(2)
+	assert_true(w.select_item(&"hat", "crown"), "crown wearable under unlock-all")
+	w.done()
+	assert_false(FileAccess.file_exists(TEST_PROFILE), "dev run: Done writes no profile")
+	remove_child(w)
+	w.queue_free()
+	Progression.set_unlock_all_arg(false)
+	w = (load(WARDROBE) as PackedScene).instantiate() as Wardrobe
+	add_child(w)
+	await step(2)
+	w.done()
+	assert_true(FileAccess.file_exists(TEST_PROFILE), "normal run: Done saves")
+
+
+func test_menu_load_strips_locked_items() -> void:
+	var lo := Cosmetics.default_loadout(0)
+	lo["primary"] = "#b5227f"
+	lo["secondary"] = "#ffd23f"
+	lo["size"] = "big"
+	lo["hat"] = "crown"
+	lo["face"] = "round_glasses"  # starter item: stays
+	Cosmetics.save_profile("Leaky", lo)
+	var menu := (load("res://ui/menu/menu_root.tscn") as PackedScene).instantiate() as MenuRoot
+	menu.persist_profile = false
+	add_child(menu)
+	await step(1)
+	var got: Dictionary = menu.get(&"_loadout")
+	assert_eq(got["hat"], "", "locked crown taken off")
+	assert_eq(got["face"], "round_glasses", "starter item kept")
+	assert_eq(got["primary"], "#b5227f", "primary colour kept")
+	assert_eq(got["secondary"], "#ffd23f", "secondary colour kept")
+	assert_eq(got["size"], "big", "size kept")
+	Progression.set_unlock_all_arg(true)
+	assert_eq(MenuRoot.strip_locked(lo)["hat"], "crown", "nothing stripped when it is unlocked")
+	remove_child(menu)
+	menu.queue_free()
+
+
 # --- Wardrobe --------------------------------------------------------------------------------
 
 func test_locked_tiles_show_padlock_and_price() -> void:
