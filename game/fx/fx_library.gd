@@ -532,11 +532,13 @@ static func _shockwave(fx: FxEffect) -> void:
 
 
 ## "OUT!" popping up over the spot where a player was knocked out, with a burst of stars.
+## Name-tag sized (~0.42 m), drawn under the name tags, ~0.8 s (real time, also in slow-mo) and
+## rising only to ~1.3 m so it never sits on a neighbour's name.
 static func _ko_tag(fx: FxEffect) -> void:
-	fx.duration = 1.15
-	fx.add_tag("OUT!", Look.RED, _font(), 110, 0.55)
+	fx.duration = 0.8
+	fx.add_tag("OUT!", Look.RED, _font(), 64, 0.35)
 	var stars := _emitter(6, 0.7, _mesh(&"star"), _star(0.9), Look.GOLD)
-	stars.position.y = 1.35
+	stars.position.y = FxEffect.TAG_BASE_HEIGHT
 	stars.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	stars.emission_sphere_radius = 0.2
 	stars.direction = Vector3.UP
