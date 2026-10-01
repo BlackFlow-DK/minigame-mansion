@@ -165,6 +165,33 @@ func test_session_finished_shows_podium_confetti_and_host_back_button() -> void:
 	assert_eq(pressed.size(), 1, "back_to_lobby_pressed emitted")
 
 
+func test_name_tags_hidden_under_results_and_podium() -> void:
+	var ps := spawn_arena(4)
+	var tags: Array[Node3D] = []
+	for p in ps:
+		var tag := NAME_TAG_SCENE.instantiate() as Node3D
+		tag.name = "NameTag"
+		p.add_child(tag)
+		tag.call(&"setup", p)
+		tags.append(tag)
+	_make_ui(4)
+	await step(2)
+	assert_true(tags.all(func(t: Node3D) -> bool: return t.visible), "tags shown in play")
+	var ranking: Array[int] = [0, 1, 2, 3]
+	Session.round_finished.emit(ranking, {0: 4, 1: 3, 2: 2, 3: 1})
+	await step(3)
+	assert_eq(ui.view, RoundUI.View.RESULTS, "results")
+	assert_true(tags.all(func(t: Node3D) -> bool: return not t.visible), "no 3D names through the results dim")
+	Session.round_started.emit()
+	await step(3)
+	assert_true(tags.all(func(t: Node3D) -> bool: return t.visible), "tags back in play")
+	Session.scores = {0: 4, 1: 3, 2: 2, 3: 1} as Dictionary[int, int]
+	Session.session_finished.emit(ranking)
+	await step(3)
+	assert_eq(ui.view, RoundUI.View.PODIUM, "podium")
+	assert_true(tags.all(func(t: Node3D) -> bool: return not t.visible), "no 3D names through the podium dim")
+
+
 func test_state_lobby_reveals_back_button_on_podium() -> void:
 	_make_ui(2)
 	Session.scores = {0: 3, 1: 4} as Dictionary[int, int]
