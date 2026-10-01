@@ -67,11 +67,13 @@ func test_scene_loads_with_8_spawns_on_the_platform() -> void:
 		assert_near(p.global_position.y, 0.0, 0.05, "P%d on top of the platform" % p.slot)
 
 
-func test_small_rounds_start_on_7m() -> void:
+func test_small_rounds_start_platform() -> void:
 	spawn_arena(3, ID)
 	var m := _sumo()
-	assert_eq(m.platform_radius(), 7.0, "3 players start on the 7 m platform")
-	assert_false(m.is_ring_solid(3), "ring 3 absent")
+	# Balance pass: SMALL_ROUND_PLAYERS is 0, so 3 players get the full 9 m platform too.
+	var small := 3 <= BumperSumo.SMALL_ROUND_PLAYERS
+	assert_eq(m.platform_radius(), 7.0 if small else 9.0, "3 players' start platform")
+	assert_eq(m.is_ring_solid(3), not small, "ring 3 present unless small rounds start on 7 m")
 	assert_true(m.is_ring_solid(2), "ring 2 present")
 
 
@@ -80,7 +82,8 @@ func test_tuning_applied_on_every_player() -> void:
 	for p in ps:
 		var shove := p.get_component(&"shove") as ShoveComponent
 		var status := p.get_component(&"status") as StatusComponent
-		assert_true(status.knockback_multiplier > 1.0, "stronger knockback")
+		assert_eq(status.knockback_multiplier, BumperSumo.KNOCKBACK_MULTIPLIER, "sumo knockback")
+		assert_eq(shove.force, BumperSumo.SHOVE_FORCE, "sumo shove force")
 		assert_true(shove.cooldown < 0.6, "shorter shove cooldown")
 
 

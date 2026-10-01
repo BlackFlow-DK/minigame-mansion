@@ -40,11 +40,13 @@ func test_scene_loads_with_8_spawns_on_solid_tiles() -> void:
 		assert_true(p.alive and p.is_on_floor(), "player %d stands on its tile" % p.slot)
 
 
-func test_small_rounds_use_fewer_tiles_and_spawns_stay_on_the_field() -> void:
+func test_small_rounds_field_and_spawns_stay_on_it() -> void:
 	spawn_arena(2, ID)
 	var g := _game()
-	assert_eq(g.rings, 3, "2 players play on 3 rings")
-	assert_eq(g.solid_tiles().size(), 37, "3 rings = 37 tiles")
+	# Balance pass: 2 players get the full 5-ring field too (FloorIsLava.FULL_FIELD_PLAYERS).
+	assert_eq(g.rings, FloorIsLava.rings_for(2), "2 players play on rings_for(2)")
+	assert_eq(g.rings, 5, "2 players play on 5 rings")
+	assert_eq(g.solid_tiles().size(), 91, "5 rings = 91 tiles")
 	for pt in g.get_spawn_points():
 		assert_true(g.is_safe(pt.origin), "every spawn point exists in the smallest field")
 
@@ -172,7 +174,7 @@ func test_is_safe_and_bot_goal() -> void:
 	assert_true(g.is_safe(Vector3.ZERO), "centre tile is safe")
 	assert_true(g.is_safe(Vector3(0.0, 5.0, 0.05)), "height does not matter")
 	assert_false(g.is_safe(Vector3(40.0, 0.0, 0.0)), "off the field is not safe")
-	var rim := g.get_tile_position(g.tile_at(Vector3(0.0, 0.0, 100.0).limit_length(4.0 * FloorIsLava.SQRT3 * FloorIsLava.SPACING)))
+	var rim := g.get_tile_position(g.tile_at(Vector3(0.0, 0.0, 100.0).limit_length(g.rings * FloorIsLava.SQRT3 * FloorIsLava.SPACING)))
 	assert_true(g.is_safe(rim), "centre of a rim tile is safe")
 	assert_false(g.is_safe(rim + Vector3(0.0, 0.0, 0.8)), "its outer edge is not")
 	var east := g.get_tile_position(g.tile_at(Vector3(1.5 * FloorIsLava.SPACING, 0.0, 0.0)))

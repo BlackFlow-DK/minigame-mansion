@@ -12,7 +12,7 @@ extends Minigame
 ## Player.eliminate (host), which reaches every peer by itself.
 ##
 ## Tiles are numbered in a fixed axial order over MAX_RINGS rings (identical on every peer);
-## `_setup` removes the rings the player count does not need.
+## `_setup` removes the rings the player count does not need (see rings_for).
 
 ## Every peer, when a tile starts cracking / falls (its collider is gone by then).
 signal tile_cracked(index: int)
@@ -227,12 +227,17 @@ func _rpc_fall(ids: PackedInt32Array) -> void:
 
 # --- Public queries -------------------------------------------------------------------------
 
-## Rings of tiles for `count` players: fewer tiles for fewer players, so rounds stay short.
+## Rounds with fewer players than this play without the outer ring. Balance pass
+## (docs/balance.md): the smaller fields (2 players 3 rings, 3-4 players 4) ended 2-player
+## rounds in ~13 s and 4-player rounds in ~27 s, mostly by shoves off the rim; on the full
+## field the late collapse sets the pace (2 players ~25 s, 3-4 players ~30-36 s, like 8).
+const FULL_FIELD_PLAYERS := 2
+
+
+## Rings of tiles for `count` players.
 static func rings_for(count: int) -> int:
-	if count <= 2:
-		return 3
-	if count <= 4:
-		return 4
+	if count < FULL_FIELD_PLAYERS:
+		return MAX_RINGS - 1
 	return MAX_RINGS
 
 
