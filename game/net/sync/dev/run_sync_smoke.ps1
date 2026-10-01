@@ -3,7 +3,8 @@
 # build/sync-smoke/<stamp>/<name>.json; this runner drives them through <name>.cmd files and
 # asserts they agree: positions after a walk, a shove across clients, a host elimination, a
 # full 2-round Session (every round on the flat dev arena via Session.scene_override, fixed
-# order seed) that must end identically on every peer and add up by the points table, and a
+# order seed) that must end identically on every peer and add up by the points table
+# (Session.place_points for the players who started each round), and a
 # client quitting mid-round. Every failure prints a line starting with FAIL and the reason.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\net\sync\dev\run_sync_smoke.ps1 [-Port 24595]
 # Exit 0 when every check passes. Always kills the processes it started.
@@ -103,7 +104,6 @@ function Get-Dist($a, $b) { return [math]::Sqrt([math]::Pow($a.x - $b.x, 2) + [m
 
 # Session outcome checks: what matters for sync, not the exact numbers.
 function Test-SessionResult([string[]]$Names, [int[]]$Slots) {
-    $table = @(4, 3, 2, 1)
     foreach ($key in @('final_scores', 'final_wins', 'final_ranking', 'rounds')) {
         $vals = @($Names | ForEach-Object { ((Read-State $_).$key | ConvertTo-Json -Compress -Depth 6) })
         Write-Host "  ${key}: $($vals[0])"
@@ -118,20 +118,23 @@ function Test-SessionResult([string[]]$Names, [int[]]$Slots) {
     for ($i = 0; $i -lt $rounds.Count; $i++) {
         $r = $rounds[$i]
         $ranking = @($r.ranking | ForEach-Object { [int]$_ })
+        $table = @($r.table | ForEach-Object { [int]$_ })
+        if ([int]$r.players -ne $Slots.Count -or $table.Count -eq 0) { Fail "round $($i + 1): started with $($r.players) players (table $($table -join '/')), expected $($Slots.Count)" }
+        $top = $table[0]
         $prev = 99
         for ($k = 0; $k -lt $ranking.Count; $k++) {
             $pts = [int]$r.points."$($ranking[$k])"
-            # Place k scores table[k] (0 past the table); only a shared first place repeats 4.
+            # Place k scores table[k] (0 past the table); only a shared first place repeats the top.
             $expected = if ($k -lt $table.Count) { $table[$k] } else { 0 }
-            if (-not ($pts -eq $expected -or ($pts -eq 4 -and $prev -eq 4))) {
-                Fail "round $($i + 1): slot $($ranking[$k]) in place $($k + 1) got $pts points (ranking $($ranking -join ','))"
+            if (-not ($pts -eq $expected -or ($pts -eq $top -and $prev -eq $top))) {
+                Fail "round $($i + 1): slot $($ranking[$k]) in place $($k + 1) got $pts points, table $($table -join '/') (ranking $($ranking -join ','))"
             }
             $prev = $pts
         }
         foreach ($slot in $Slots) {
             if ($null -eq $r.points."$slot") { Fail "round $($i + 1): slot $slot was not scored" }
             $sum[$slot] += [int]$r.points."$slot"
-            if ([int]$r.points."$slot" -eq 4) { $wins[$slot] += 1 }
+            if ([int]$r.points."$slot" -eq $top) { $wins[$slot] += 1 }
         }
     }
     $fr = @($h.final_ranking | ForEach-Object { [int]$_ })
