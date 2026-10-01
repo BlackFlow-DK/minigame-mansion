@@ -34,6 +34,8 @@ const TRAINING_FLAG_PATH := "user://training_prompt.cfg"
 ## Appended to join failures that can be a firewall block.
 const FIREWALL_HINT := " Check that both PCs allow Minigame Mansion through Windows Firewall on Private AND Public networks, and try the host's IP address (shown in the host's lobby)."
 
+const VERSION_MISMATCH_TEXT := "Could not join: the host is running a different game version. Everyone needs the same version of Minigame Mansion."
+
 const TITLE := &"title"
 const JOIN := &"join"
 const LOBBY := &"lobby"
@@ -473,7 +475,9 @@ func _on_join_failed(reason: String) -> void:
 		return
 	_join_timer.stop()
 	var text := "Could not join: %s" % (reason if reason.strip_edges() != "" else "the host did not accept the connection.")
-	if reason == "timeout" or reason == "could not connect":
+	if reason == NetProtocol.REASON_VERSION:
+		text = VERSION_MISMATCH_TEXT
+	elif reason == "timeout" or reason == "could not connect":
 		text += "." + FIREWALL_HINT
 	join.show_error(text)
 

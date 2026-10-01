@@ -297,6 +297,15 @@ func test_join_failed_shows_error() -> void:
 	assert_false(menu.join.ip_join_button.disabled, "join enabled again")
 
 
+func test_version_mismatch_shows_clear_message() -> void:
+	menu.title.join_button.pressed.emit()
+	await step(1)
+	menu.set_connecting("192.168.1.10")
+	Net.join_failed.emit(NetProtocol.REASON_VERSION)
+	assert_true(menu.join.error_panel.visible, "error shown")
+	assert_true(menu.join.error_label.text.contains("different game version"), "clear version text: %s" % menu.join.error_label.text)
+
+
 func test_empty_ip_shows_error() -> void:
 	menu.title.join_button.pressed.emit()
 	await step(1)
