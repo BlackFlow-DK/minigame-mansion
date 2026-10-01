@@ -18,6 +18,11 @@ extends PlayerComponent
 ## (landing squash, shove, hit, stun, pop-in) -> emotes. The face eases between
 ## BlobExpressions presets, blinks, and glances around or at the nearest other player.
 ##
+## Hit feel (visual only, every peer): a landed shove (attacker) and a hit (victim) freeze the
+## blob in its impact pose for HIT_STOP seconds while physics, sync and gameplay timers run on;
+## the victim shivers and flashes white (material_overlay), then the model catches up with
+## its body. The animation clock runs on FeelTime.scale (knockout slow-motion).
+##
 ## Materials: this component never colours the blob. It gives the model the house toon look
 ## once when it instances it (`BlobToon.apply`: shared Look toon materials); the cosmetics
 ## component tints the player materials, attaches items under the sockets and re-applies the
@@ -42,6 +47,12 @@ const HIT_TIME := 0.3
 const LAND_TIME := 0.32
 const RESPAWN_TIME := 0.6
 const BLINK_TIME := 0.14
+## Seconds the blob holds its impact pose on a hit (victim) / landed shove (attacker).
+const HIT_STOP := 0.055
+const HIT_STOP_ATTACKER := 0.045
+## Metres the victim shivers during the hit-stop.
+const HIT_SHIVER := 0.035
+const FLASH_TIME := 0.08
 ## Palms forward, fingers up (left hand); the right hand uses the X-mirrored rotation.
 const PALM_FORWARD_L := Basis(Vector3(0, 0, -1), Vector3(0, -1, 0), Vector3(-1, 0, 0))
 
@@ -114,6 +125,15 @@ var _pupil: Vector2 = Vector2.ZERO
 var _nearest: WeakRef = null
 var _nearest_in: float = 0.0
 var _reaction: StringName = &"idle"
+
+# Hit feel.
+var _stop_left: float = 0.0
+var _stop_shiver: float = 0.0
+var _stop_hold: Vector3 = Vector3.ZERO
+var _catch: Vector3 = Vector3.ZERO  # pivot offset easing back to zero after a hit-stop
+var _flash_left: float = 0.0
+var _flashed: Array[GeometryInstance3D] = []
+static var _flash_material: StandardMaterial3D = null
 
 
 func _ready() -> void:
@@ -204,6 +224,11 @@ func get_expression() -> StringName:
 	return _expression
 
 
+## Seconds of hit-stop left (0 = animating normally). Tests, debugging.
+func get_hit_stop() -> float:
+	return maxf(_stop_left, 0.0)
+
+
 ## The dominant animation layer now: &"eliminated", &"respawn", &"stunned", &"hit", &"shove",
 ## &"land", &"air", &"emote", &"run" or &"idle".
 func get_reaction() -> StringName:
@@ -240,6 +265,7 @@ func _on_shove_started() -> void:
 func _on_shove_hit(_victim_slot: int) -> void:
 	_lean_x.velocity -= 2.5
 	_squash.velocity -= 1.5
+	_hit_stop(HIT_STOP_ATTACKER, 0.0)
 
 
 func _on_got_hit(impulse: Vector3, _source_slot: int) -> void:
@@ -255,6 +281,8 @@ func _on_got_hit(impulse: Vector3, _source_slot: int) -> void:
 		_lean_z.velocity += _hit_dir.x * 7.0 * strength
 	# A splat: flattened, bulging sideways, before it springs back.
 	_squash.snap(minf(_squash.value, 1.0 - 0.16 * strength))
+	_hit_stop(HIT_STOP, HIT_SHIVER)
+	_flash(FLASH_TIME)
 
 
 func _on_stunned(duration: float) -> void:
@@ -266,6 +294,8 @@ func _on_eliminated(_reason: StringName) -> void:
 	_dead = true
 	_stun_left = 0.0
 	_emote = &""
+	_end_hit_stop()
+	_clear_flash()
 	_spawn_pop_ghost()
 
 
@@ -283,6 +313,7 @@ func _on_respawned(_xform: Transform3D) -> void:
 	_lean_z.snap(0.0)
 	_pop.snap(0.0)
 	_pop.velocity = 2.0
+	_end_hit_stop()
 	_snap_to_player()
 
 
@@ -303,6 +334,80 @@ func _spawn_pop_ghost() -> void:
 	tw.tween_property(ghost, "scale", s * Vector3(0.8, 1.35, 0.8), 0.07).set_trans(Tween.TRANS_QUAD)
 	tw.tween_property(ghost, "scale", s * 0.01, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	tw.tween_callback(ghost.queue_free)
+	# Knockout slow-motion (FeelTime) re-times this tween while it runs.
+	ghost.add_to_group(FeelTime.GROUP)
+	ghost.set_meta(FeelTime.TWEEN_META, tw)
+	FeelTime.retime(ghost)
+
+
+## Hit-stop: hold the impact pose (and world position) for `seconds`, shivering `shiver` m.
+func _hit_stop(seconds: float, shiver: float) -> void:
+	if _dead or _rig == null or _pivot == null or not _pivot.is_inside_tree():
+		return
+	if _stop_left <= 0.0:
+		_stop_hold = _pivot.global_position
+	_stop_left = maxf(_stop_left, seconds)
+	_stop_shiver = maxf(_stop_shiver, shiver)
+
+
+func _end_hit_stop() -> void:
+	_stop_left = 0.0
+	_stop_shiver = 0.0
+	_catch = Vector3.ZERO
+	if _pivot:
+		_pivot.position = Vector3.ZERO
+
+
+## Holds the pivot during a hit-stop, then eases it back onto the body.
+func _place_pivot(real_delta: float, frozen: bool) -> void:
+	if frozen:
+		var shiver := Vector3(sin(_stop_left * 190.0), 0.0, cos(_stop_left * 150.0)) * _stop_shiver
+		_pivot.global_position = _stop_hold + shiver
+		_catch = _pivot.position
+		if _stop_left <= 0.0:
+			_stop_shiver = 0.0
+		return
+	if _catch == Vector3.ZERO:
+		return
+	_catch = _catch.lerp(Vector3.ZERO, 1.0 - exp(-30.0 * real_delta))
+	if _catch.length_squared() < 0.000004:
+		_catch = Vector3.ZERO
+	_pivot.position = _catch
+
+
+## A white flash over the whole blob (and what it wears) for `seconds`, via material_overlay.
+func _flash(seconds: float) -> void:
+	if _dead or _rig == null:
+		return
+	if _flash_material == null:
+		_flash_material = StandardMaterial3D.new()
+		_flash_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_flash_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_flash_material.albedo_color = Color(1.0, 0.98, 0.94, 0.7)
+	if _flash_left <= 0.0:
+		_flashed.clear()
+		for n in _rig.root.find_children("*", "GeometryInstance3D", true, false):
+			var g := n as GeometryInstance3D
+			if g.material_overlay == null:
+				g.material_overlay = _flash_material
+				_flashed.append(g)
+	_flash_left = maxf(_flash_left, seconds)
+
+
+func _tick_flash(real_delta: float) -> void:
+	if _flash_left <= 0.0:
+		return
+	_flash_left -= real_delta
+	if _flash_left <= 0.0:
+		_clear_flash()
+
+
+func _clear_flash() -> void:
+	_flash_left = 0.0
+	for g in _flashed:
+		if is_instance_valid(g) and g.material_overlay == _flash_material:
+			g.material_overlay = null
+	_flashed.clear()
 
 
 # --- Per frame ---------------------------------------------------------------------------
@@ -330,7 +435,15 @@ func _physics_process(delta: float) -> void:
 func _process(delta: float) -> void:
 	if player == null or _rig == null:
 		return
-	delta = minf(delta, 0.1)
+	var real := minf(delta, 0.1)
+	_tick_flash(real)
+	var frozen := _stop_left > 0.0
+	if frozen:
+		_stop_left -= real
+	# Hit-stop: pose with zero time (holds the impact frame); otherwise the visual clock.
+	delta = 0.0 if frozen else real * FeelTime.scale
+	if not _dead:
+		_place_pivot(real, frozen)
 	_clock += delta
 	_advance_timers(delta)
 	if _dead:
@@ -427,7 +540,7 @@ func _process(delta: float) -> void:
 
 	_pose_hands(foot_cycle, reach, rise, e_shove, e_hit, e_land, e_stun)
 	_pose_feet(foot_cycle, rise, e_land, e_stun, hop * e_em)
-	_pose_face(delta, e_stun, v_loc)
+	_pose_face(real * FeelTime.scale if frozen else delta, e_stun, v_loc)  # the face reacts through a hit-stop
 	_reaction = _pick_reaction(e_stun > 0.0 or stunned, speed)
 
 

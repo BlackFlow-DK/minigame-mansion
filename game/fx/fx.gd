@@ -4,7 +4,7 @@ extends Node
 ##   Fx.play(&"hit_stars", pos, attacker_colour)
 ##
 ## Effects (FxLibrary.NAMES): dust_puff, land_thud, shove_whoosh, hit_stars, stun_swirl,
-## poof, respawn_sparkle, coin_pickup, explosion, confetti, splash_lava.
+## poof, respawn_sparkle, coin_pickup, explosion, confetti, splash_lava, shockwave, ko_tag.
 ## `color` tints the effect's tintable parts (WHITE keeps its own colours). Nodes are pooled
 ## per effect and recycled; an unknown name warns once and plays nothing.
 ## play() returns the FxEffect node (valid until it finishes; check `serial`) so a caller

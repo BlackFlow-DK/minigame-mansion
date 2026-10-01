@@ -9,6 +9,9 @@ extends Camera3D
 ## `focus_on(node, seconds)` overrides the mode for intro/podium moments, and
 ## `add_shake(amount)` adds trauma-based screen shake (viewport offset only: the camera
 ## basis never shakes, so camera-relative controls stay steady).
+## `intro_sweep(seconds)` flies in from a high, wide, orbiting shot and settles exactly on
+## the normal framing (relative to whatever the mode frames, so it fits any arena bounds);
+## `view_basis()` stays the fixed one throughout, only the drawn transform sweeps.
 ## Players come from the Stage API (`stage` group, `Stage.players`); dead ones are ignored.
 ## With nothing to look at the camera holds where it is.
 
@@ -52,6 +55,14 @@ enum BoundsMode { NONE, BOX, RADIUS }
 @export var bounds_center: Vector3 = Vector3.ZERO
 @export var bounds_radius: float = 10.0
 
+@export_group("Intro sweep")
+## Degrees the sweep starts around the arena (orbits back to `yaw_degrees`).
+@export var sweep_yaw_degrees: float = -70.0
+## Extra pitch (degrees, looking further down) at the start of the sweep.
+@export var sweep_pitch_degrees: float = 22.0
+## Distance multiplier at the start of the sweep.
+@export var sweep_distance_scale: float = 2.3
+
 @export_group("Shake")
 ## Largest viewport offset at full trauma, in metres.
 @export var max_shake_offset: float = 0.5
@@ -74,6 +85,8 @@ var _focus_distance: float = -1.0
 var _shake_time: float = 0.0
 var _noise: FastNoiseLite = FastNoiseLite.new()
 var _stage: Stage = null
+var _sweep_time: float = 0.0
+var _sweep_length: float = 0.0
 
 
 func _ready() -> void:
@@ -100,6 +113,38 @@ func focus_on(node: Node3D, seconds: float, at_distance: float = -1.0) -> void:
 	_focus_node = node
 	_focus_time = seconds if seconds > 0.0 else INF
 	_focus_distance = at_distance
+
+
+## Flies in over `seconds`: starts high, wide and turned `sweep_yaw_degrees` around the
+## current target, then orbits and settles onto the normal framing (ease-out). The target
+## is whatever the mode frames now, so it works with any bounds. Players are frozen during
+## the intro; `stop_sweep()` ends it at once (GO).
+func intro_sweep(seconds: float = 2.5) -> void:
+	_sweep_length = maxf(seconds, 0.01)
+	_sweep_time = 0.0
+	snap()
+
+
+## Ends an intro_sweep() now (the camera sits at its normal framing).
+func stop_sweep() -> void:
+	_sweep_length = 0.0
+	_sweep_time = 0.0
+	_apply_transform()
+
+
+## True while an intro_sweep() runs.
+func is_sweeping() -> bool:
+	return _sweep_length > 0.0
+
+
+## 1 at the start of a sweep, 0 when settled (or no sweep).
+func sweep_amount() -> float:
+	if _sweep_length <= 0.0:
+		return 0.0
+	var t := clampf(_sweep_time / _sweep_length, 0.0, 1.0)
+	# smootherstep-flavoured ease-out: fast fly-in, long gentle settle
+	var e := 1.0 - pow(1.0 - t, 3.0)
+	return 1.0 - e
 
 
 ## Ends a focus_on() override.
@@ -143,6 +188,11 @@ func update_camera(delta: float) -> void:
 			focus = focus.lerp(goal_focus, t)
 			distance = lerpf(distance, goal_distance, t)
 	_update_shake(delta)
+	if _sweep_length > 0.0:
+		_sweep_time += minf(delta, 1.0 / 30.0)  # a load hitch must not eat the fly-in
+		if _sweep_time >= _sweep_length:
+			_sweep_length = 0.0
+			_sweep_time = 0.0
 	_apply_transform()
 
 
@@ -238,8 +288,14 @@ static func frame_points(points: Array[Vector3], basis: Basis, tan_half_v: float
 
 
 func _apply_transform() -> void:
-	var b := view_basis()
-	global_transform = Transform3D(b, focus + b.z * distance)
+	var k := sweep_amount()
+	if k <= 0.0:
+		var b := view_basis()
+		global_transform = Transform3D(b, focus + b.z * distance)
+		return
+	var pitch := clampf(pitch_degrees + sweep_pitch_degrees * k, 10.0, 85.0)
+	var b := Basis.from_euler(Vector3(-deg_to_rad(pitch), deg_to_rad(yaw_degrees + sweep_yaw_degrees * k), 0.0))
+	global_transform = Transform3D(b, focus + b.z * distance * lerpf(1.0, sweep_distance_scale, k))
 
 
 func _update_shake(delta: float) -> void:

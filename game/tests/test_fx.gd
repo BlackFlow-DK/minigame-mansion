@@ -105,9 +105,10 @@ func test_component_reacts_to_every_event() -> void:
 		[&"got_hit", [Vector3(6, 0, 0), 1], [&"hit_stars"]],
 		[&"got_hit", [Vector3(0, 0, 6), -1], [&"hit_stars"]],
 		[&"stunned", [1.2], [&"stun_swirl"]],
-		[&"eliminated", [&"fell"], [&"poof"]],
-		[&"eliminated", [&"lava"], [&"splash_lava", &"poof"]],
-		[&"respawned", [Transform3D(Basis.IDENTITY, Vector3(3, 0, 3))], [&"respawn_sparkle"]],
+		[&"eliminated", [&"fell"], [&"poof", &"shockwave", &"ko_tag"]],
+		[&"eliminated", [&"lava"], [&"splash_lava", &"poof", &"shockwave", &"ko_tag"]],
+		[&"eliminated", [&"cannon"], [&"explosion", &"poof", &"shockwave", &"ko_tag"]],
+		[&"respawned", [Transform3D(Basis.IDENTITY, Vector3(3, 0, 3))], [&"respawn_sparkle", &"shockwave"]],
 	]
 	for c: Array in cases:
 		played.clear()

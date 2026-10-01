@@ -9,6 +9,9 @@ const CARD_SIZE := Vector2(840, 300)
 const CARD_IN := 0.45
 const CARD_HOLD := 2.2
 const CARD_PARK := 0.35
+## Seconds the card waits before sliding in: the stage-load wipe opens first, and a load hitch
+## lands in this wait instead of skipping the slide. Taken out of CARD_HOLD (timing unchanged).
+const CARD_WAIT := 0.3
 ## Each number of the countdown shows for this long.
 const COUNT_STEP := 1.0
 ## Seconds from play() until the countdown has shown "1" for a full step: when
@@ -97,10 +100,11 @@ func play(title: String, rule_text: String, index: int, count: int) -> void:
 	_card.rotation_degrees = -12.0
 
 	_seq = create_tween()
+	_seq.tween_interval(CARD_WAIT)
 	_seq.tween_property(_card, ^"position:x", 0.0, CARD_IN).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_seq.parallel().tween_property(_card, ^"rotation_degrees", -2.0, CARD_IN).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_seq.tween_property(_card, ^"rotation_degrees", 0.0, 0.6).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-	_seq.tween_interval(CARD_HOLD - 0.6)
+	_seq.tween_interval(CARD_HOLD - 0.6 - CARD_WAIT)
 	_seq.tween_property(_card, ^"position:y", -228.0, CARD_PARK).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	_seq.parallel().tween_property(_card, ^"scale", Vector2(0.62, 0.62), CARD_PARK).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	_seq.parallel().tween_property(_dim, ^"modulate:a", 0.35, CARD_PARK)
@@ -140,10 +144,13 @@ func _show_number(n: int) -> void:
 	_count.rotation_degrees = 10.0 if n % 2 == 1 else -10.0
 	if _pop and _pop.is_valid():
 		_pop.kill()
+	# Punch: slams in from big, squashes flat on impact, stretches back, settles.
 	_pop = create_tween()
-	_pop.tween_property(_count, ^"scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	_pop.parallel().tween_property(_count, ^"modulate:a", 1.0, 0.12)
-	_pop.parallel().tween_property(_count, ^"rotation_degrees", 0.0, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	_pop.tween_interval(COUNT_STEP - 0.6)
+	_pop.tween_property(_count, ^"scale", Vector2(1.28, 0.7), 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_pop.parallel().tween_property(_count, ^"modulate:a", 1.0, 0.1)
+	_pop.parallel().tween_property(_count, ^"rotation_degrees", 0.0, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_pop.tween_property(_count, ^"scale", Vector2(0.88, 1.14), 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_pop.tween_property(_count, ^"scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_pop.tween_interval(COUNT_STEP - 0.63)
 	_pop.tween_property(_count, ^"scale", Vector2(0.7, 0.7), 0.2).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	_pop.parallel().tween_property(_count, ^"modulate:a", 0.0, 0.2)

@@ -6,6 +6,10 @@ extends Control
 
 ## Seconds the ranking shows before the bar race.
 const RANKING_SECONDS := 3.2
+## Seconds at the start of the ranking while only the dim fades in (the round's final moment,
+## e.g. a knockout slow-motion, stays visible), then the card pops in. Taken out of the
+## ranking's hold, so the total timing is unchanged.
+const LEAD_IN := 0.9
 const SWAP_SECONDS := 0.3
 const RACE_SECONDS := 2.2
 ## Seconds from play() until the bar race has settled.
@@ -27,6 +31,8 @@ class RaceRow extends Control:
 	var bar: Panel
 	var value_label: Label
 	var gain_label: Label
+	## 0..1 bump of the number when it ticks (decays in RoundResults._process).
+	var kick: float = 0.0
 
 	func _init(p_slot: int, p_from: int, p_to: int) -> void:
 		slot = p_slot
@@ -65,7 +71,10 @@ class RaceRow extends Control:
 		add_child(gain_label)
 
 	func set_progress(t: float, max_value: int) -> void:
-		shown_value = roundi(lerpf(float(from_value), float(to_value), t))
+		var v := roundi(lerpf(float(from_value), float(to_value), t))
+		if v != shown_value:
+			kick = 1.0
+		shown_value = v
 		value_label.text = str(shown_value)
 		var w := 24.0 + BAR_MAX * float(shown_value) / float(maxi(max_value, 1))
 		bar.size.x = w
@@ -85,6 +94,7 @@ var _race_view: CenterContainer
 var _race_area: Control
 var _rows: Dictionary[int, RaceRow] = {}
 var _seq: Tween
+var _dim_tween: Tween
 var _max_value: int = 1
 ## 0..1 progress of the count-up.
 var race_progress: float = 0.0:
@@ -134,10 +144,15 @@ func _process(delta: float) -> void:
 		return
 	var order := get_bar_order()
 	var k := 1.0 - exp(-12.0 * delta)
+	var decay := exp(-14.0 * delta)
 	for i in order.size():
 		var row := _rows[order[i]]
 		var target := i * ROW_H
 		row.position.y = target if absf(row.position.y - target) < 0.5 else lerpf(row.position.y, target, k)
+		# The number bounces each time it ticks up (squash-and-stretch, from its left edge).
+		row.kick = row.kick * decay if row.kick > 0.01 else 0.0
+		row.value_label.pivot_offset = Vector2(0.0, ROW_H * 0.5)
+		row.value_label.scale = Vector2(1.0 + 0.22 * row.kick, 1.0 + 0.32 * row.kick)
 
 
 ## Shows the round's `ranking` (slots, best first) with `points` (slot -> points this
@@ -148,7 +163,9 @@ func play(ranking: Array, points: Dictionary, totals: Dictionary, coins: int = 0
 	_build_ranking(ranking, points)
 	_build_race(ranking, points, totals)
 	_ranking_view.visible = true
-	_ranking_view.modulate.a = 1.0
+	_ranking_view.modulate.a = 0.0
+	_ranking_view.pivot_offset = _ranking_view.size * 0.5
+	_ranking_view.scale = Vector2(0.8, 0.8)
 	_race_view.visible = false
 	_race_view.modulate.a = 0.0
 	coins_shown = maxi(0, coins)
@@ -156,7 +173,14 @@ func play(ranking: Array, points: Dictionary, totals: Dictionary, coins: int = 0
 	_coins_pill.visible = false
 
 	var rows := _ranking_list.get_children()
+	_dim.modulate.a = 0.0
+	_dim_tween = create_tween()
+	_dim_tween.tween_interval(LEAD_IN * 0.5)
+	_dim_tween.tween_property(_dim, ^"modulate:a", 1.0, LEAD_IN * 0.5 + 0.2).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	_seq = create_tween()
+	_seq.tween_interval(LEAD_IN)
+	_seq.tween_property(_ranking_view, ^"modulate:a", 1.0, 0.12)
+	_seq.parallel().tween_property(_ranking_view, ^"scale", Vector2.ONE, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	# Reveal from last place up to the winner.
 	for i in range(rows.size() - 1, -1, -1):
 		var row := rows[i] as Control
@@ -165,18 +189,25 @@ func play(ranking: Array, points: Dictionary, totals: Dictionary, coins: int = 0
 		_seq.tween_interval(0.12 if i > 2 else 0.3)
 	if coins_shown > 0:
 		_seq.tween_callback(_pop_coins)
-	_seq.tween_interval(maxf(0.1, RANKING_SECONDS - _seq_duration_estimate(rows.size())))
+	_seq.tween_interval(maxf(0.1, RANKING_SECONDS - LEAD_IN - 0.32 - _seq_duration_estimate(rows.size())))
 	_seq.tween_property(_ranking_view, ^"modulate:a", 0.0, SWAP_SECONDS * 0.5)
 	_seq.tween_callback(_ranking_view.hide)
 	_seq.tween_callback(_race_view.show)
 	_seq.tween_property(_race_view, ^"modulate:a", 1.0, SWAP_SECONDS * 0.5)
 	_seq.tween_callback(func() -> void: _racing = true)
-	_seq.tween_property(self, ^"race_progress", 1.0, RACE_SECONDS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	# Quick start, long ease into the finish line (bars still re-sort live).
+	_seq.tween_property(self, ^"race_progress", 1.0, RACE_SECONDS).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+	_seq.tween_callback(_punch_leader)
 
 
 func stop() -> void:
 	if _seq and _seq.is_valid():
 		_seq.kill()
+	if _dim_tween and _dim_tween.is_valid():
+		_dim_tween.kill()
+	_dim.modulate.a = 1.0
+	_ranking_view.modulate.a = 1.0
+	_ranking_view.scale = Vector2.ONE
 	_racing = false
 
 
@@ -230,6 +261,19 @@ func _pop_row(row: Control) -> void:
 	var t := create_tween()
 	t.tween_property(row, ^"modulate:a", 1.0, 0.12)
 	t.parallel().tween_property(row, ^"scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## The race is over: the leading row gives a little hop.
+func _punch_leader() -> void:
+	var order := get_bar_order()
+	if order.is_empty():
+		return
+	var row := _rows[order[0]]
+	row.kick = 1.6
+	row.pivot_offset = Vector2(0.0, ROW_H * 0.5)
+	var t := create_tween()
+	t.tween_property(row, ^"scale", Vector2(1.06, 1.06), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_property(row, ^"scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _pop_coins() -> void:

@@ -118,7 +118,10 @@ class PlayerCard extends PanelContainer:
 		return _name.text
 
 	func set_score(value: int) -> void:
+		var changed := _score.text != str(value)
 		_score.text = str(value)
+		if changed and is_visible_in_tree():
+			_bounce(_score)
 
 	func get_score_text() -> String:
 		return _score.text
@@ -130,12 +133,19 @@ class PlayerCard extends PanelContainer:
 		_counter.text = str(value)
 		_counter_pill.visible = true
 		if changed and is_inside_tree():
-			if _pop and _pop.is_valid():
-				_pop.kill()
-			_counter_pill.pivot_offset = _counter_pill.size * 0.5
-			_counter_pill.scale = Vector2(1.5, 1.5)
-			_pop = create_tween()
-			_pop.tween_property(_counter_pill, ^"scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+			_bounce(_counter_pill)
+
+	## A tick: squashes wide, stretches tall, settles (frame-rate independent tween).
+	func _bounce(c: Control) -> void:
+		if _pop and _pop.is_valid():
+			_pop.kill()
+			_counter_pill.scale = Vector2.ONE
+			_score.scale = Vector2.ONE
+		c.pivot_offset = c.size * 0.5
+		c.scale = Vector2(1.45, 0.75)
+		_pop = create_tween()
+		_pop.tween_property(c, ^"scale", Vector2(0.9, 1.18), 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_pop.tween_property(c, ^"scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 	func clear_counter() -> void:
 		counter_value = 0
