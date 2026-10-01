@@ -814,7 +814,7 @@ func _update_pad_visuals() -> void:
 		_pad_spots[i].light_color = light_color
 		_pad_spots[i].light_energy = 6.0 * beam * up
 		_cone_mats[i].set_shader_parameter(&"color", light_color)
-		_cone_mats[i].set_shader_parameter(&"strength", 0.22 * beam * up)
+		_cone_mats[i].set_shader_parameter(&"strength", 0.4 * beam * up)
 
 
 func _pads_node(i: int) -> Node3D:
@@ -921,10 +921,12 @@ func _build_room() -> void:
 	var lights := Node3D.new()
 	lights.name = "Lights"
 	room.add_child(lights)
+	# The middle lamp has no chandelier model: from the camera it would hide the floor.
 	for pos: Vector3 in [Vector3(-5.5, 6.4, -3.5), Vector3(5.5, 6.4, -3.5), Vector3(0.0, 6.8, 1.0)]:
-		var ch := _place(room, "chandelier", pos, 0.0)
-		for n: Node in ch.find_children("*", "GeometryInstance3D", true, false):
-			(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if pos.x != 0.0:
+			var ch := _place(room, "chandelier", pos, 0.0)
+			for n: Node in ch.find_children("*", "GeometryInstance3D", true, false):
+				(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var lamp := OmniLight3D.new()
 		lamp.light_color = Color(1.0, 0.78, 0.5)
 		lamp.light_energy = 2.4
