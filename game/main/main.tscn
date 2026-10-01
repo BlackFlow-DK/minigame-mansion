@@ -5,6 +5,7 @@
 [ext_resource type="PackedScene" path="res://ui/round/round_ui.tscn" id="3_round_ui"]
 [ext_resource type="PackedScene" path="res://ui/menu/menu_root.tscn" id="4_menu"]
 [ext_resource type="Script" path="res://audio/session_sounds.gd" id="5_sounds"]
+[ext_resource type="Script" path="res://audio/music_director.gd" id="6_music"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -18,3 +19,6 @@ layer = 11
 
 [node name="SessionSounds" type="Node" parent="."]
 script = ExtResource("5_sounds")
+
+[node name="MusicDirector" type="Node" parent="."]
+script = ExtResource("6_music")
