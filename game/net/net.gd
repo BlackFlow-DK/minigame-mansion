@@ -98,6 +98,11 @@ func _ready() -> void:
 	if sm:
 		sm.auth_callback = _on_auth
 		sm.auth_timeout = JOIN_TIMEOUT_SEC
+		# Star topology: clients talk only to the host (player sync forwards client traffic
+		# itself, game/net/sync/sync_hub.gd). Without the engine's relay the host also stops
+		# announcing peer joins/leaves to clients, which went to peers that were themselves
+		# mid-disconnect when several clients dropped at once ("Unable to send packet").
+		sm.server_relay = false
 		sm.peer_authenticating.connect(_on_peer_authenticating)
 		sm.peer_authentication_failed.connect(_on_peer_authentication_failed)
 	multiplayer.peer_connected.connect(_on_peer_connected)
@@ -337,7 +342,16 @@ func _roster_updated() -> void:
 func _send_roster() -> void:
 	if multiplayer.get_peers().is_empty():
 		return
-	_rpc_roster.rpc(NetProtocol.roster_to_array(roster), session_in_progress)
+	# Peer by peer, skipping clients whose ENet link is no longer CONNECTED: when several
+	# clients drop in the same network poll, the ones not handled yet are zombies (0 channels)
+	# still listed by get_peers(), and sending to them logs "Unable to send packet".
+	var data := NetProtocol.roster_to_array(roster)
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	for id in multiplayer.get_peers():
+		var pp := enet.get_peer(id) if enet else null
+		if enet and (pp == null or pp.get_state() != ENetPacketPeer.STATE_CONNECTED):
+			continue
+		_rpc_roster.rpc_id(id, data, session_in_progress)
 
 
 @rpc("any_peer", "call_remote", "reliable")

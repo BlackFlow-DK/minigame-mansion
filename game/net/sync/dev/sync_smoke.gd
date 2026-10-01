@@ -14,6 +14,7 @@ extends Node
 ##   knockout <slot>        host: current minigame knock_out
 ##   endround <slot>...     host: current minigame finish(ranking)
 ##   quit
+##   quit_at <unix ms>      quit at that wall-clock time (several actors leave in the same frame)
 ## Every controller is scripted (intent comes from the commands only).
 
 ## Counted player events -> their argument count.
@@ -42,6 +43,7 @@ var _walk_left: float = 0.0
 var _shove_target: int = -1
 var _shoves_done: int = 0
 var _walks_done: int = 0
+var _quit_at_ms: float = -1.0
 
 @onready var stage: Stage = $Stage
 
@@ -154,6 +156,10 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_age += delta
+	if _quit_at_ms > 0.0 and Time.get_unix_time_from_system() * 1000.0 >= _quit_at_ms and not _quitting:
+		_event("quit_at")
+		_quit()
+		return
 	if _age > _life and not _quitting:
 		_event("life_expired")
 		_quit()
@@ -213,6 +219,8 @@ func _run(cmd: String) -> void:
 				Session.current_minigame.finish(r)
 		"quit":
 			_quit()
+		"quit_at":
+			_quit_at_ms = float(parts[1])
 
 
 func _event(e: String) -> void:

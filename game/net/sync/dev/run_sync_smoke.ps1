@@ -1,11 +1,12 @@
-# Player-sync multi-process smoke test: one headless host and two headless clients on this PC
+# Player-sync multi-process smoke test: one headless host and three headless clients on this PC
 # (127.0.0.1). Each actor (game/net/sync/dev/sync_smoke.gd) writes what it sees to
 # build/sync-smoke/<stamp>/<name>.json; this runner drives them through <name>.cmd files and
 # asserts they agree: positions after a walk, a shove across clients, a host elimination, a
 # full 2-round Session (every round on the flat dev arena via Session.scene_override, fixed
 # order seed) that must end identically on every peer and add up by the points table
 # (Session.place_points for the players who started each round), and a
-# client quitting mid-round. Every failure prints a line starting with FAIL and the reason.
+# client quitting mid-round, then two clients leaving at the same instant (the host must not
+# send to a peer that is disconnecting). Every failure prints a line starting with FAIL and the reason.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\net\sync\dev\run_sync_smoke.ps1 [-Port 24595]
 # Exit 0 when every check passes. Always kills the processes it started.
 param([int]$Port = 24595, [int]$StepTimeoutSec = 20, [double]$TimeScale = 10)
@@ -150,7 +151,8 @@ function Test-SessionResult([string[]]$Names, [int[]]$Slots) {
     }
 }
 
-$All = @('Host', 'Alice', 'Bob')
+$All = @('Host', 'Alice', 'Bob', 'Carol')
+$Count = $All.Count
 $exit = 1
 try {
     Start-Actor 'Host' @('--role=host')
@@ -158,26 +160,30 @@ try {
     Start-Actor 'Alice' @('--role=client', "--join=127.0.0.1:$Port")
     Wait-For 'Alice joined' { (Read-State 'Alice').local_slot -ge 1 -and (Read-State 'Host').roster_size -eq 2 }
     Start-Actor 'Bob' @('--role=client', "--join=127.0.0.1:$Port")
-    Wait-For 'all three joined' { @($All | Where-Object { (Read-State $_).roster_size -eq 3 }).Count -eq 3 -and (Read-State 'Bob').local_slot -ge 1 }
+    Wait-For 'Bob joined' { (Read-State 'Bob').local_slot -ge 1 -and (Read-State 'Host').roster_size -eq 3 }
+    Start-Actor 'Carol' @('--role=client', "--join=127.0.0.1:$Port")
+    Wait-For "all $Count joined" { @($All | Where-Object { (Read-State $_).roster_size -eq $Count }).Count -eq $Count -and (Read-State 'Carol').local_slot -ge 1 }
     $A = [int](Read-State 'Alice').local_slot
     $B = [int](Read-State 'Bob').local_slot
-    $Slots = @(0, $A, $B)
-    Write-Host "  slots: Host=0 Alice=$A Bob=$B"
+    $C = [int](Read-State 'Carol').local_slot
+    $Slots = @(0, $A, $B, $C)
+    Write-Host "  slots: Host=0 Alice=$A Bob=$B Carol=$C"
 
     # 1. Host-only load: clients follow the manifest, same players, authorities per owner.
     Send-Cmd 'Host' 'load dev'
-    Wait-For 'every peer spawned the same 3 players (same load id, authority = owner)' {
+    Wait-For "every peer spawned the same $Count players (same load id, authority = owner)" {
         $lid = (Read-State 'Host').load_id
         $ok = $lid -ge 1
         foreach ($n in $All) {
             $s = Read-State $n
-            if ($s.load_id -ne $lid -or @($s.players.PSObject.Properties).Count -ne 3) { $ok = $false }
-            if ((Get-Player $n $A).auth -ne (Read-State 'Alice').peer_id -or (Get-Player $n $B).auth -ne (Read-State 'Bob').peer_id -or (Get-Player $n 0).auth -ne 1) { $ok = $false }
+            if ($s.load_id -ne $lid -or @($s.players.PSObject.Properties).Count -ne $Count) { $ok = $false }
+            if ((Get-Player $n $A).auth -ne (Read-State 'Alice').peer_id -or (Get-Player $n $B).auth -ne (Read-State 'Bob').peer_id -or
+                (Get-Player $n $C).auth -ne (Read-State 'Carol').peer_id -or (Get-Player $n 0).auth -ne 1) { $ok = $false }
         }
         $ok -and (Get-Player 'Alice' $A).local -and -not (Get-Player 'Alice' $B).local -and -not (Get-Player 'Host' $A).local
     }
     Send-Cmd 'Host' 'unfreeze'
-    Wait-For 'unfrozen everywhere' { @($All | Where-Object { -not (Get-Player $_ $A).frozen -and -not (Get-Player $_ $B).frozen }).Count -eq 3 }
+    Wait-For 'unfrozen everywhere' { @($All | Where-Object { $n = $_; @($Slots | Where-Object { (Get-Player $n $_).frozen }).Count -eq 0 }).Count -eq $Count }
     Wait-For 'spawn positions agree' { Test-Positions $All $Slots 0.05 }
 
     # 2. Alice walks (toward the arena centre, so she stays on the 20 m floor); everyone agrees
@@ -192,11 +198,11 @@ try {
     Write-Host ("  Alice moved {0:N2} m (host view)" -f $moved)
     if ($moved -lt 2.0) { Fail "Alice barely moved on the host ($moved m)" }
 
-    # 3. Alice shoves Bob: got_hit on all three, Bob moves (his own client simulates him).
+    # 3. Alice shoves Bob: got_hit on every peer, Bob moves (his own client simulates him).
     $bobBefore = Get-Player 'Host' $B
     Send-Cmd 'Alice' "shove $B"
-    Wait-For 'shove_hit raised on all three' { @($All | Where-Object { (Get-Count $_ "shove_hit:$A") -ge 1 }).Count -eq 3 } 30
-    Wait-For 'got_hit for Bob raised exactly once on all three' { @($All | Where-Object { (Get-Count $_ "got_hit:$B") -eq 1 }).Count -eq 3 }
+    Wait-For 'shove_hit raised on every peer' { @($All | Where-Object { (Get-Count $_ "shove_hit:$A") -ge 1 }).Count -eq $Count } 30
+    Wait-For 'got_hit for Bob raised exactly once on every peer' { @($All | Where-Object { (Get-Count $_ "got_hit:$B") -eq 1 }).Count -eq $Count }
     Start-Sleep -Milliseconds 1500
     Wait-For 'all peers agree after the shove (0.15 m)' { Test-Positions $All $Slots 0.15 }
     $pushed = Get-Dist $bobBefore (Get-Player 'Host' $B)
@@ -205,8 +211,8 @@ try {
 
     # 4. Host eliminates Bob: gone everywhere, once.
     Send-Cmd 'Host' "eliminate $B"
-    Wait-For 'Bob eliminated on all three (event once)' {
-        @($All | Where-Object { -not (Get-Player $_ $B).alive -and (Get-Count $_ "eliminated:$B") -eq 1 }).Count -eq 3
+    Wait-For 'Bob eliminated on every peer (event once)' {
+        @($All | Where-Object { -not (Get-Player $_ $B).alive -and (Get-Count $_ "eliminated:$B") -eq 1 }).Count -eq $Count
     }
 
     # 5. A full 2-round Session: identical rounds and scores everywhere.
@@ -214,38 +220,50 @@ try {
     Wait-For 'round 1 playing' { $s = Read-State 'Host'; $s.session_state -eq 2 -and $s.round_index -eq 0 }
     Wait-For 'round 1: same load on every peer' {
         $lid = (Read-State 'Host').load_id
-        @($All | Where-Object { (Read-State $_).load_id -eq $lid -and @((Read-State $_).players.PSObject.Properties).Count -eq 3 }).Count -eq 3
+        @($All | Where-Object { (Read-State $_).load_id -eq $lid -and @((Read-State $_).players.PSObject.Properties).Count -eq $Count }).Count -eq $Count
     }
     Send-Cmd 'Host' "knockout $B"
-    Wait-For 'knock-out reached every peer' { @($All | Where-Object { -not (Get-Player $_ $B).alive }).Count -eq 3 }
-    Send-Cmd 'Host' "endround 0 $A $B"
+    Wait-For 'knock-out reached every peer' { @($All | Where-Object { -not (Get-Player $_ $B).alive }).Count -eq $Count }
+    Send-Cmd 'Host' "endround 0 $A $C $B"
     Wait-For 'round 2 playing' { $s = Read-State 'Host'; $s.session_state -eq 2 -and $s.round_index -eq 1 }
-    Send-Cmd 'Host' "endround $A $B 0"
-    Wait-For 'session finished on all three' { @($All | Where-Object { (Read-State $_).events -contains 'session_finished' }).Count -eq 3 }
+    Send-Cmd 'Host' "endround $A $B 0 $C"
+    Wait-For 'session finished on every peer' { @($All | Where-Object { (Read-State $_).events -contains 'session_finished' }).Count -eq $Count }
     Test-SessionResult $All $Slots
     Write-Host 'PASS identical scores, round wins, rankings and rounds on all peers; totals add up'
     Wait-For 'back in the lobby, stage cleared everywhere' {
-        @($All | Where-Object { $s = Read-State $_; $s.session_state -eq 0 -and @($s.players.PSObject.Properties).Count -eq 0 }).Count -eq 3
+        @($All | Where-Object { $s = Read-State $_; $s.session_state -eq 0 -and @($s.players.PSObject.Properties).Count -eq 0 }).Count -eq $Count
     }
 
     # 6. Bob quits mid-round: removed everywhere, knocked out on the host.
     Send-Cmd 'Host' 'session 2'
-    Wait-For 'new session playing with 3' {
+    Wait-For "new session playing with $Count" {
         $lid = (Read-State 'Host').load_id
         (Read-State 'Host').session_state -eq 2 -and
-        @($All | Where-Object { (Read-State $_).load_id -eq $lid -and @((Read-State $_).players.PSObject.Properties).Count -eq 3 }).Count -eq 3
+        @($All | Where-Object { (Read-State $_).load_id -eq $lid -and @((Read-State $_).players.PSObject.Properties).Count -eq $Count }).Count -eq $Count
     }
     Send-Cmd 'Bob' 'quit'
     Wait-For 'Bob exited' { $script:Procs['Bob'].HasExited }
-    Wait-For 'Bob removed on host and Alice, knocked out on the host' {
-        $h = Read-State 'Host'; $a = Read-State 'Alice'
-        $null -eq $h.players."$B" -and $null -eq $a.players."$B" -and @($h.players.PSObject.Properties).Count -eq 2 -and
-        @($a.players.PSObject.Properties).Count -eq 2 -and (@($h.knocked_out) -contains $B) -and $h.roster_size -eq 2
+    $Left = @('Host', 'Alice', 'Carol')
+    Wait-For 'Bob removed on every remaining peer, knocked out on the host' {
+        $h = Read-State 'Host'
+        @($Left | Where-Object { $s = Read-State $_; $null -eq $s.players."$B" -and @($s.players.PSObject.Properties).Count -eq ($Count - 1) }).Count -eq $Left.Count -and
+        (@($h.knocked_out) -contains $B) -and $h.roster_size -eq ($Count - 1)
     }
-    Wait-For 'round goes on with two' { (Read-State 'Host').session_state -eq 2 }
+    Wait-For 'round goes on without Bob' { (Read-State 'Host').session_state -eq 2 }
+
+    # 7. Two clients leave in the same instant mid-round: while the host handles the first
+    # drop, the second peer is already disconnecting and nothing may be sent to it (the
+    # host's log must stay free of "Unable to send packet" errors, checked below).
+    $at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 1500
+    Send-Cmd 'Alice' "quit_at $at"
+    Send-Cmd 'Carol' "quit_at $at"
+    Wait-For 'Alice and Carol exited' { $script:Procs['Alice'].HasExited -and $script:Procs['Carol'].HasExited }
+    Wait-For 'host is alone: roster 1, only its own player left' {
+        $h = Read-State 'Host'; $h.roster_size -eq 1 -and @($h.players.PSObject.Properties | Where-Object { $_.Name -ne '0' }).Count -eq 0
+    }
+    Start-Sleep -Milliseconds 500
 
     Send-Cmd 'Host' 'quit'
-    Wait-For 'Alice gets server_closed' { (Read-State 'Alice').events -contains 'server_closed' }
     Wait-For 'every process exited on its own' { @($script:Procs.Values | Where-Object { -not $_.HasExited }).Count -eq 0 }
 
     $bad = @()

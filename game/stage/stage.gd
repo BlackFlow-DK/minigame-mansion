@@ -16,6 +16,8 @@ extends Node3D
 ##   from the manifest when it did not load it (host-only loads, late joiners).
 ## - Clients never add or remove players from their own roster; only host manifests do.
 ## - `clear()` on the host clears every peer.
+## - Host -> client sends go peer by peer to `SyncHub.live_peers()`, never to a peer that is
+##   in the middle of disconnecting (two clients dropping in the same network poll).
 ## - Normal rounds: a slot that leaves the roster is knocked out (`Minigame.knock_out`, host)
 ##   so rankings stay right, then removed on every peer. `follow_roster` (lobby): players
 ##   are added and removed as the roster changes, no knock-outs.
@@ -128,7 +130,8 @@ func get_player(slot: int) -> Player:
 func clear() -> void:
 	_clear_local()
 	if _is_host_net():
-		_rpc_clear.rpc()
+		for id in SyncHub.live_peers(multiplayer):
+			_rpc_clear.rpc_id(id)
 
 
 # --- Spawning ----------------------------------------------------------------------------
@@ -247,14 +250,19 @@ func _on_roster_changed() -> void:
 # --- Host -> clients ------------------------------------------------------------------------
 
 func _on_peer_connected(peer_id: int) -> void:
-	if _is_host_net() and minigame:
+	if _is_host_net() and minigame and SyncHub.live_peers(multiplayer).has(peer_id):
 		_rpc_manifest.rpc_id(peer_id, net_load_id, _scene_path, follow_roster, _manifest_entries())
 
 
 func _send_manifest() -> void:
-	if not _is_host_net() or minigame == null or multiplayer.get_peers().is_empty():
+	if not _is_host_net() or minigame == null:
 		return
-	_rpc_manifest.rpc(net_load_id, _scene_path, follow_roster, _manifest_entries())
+	var peers := SyncHub.live_peers(multiplayer)  # never a peer that is disconnecting right now
+	if peers.is_empty():
+		return
+	var entries := _manifest_entries()
+	for id in peers:
+		_rpc_manifest.rpc_id(id, net_load_id, _scene_path, follow_roster, entries)
 
 
 func _manifest_entries() -> Array:
