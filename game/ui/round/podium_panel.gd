@@ -22,6 +22,8 @@ const CELEBRATE_AT := 3.0 * (RISE + RISE_GAP)
 ## top-right corner; long names get a smaller font instead of running under the button.
 const WINNER_MAX_W := 660.0
 const WINNER_FONT_SIZE := 72
+## Seconds the balance takes to count up on the coins card.
+const COINS_COUNT_SECONDS := 1.3
 
 var _dim: ColorRect
 var _stage: Control
@@ -34,6 +36,26 @@ var _seq: Tween
 var _loops: Array[Tween] = []
 ## Final ranking last shown (slots, best first). Read by tests.
 var final_ranking: Array[int] = []
+## Mansion Coins card (top-left): the session bonus and the new balance counting up.
+var _coins_card: PanelContainer
+var _coins_bonus_label: Label
+var _coins_total_label: Label
+## Session bonus shown by the last play() (0: no card).
+var coins_bonus: int = 0
+## The balance number on the card right now (counts up to `Progression.coins`).
+var coins_total_shown: int = 0:
+	set(value):
+		if value != coins_total_shown and _coins_tick_sound and is_visible_in_tree():
+			_coin_ticks += 1
+			if _coin_ticks % 4 == 0:
+				Sfx.play(&"coin", Vector3.INF, -6.0, 1.0 + 0.004 * float(_coin_ticks))
+		coins_total_shown = value
+		if _coins_total_label:
+			_coins_total_label.text = "Total  %d" % value
+var _coins_tick_sound: bool = false
+var _coin_ticks: int = 0
+var _coins_from: int = 0
+var _coins_to: int = 0
 
 
 func _ready() -> void:
@@ -118,12 +140,17 @@ func _ready() -> void:
 	_back.visible = false
 	_back.pressed.connect(func() -> void: back_pressed.emit())
 	add_child(_back)
+	_build_coins_card()
 
 
 ## Shows the final standings for `ranking` (slots, best first) with `totals` (slot -> points).
-func play(ranking: Array, totals: Dictionary) -> void:
+## `coins_bonus`: this player's Mansion Coin session bonus; once the winner is celebrated a card
+## pops in with "+N coins" and the balance counting up to `Progression.coins` (0: no card).
+func play(ranking: Array, totals: Dictionary, p_coins_bonus: int = 0) -> void:
 	stop()
 	final_ranking.assign(ranking)
+	coins_bonus = maxi(0, p_coins_bonus)
+	_coins_card.visible = false
 	_back.visible = false
 	for c in _stage.get_children():
 		if c.has_meta(&"podium_piece"):
@@ -158,6 +185,76 @@ func play(ranking: Array, totals: Dictionary) -> void:
 	_seq.tween_callback(_celebrate)
 	_seq.tween_property(_winner, ^"modulate:a", 1.0, 0.15)
 	_seq.parallel().tween_property(_winner, ^"scale", Vector2.ONE, 0.5).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+	if coins_bonus > 0:
+		_seq.tween_interval(0.35)
+		_seq.tween_callback(_show_coins)
+		_seq.tween_interval(0.35)
+		_seq.tween_callback(func() -> void: _coins_tick_sound = true)
+		_seq.tween_method(_set_coins_total, 0.0, 1.0, COINS_COUNT_SECONDS).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_seq.tween_callback(_coins_done)
+
+
+func is_coins_card_shown() -> bool:
+	return _coins_card.visible
+
+
+func _show_coins() -> void:
+	_coins_to = Progression.coins
+	_coins_from = maxi(0, _coins_to - coins_bonus)
+	_coin_ticks = 0
+	_coins_tick_sound = false
+	coins_total_shown = _coins_from
+	_coins_bonus_label.text = "+%d coins" % coins_bonus
+	_coins_card.visible = true
+	_coins_card.pivot_offset = Vector2(0, _coins_card.size.y * 0.5)
+	_coins_card.scale = Vector2(0.4, 0.4)
+	_coins_card.modulate.a = 0.0
+	var t := create_tween()
+	t.tween_property(_coins_card, ^"modulate:a", 1.0, 0.12)
+	t.parallel().tween_property(_coins_card, ^"scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	Sfx.play(&"coin_big")
+
+
+func _set_coins_total(t: float) -> void:
+	coins_total_shown = roundi(lerpf(float(_coins_from), float(_coins_to), t))
+
+
+func _coins_done() -> void:
+	_coins_tick_sound = false
+	coins_total_shown = _coins_to
+	Sfx.play(&"coin", Vector3.INF, 0.0, 1.3)
+	_coins_total_label.pivot_offset = _coins_total_label.size * 0.5
+	var t := create_tween()
+	t.tween_property(_coins_total_label, ^"scale", Vector2(1.18, 1.18), 0.08)
+	t.tween_property(_coins_total_label, ^"scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _build_coins_card() -> void:
+	var style := RoundStyle.box(Color(RoundStyle.CHARCOAL, 0.96), RoundStyle.GOLD, 5, 24)
+	style.content_margin_left = 16.0
+	style.content_margin_right = 22.0
+	style.content_margin_top = 8.0
+	style.content_margin_bottom = 10.0
+	_coins_card = RoundStyle.panel(style)
+	_coins_card.name = "CoinsCard"
+	_coins_card.position = Vector2(24, 20)
+	_stage.add_child(_coins_card)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override(&"separation", 12)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coins_card.add_child(row)
+	row.add_child(CoinIcon.make(56))
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override(&"separation", -4)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(col)
+	_coins_bonus_label = RoundStyle.label("+0 coins", 34, RoundStyle.GOLD, 9)
+	_coins_bonus_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(_coins_bonus_label)
+	_coins_total_label = RoundStyle.label("Total  0", 22, RoundStyle.CREAM, 6)
+	_coins_total_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(_coins_total_label)
+	_coins_card.visible = false
 
 
 func _fit_winner_font() -> void:

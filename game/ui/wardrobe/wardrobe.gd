@@ -59,6 +59,8 @@ var swatches: Dictionary = {}
 var tiles: Dictionary = {}
 ## Body page: one big tile Button per size (small, normal, big). Meta: &"id".
 var size_tiles: Array = []
+## Top-right Mansion Coin balance.
+var balance: CoinBalance
 
 var _frame: Control
 var _thumb_rects: Dictionary = {}  # "slot:id" -> TextureRect
@@ -87,6 +89,8 @@ func _ready() -> void:
 	thumbs.thumb_ready.connect(_on_thumb_ready)
 
 	_build()
+	Progression.coins_changed.connect(_refresh_locks)
+	Progression.unlocks_changed.connect(_refresh_locks)
 	name_edit.text = player_name
 	preview.show_loadout(loadout)
 	_sync_selection()
@@ -123,9 +127,12 @@ func select_colour(kind: StringName, hex: String) -> bool:
 	return true
 
 
-## Wears `id` in `slot` ("" = nothing). Returns false for an id that is not in the catalog.
+## Wears `id` in `slot` ("" = nothing). Returns false for an id that is not in the catalog or
+## that this player has not unlocked yet (`try_unlock` buys it).
 func select_item(slot: StringName, id: String) -> bool:
 	if not Cosmetics.SLOTS.has(slot) or not Cosmetics.is_valid_item(slot, id):
+		return false
+	if not Progression.is_unlocked(slot, id):
 		return false
 	if loadout[String(slot)] == id:
 		return true
@@ -165,12 +172,43 @@ func randomise() -> void:
 	Sfx.play(&"respawn")
 
 
-## Back to the default look for this player's slot (the name and the body size are kept).
+## Back to the default look for this player's slot (the name and the body size are kept; a
+## default item this player has not unlocked is left off).
 func reset() -> void:
 	var keep_size: String = loadout.get("size", "normal")
 	loadout = Cosmetics.default_loadout(maxi(Net.local_slot(), 0))
 	loadout["size"] = keep_size
+	for slot: StringName in Cosmetics.SLOTS:
+		if not Progression.is_unlocked(slot, loadout[String(slot)]):
+			loadout[String(slot)] = ""
 	_loadout_updated(&"random")
+
+
+## A click on a locked item: buys it when affordable (coins go, a little fanfare, and it is worn
+## right away) and returns true; otherwise the tile wobbles with "Need N more" and it returns
+## false. An item that is already unlocked is simply worn.
+func try_unlock(slot: StringName, id: String) -> bool:
+	if Progression.is_unlocked(slot, id):
+		return select_item(slot, id)
+	var tile := get_tile(slot, id)
+	if not Progression.can_unlock(slot, id):
+		if tile:
+			_deny(tile, Progression.coins_needed(slot, id))
+		return false
+	var lock := tile.get_node_or_null(^"Lock") if tile else null
+	if lock:
+		lock.set_meta(&"opening", true)  # the fanfare removes it, not the balance refresh
+	Progression.unlock(slot, id)
+	if tile:
+		_celebrate_unlock(tile)
+	select_item(slot, id)
+	return true
+
+
+## True when the tile of `id` in `slot` shows the lock (greyed, padlock, price).
+func is_tile_locked(slot: StringName, id: String) -> bool:
+	var tile := get_tile(slot, id)
+	return tile != null and tile.get_node_or_null(^"Lock") != null and not tile.get_node(^"Lock").is_queued_for_deletion()
 
 
 ## Saves the profile, tells Net, emits `closed` (once).
@@ -225,7 +263,8 @@ func _random_loadout() -> Dictionary:
 		"secondary": secondary[_rng.randi_range(0, secondary.size() - 1)],
 	}
 	for slot: StringName in Cosmetics.SLOTS:
-		var items := Cosmetics.catalog(slot).slice(1)
+		var items := Cosmetics.catalog(slot).slice(1).filter(func(e: Dictionary) -> bool:
+			return Progression.is_unlocked(slot, e["id"]))
 		var id := ""
 		if not items.is_empty() and _rng.randf() < float(RANDOM_CHANCE.get(slot, 0.5)):
 			id = items[_rng.randi_range(0, items.size() - 1)]["id"]
@@ -516,9 +555,15 @@ func _build_panel() -> Control:
 	var col := _vbox(10)
 	panel.add_child(col)
 
-	var tab_row := _hbox(8)
-	tab_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	col.add_child(tab_row)
+	var head_row := _hbox(10)
+	col.add_child(head_row)
+	var tab_row := _hbox(6)
+	tab_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head_row.add_child(tab_row)
+	# Top-right: the Mansion Coin balance (unlocking spends it right here).
+	balance = CoinBalance.make(20)
+	balance.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head_row.add_child(balance)
 	for t: StringName in TABS:
 		var b := Button.new()
 		b.name = "Tab_%s" % t
@@ -526,8 +571,8 @@ func _build_panel() -> Control:
 		b.theme_type_variation = &"ChipButton"
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_ALL
-		b.custom_minimum_size = Vector2(88, 0)
-		b.add_theme_font_size_override(&"font_size", 21)
+		b.custom_minimum_size = Vector2(72, 0)
+		b.add_theme_font_size_override(&"font_size", 19)
 		b.set_meta(&"sfx_press", &"ui_click")
 		b.pressed.connect(_on_tab_pressed.bind(t))
 		b.focus_entered.connect(_on_tab_focused.bind(t))
@@ -739,7 +784,229 @@ func _make_tile(slot: StringName, entry: Dictionary) -> Button:
 	label.add_theme_constant_override(&"line_spacing", -3)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
+	_sync_lock(b)
 	return b
+
+
+# --- Locks -----------------------------------------------------------------------------------
+
+## Matches every item tile's lock to `Progression` (after a balance change or an unlock).
+func _refresh_locks(_a: Variant = null, _b: Variant = null) -> void:
+	for slot: StringName in tiles:
+		for b: Button in tiles[slot]:
+			_sync_lock(b)
+
+
+## A locked tile: picture greyed, padlock top-right, price chip (gold when affordable).
+func _sync_lock(tile: Button) -> void:
+	var slot: StringName = tile.get_meta(&"slot")
+	var id: String = tile.get_meta(&"id")
+	var locked := not Progression.is_unlocked(slot, id)
+	var lock := tile.get_node_or_null(^"Lock")
+	if lock != null and lock.is_queued_for_deletion():
+		lock = null
+	var pic: TextureRect = _thumb_rects.get(WardrobeThumbs.key_of(slot, id))
+	var entry := Cosmetics.item(slot, id)
+	var item_name: String = entry.get("name", "None")
+	if not locked:
+		if lock != null and not lock.has_meta(&"opening"):
+			tile.remove_child(lock)
+			lock.queue_free()
+		if pic and lock == null:
+			pic.material = null
+		tile.tooltip_text = item_name
+		return
+	var cost := Progression.price(slot, id)
+	var need := Progression.coins_needed(slot, id)
+	tile.tooltip_text = "%s  (%s, %d coins)\n%s" % [item_name, Cosmetics.item_tier(slot, id).capitalize(), cost,
+		"Click to unlock!" if need == 0 else "Need %d more coins" % need]
+	if pic:
+		pic.material = _grey_material()
+	if lock == null:
+		lock = _make_lock(cost)
+		tile.add_child(lock)
+	var chip := lock.get_node(^"PriceRow/Price") as PanelContainer
+	var affordable := need == 0
+	chip.add_theme_stylebox_override(&"panel", _price_style(affordable))
+	var price_label := chip.get_node(^"Row/Amount") as Label
+	price_label.add_theme_color_override(&"font_color", CHARCOAL if affordable else CREAM)
+	price_label.add_theme_color_override(&"font_outline_color", GOLD.lightened(0.4) if affordable else CHARCOAL)
+
+
+func _make_lock(cost: int) -> Control:
+	var lock := Control.new()
+	lock.name = "Lock"
+	lock.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lock.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var padlock := PadlockIcon.make(30)
+	padlock.name = "Padlock"
+	padlock.anchor_left = 1.0
+	padlock.anchor_right = 1.0
+	padlock.offset_left = -35.0
+	padlock.offset_right = -5.0
+	padlock.offset_top = 5.0
+	padlock.offset_bottom = 35.0
+	lock.add_child(padlock)
+	var row := CenterContainer.new()
+	row.name = "PriceRow"
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.anchor_right = 1.0
+	row.offset_top = 68.0
+	row.offset_bottom = 96.0
+	lock.add_child(row)
+	var chip := PanelContainer.new()
+	chip.name = "Price"
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(chip)
+	var h := _hbox(4)
+	h.name = "Row"
+	chip.add_child(h)
+	h.add_child(CoinIcon.make(18))
+	var amount := Label.new()
+	amount.name = "Amount"
+	amount.text = str(cost)
+	amount.add_theme_font_size_override(&"font_size", 17)
+	amount.add_theme_constant_override(&"outline_size", 4)
+	amount.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	amount.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(amount)
+	return lock
+
+
+func _price_style(affordable: bool) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = GOLD if affordable else Color(CHARCOAL, 0.92)
+	s.border_color = CHARCOAL
+	s.set_border_width_all(2 if affordable else 0)
+	s.set_corner_radius_all(14)
+	s.corner_detail = 8
+	s.anti_aliasing = true
+	s.content_margin_left = 5.0
+	s.content_margin_right = 9.0
+	s.content_margin_top = 1.0
+	s.content_margin_bottom = 1.0
+	return s
+
+
+static var _grey: ShaderMaterial
+
+
+## Greyscale, slightly faded: the look of an item you do not own yet.
+static func _grey_material() -> ShaderMaterial:
+	if _grey == null:
+		var sh := Shader.new()
+		sh.code = "shader_type canvas_item;\nvoid fragment() {\n\tfloat l = dot(COLOR.rgb, vec3(0.299, 0.587, 0.114));\n\tCOLOR.rgb = mix(COLOR.rgb, vec3(l * 0.75 + 0.2), 0.88);\n\tCOLOR.a *= 0.8;\n}\n"
+		_grey = ShaderMaterial.new()
+		_grey.shader = sh
+	return _grey
+
+
+## Unlock fanfare on `tile`: the padlock pops open and flies off, the tile scale-pops, colour
+## floods back into the picture, confetti bursts from it, "Unlocked!" floats up, ka-ching.
+func _celebrate_unlock(tile: Button) -> void:
+	var slot: StringName = tile.get_meta(&"slot")
+	var id: String = tile.get_meta(&"id")
+	var lock := tile.get_node_or_null(^"Lock") as Control
+	var pic: TextureRect = _thumb_rects.get(WardrobeThumbs.key_of(slot, id))
+	if pic:
+		pic.material = null
+	if lock:
+		lock.set_meta(&"opening", true)
+		lock.name = "LockOpening"
+		var padlock := lock.get_node(^"Padlock") as PadlockIcon
+		padlock.pivot_offset = padlock.size * 0.5
+		var price_row := lock.get_node(^"PriceRow") as Control
+		var t := lock.create_tween()
+		t.tween_property(padlock, ^"open_amount", 1.0, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.parallel().tween_property(price_row, ^"modulate:a", 0.0, 0.15)
+		t.tween_property(padlock, ^"position", padlock.position + Vector2(18, -34), 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.parallel().tween_property(padlock, ^"rotation", 0.9, 0.35)
+		t.parallel().tween_property(padlock, ^"modulate:a", 0.0, 0.35).set_delay(0.1)
+		t.tween_callback(lock.queue_free)
+	tile.pivot_offset = tile.size * 0.5
+	var pop := tile.create_tween()
+	pop.tween_property(tile, ^"scale", Vector2(1.22, 1.22), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	pop.tween_property(tile, ^"scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+	var centre := _frame_point(tile, tile.size * 0.5)
+	_confetti_burst(centre)
+	_float_text(_frame_point(tile, Vector2(tile.size.x * 0.5, tile.size.y * 0.42)), "Unlocked!", GOLD)
+	Sfx.play(&"coin")
+	get_tree().create_timer(0.11).timeout.connect(func() -> void: Sfx.play(&"coin", Vector3.INF, 0.0, 1.3))
+
+
+## Not enough coins: the tile wobbles and "Need N more" floats up.
+func _deny(tile: Button, need: int) -> void:
+	tile.pivot_offset = tile.size * 0.5
+	var t := tile.create_tween()
+	for a: float in [-7.0, 6.0, -4.0, 2.5, 0.0]:
+		t.tween_property(tile, ^"rotation_degrees", a, 0.055).set_trans(Tween.TRANS_SINE)
+	_float_text(_frame_point(tile, Vector2(tile.size.x * 0.5, tile.size.y * 0.42)), "Need %d more" % need, Color("#ff8a7a"))
+	Sfx.play(&"ui_back", Vector3.INF, -2.0, 0.8)
+
+
+## `local` (in `node`'s space) in the scaled frame's space.
+func _frame_point(node: Control, local: Vector2) -> Vector2:
+	return _frame.get_global_transform().affine_inverse() * (node.get_global_transform() * local)
+
+
+func _float_text(at: Vector2, text: String, colour: Color) -> void:
+	var l := Label.new()
+	l.text = text
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.add_theme_font_size_override(&"font_size", 24)
+	l.add_theme_color_override(&"font_color", colour)
+	l.add_theme_color_override(&"font_outline_color", CHARCOAL)
+	l.add_theme_constant_override(&"outline_size", 9)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.size = Vector2(240, 34)
+	l.position = at - Vector2(120, 22)
+	l.pivot_offset = l.size * 0.5
+	l.scale = Vector2(0.5, 0.5)
+	_frame.add_child(l)
+	var t := l.create_tween()
+	t.tween_property(l, ^"scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(l, ^"position:y", l.position.y - 40.0, 1.1).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_property(l, ^"modulate:a", 0.0, 0.3)
+	t.tween_callback(l.queue_free)
+
+
+func _confetti_burst(at: Vector2) -> void:
+	var p := CPUParticles2D.new()
+	p.name = "UnlockConfetti"
+	var img := Image.create_empty(8, 4, false, Image.FORMAT_RGBA8)
+	img.fill(Color.WHITE)
+	p.texture = ImageTexture.create_from_image(img)
+	p.position = at
+	p.amount = 46
+	p.lifetime = 1.1
+	p.one_shot = true
+	p.explosiveness = 0.95
+	p.emission_shape = CPUParticles2D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 18.0
+	p.direction = Vector2(0, -1)
+	p.spread = 180.0
+	p.gravity = Vector2(0, 520)
+	p.initial_velocity_min = 140.0
+	p.initial_velocity_max = 330.0
+	p.angular_velocity_min = -500.0
+	p.angular_velocity_max = 500.0
+	p.angle_max = 360.0
+	p.damping_min = 30.0
+	p.damping_max = 70.0
+	p.scale_amount_min = 0.9
+	p.scale_amount_max = 1.7
+	var ramp := Gradient.new()
+	ramp.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_CONSTANT
+	ramp.offsets = PackedFloat32Array([0.0, 0.2, 0.4, 0.6, 0.8])
+	ramp.colors = PackedColorArray([GOLD, TEAL, Color("#d9483b"), CREAM, PLUM.lightened(0.3)])
+	p.color_initial_ramp = ramp
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0, 0.75, 1.0])
+	fade.colors = PackedColorArray([Color.WHITE, Color.WHITE, Color(1, 1, 1, 0)])
+	p.color_ramp = fade
+	_frame.add_child(p)
+	p.emitting = true
+	p.finished.connect(p.queue_free)
 
 
 func _build_bottom_bar() -> Control:
@@ -808,7 +1075,10 @@ func _on_swatch_pressed(kind: StringName, hex: String) -> void:
 
 
 func _on_tile_pressed(slot: StringName, id: String) -> void:
-	select_item(slot, id)
+	if Progression.is_unlocked(slot, id):
+		select_item(slot, id)
+	else:
+		try_unlock(slot, id)
 	_sync_selection()
 
 

@@ -2,7 +2,8 @@ class_name MenuLobbyOverlay
 extends Control
 ## Lobby overlay drawn over the 3D lobby world: roster (colour, name, bot tag, host crown),
 ## host-only controls (rounds 4/8/12, add/remove bot, Start), "Waiting for host" for clients,
-## the host's LAN address(es), Wardrobe (change your look; everyone sees it live) and Leave. Pure view: `refresh()` feeds it, signals report clicks.
+## the host's LAN address(es), your Mansion Coins, Wardrobe (change your look; everyone sees it
+## live) and Leave. Pure view: `refresh()` feeds it, signals report clicks.
 ## The middle of the screen stays clear (and click-through) for the world.
 
 signal start_pressed(rounds: int)
@@ -22,6 +23,8 @@ var info_label: Label
 var address_label: Label
 var leave_button: Button
 var wardrobe_button: Button
+## Your Mansion Coins (top-left card, beside "LOBBY").
+var coin_balance: CoinBalance
 var count_label: Label
 var roster_list: VBoxContainer
 var add_bot_button: Button
@@ -51,7 +54,14 @@ func _init() -> void:
 	add_child(info)
 	var info_col := MenuUI.vbox(8)
 	info.add_child(info_col)
-	info_col.add_child(MenuUI.label("LOBBY", &"HeaderLabel"))
+	var info_head := MenuUI.hbox(10)
+	info_col.add_child(info_head)
+	var lobby_l := MenuUI.label("LOBBY", &"HeaderLabel")
+	lobby_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_head.add_child(lobby_l)
+	coin_balance = CoinBalance.make(18)
+	coin_balance.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	info_head.add_child(coin_balance)
 	info_label = MenuUI.label("", &"MutedLabel")
 	info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info_col.add_child(info_label)
