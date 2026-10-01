@@ -9,9 +9,13 @@ extends CanvasLayer
 ##   lobby --Session leaves LOBBY--> none (hidden) --Session back in LOBBY--> lobby
 ##   any --Net.server_closed--> title with a message;  Leave -> Net.leave() -> title
 ##   Esc/Start in lobby or in game: pause menu (the game keeps running)
+##   title / pause --Settings--> settings (res://ui/settings/settings.tscn) --Esc/B/Back--> back
 ##   title --How to play--> Training Room (MainApp runs it; `training_requested`); the first run
 ##   (no profile yet) offers it once; the lobby's pause menu offers it when only bots would be
 ##   left behind; in the Training Room the pause menu offers Skip tutorial
+##
+## Every screen arrives with UiMotion.enter (fade + short slide); every button gets the
+## UiMotion hover / focus / press pop.
 ##
 ## The layout is designed at 1280x720 and scaled uniformly to the window, so it also works
 ## without a project stretch mode.
@@ -23,6 +27,7 @@ signal training_requested
 signal training_skip_requested
 
 const WARDROBE_PATH := "res://ui/wardrobe/wardrobe.tscn"
+const SETTINGS_PATH := "res://ui/settings/settings.tscn"
 const JOIN_TIMEOUT_SEC := 12.0
 ## Remembers that the first-run Training Room prompt was shown (never asked twice).
 const TRAINING_FLAG_PATH := "user://training_prompt.cfg"
@@ -43,6 +48,8 @@ var title: MenuTitleScreen
 var join: MenuJoinScreen
 var lobby: MenuLobbyOverlay
 var pause: MenuPauseMenu
+## The settings screen (over the title or the game).
+var settings: SettingsScreen
 ## True when hosting fell back to an offline game.
 var offline_game: bool = false
 ## False: the name / loadout are only handed to Net, never saved to the profile file (dev and
@@ -61,6 +68,10 @@ var _wardrobe: Node = null
 ## Screen to return to when the wardrobe closes (title, or lobby when opened in a game).
 var _wardrobe_return: StringName = TITLE
 var _first_run_name: String = ""
+## Where the settings screen returns to: &"pause" or the screen it was opened over.
+var _settings_return: StringName = TITLE
+## "Show the welcome prompt again" was pressed: offer it next time the title shows.
+var _training_prompt_pending: bool = false
 
 
 func _ready() -> void:
@@ -79,6 +90,8 @@ func _ready() -> void:
 	for c: Control in [title, join, lobby, pause]:
 		c.visible = false
 		root.add_child(c)
+	settings = (load(SETTINGS_PATH) as PackedScene).instantiate() as SettingsScreen
+	root.add_child(settings)
 
 	_join_timer = Timer.new()
 	_join_timer.one_shot = true
@@ -89,6 +102,8 @@ func _ready() -> void:
 	_wardrobe_layer.name = "WardrobeLayer"
 	_wardrobe_layer.layer = layer + 1
 	add_child(_wardrobe_layer)
+	UiMotion.attach(root)
+	UiMotion.attach(_wardrobe_layer)
 
 	title.host_pressed.connect(_on_host)
 	title.join_pressed.connect(_on_join_menu)
@@ -97,6 +112,7 @@ func _ready() -> void:
 	title.quit_pressed.connect(_quit)
 	title.name_committed.connect(_on_name_committed)
 	title.how_to_play_pressed.connect(func() -> void: training_requested.emit())
+	title.settings_pressed.connect(open_settings)
 	title.training_prompt_answered.connect(_on_training_prompt_answered)
 	join.join_requested.connect(_on_join_requested)
 	join.back_pressed.connect(_on_join_back)
@@ -110,6 +126,10 @@ func _ready() -> void:
 	pause.leave_pressed.connect(leave_game)
 	pause.quit_pressed.connect(_quit)
 	pause.training_pressed.connect(func() -> void: training_requested.emit())
+	pause.settings_pressed.connect(open_settings)
+	settings.closed.connect(_on_settings_closed)
+	settings.name_committed.connect(_on_settings_name)
+	settings.reset_tutorial_requested.connect(reset_training_prompt)
 	pause.skip_tutorial_pressed.connect(func() -> void:
 		close_pause()
 		training_skip_requested.emit())
@@ -132,7 +152,10 @@ func _ready() -> void:
 
 
 func show_screen(s: StringName) -> void:
+	var changed := s != screen
 	screen = s
+	if settings.visible:
+		settings.visible = false  # a screen change (left the game, a round began) closes it
 	backdrop.visible = s == TITLE or s == JOIN or s == WARDROBE
 	title.visible = s == TITLE
 	join.visible = s == JOIN
@@ -141,10 +164,19 @@ func show_screen(s: StringName) -> void:
 		pause.visible = false
 	match s:
 		TITLE:
+			if changed:
+				UiMotion.enter(title)
 			title.focus_default()
+			if _training_prompt_pending:
+				_training_prompt_pending = false
+				offer_training_once()
 		JOIN:
+			if changed:
+				UiMotion.enter(join)
 			join.focus_default()
 		LOBBY:
+			if changed:
+				UiMotion.enter(lobby)
 			_refresh_lobby()
 			_release_focus()
 	screen_changed.emit(s)
@@ -153,12 +185,70 @@ func show_screen(s: StringName) -> void:
 func open_pause() -> void:
 	pause.configure(in_training, can_open_training())
 	pause.visible = true
+	UiMotion.enter(pause, pause.center)
 	pause.focus_default()
 
 
 func close_pause() -> void:
 	pause.visible = false
 	_release_focus()
+
+
+## Opens the settings screen over the title or (from the pause menu) over the game; Esc / B /
+## Back returns there.
+func open_settings() -> void:
+	if settings.visible:
+		return
+	if pause.visible:
+		_settings_return = &"pause"
+		pause.visible = false
+	else:
+		_settings_return = screen
+		if screen == TITLE:
+			title.visible = false
+	var name_editable := not _in_game() or Session.state == Session.State.LOBBY
+	settings.open(title.player_name(), not backdrop.visible, name_editable)
+
+
+func close_settings() -> void:
+	settings.close()
+
+
+func is_settings_open() -> bool:
+	return settings.visible
+
+
+func _on_settings_closed() -> void:
+	if _settings_return == &"pause" and _in_game():
+		pause.configure(in_training, can_open_training())
+		pause.visible = true
+		UiMotion.enter(pause, pause.center)
+		pause.refresh_focus()
+		pause.settings_button.grab_focus()
+	elif screen == TITLE:
+		title.visible = true
+		UiMotion.enter(title)
+		title.refresh_focus()
+		title.settings_button.grab_focus()
+		if _training_prompt_pending:
+			_training_prompt_pending = false
+			offer_training_once()
+	else:
+		show_screen(screen)
+
+
+func _on_settings_name(player_name: String) -> void:
+	title.set_player_name(player_name)
+	_commit_profile()
+
+
+## "Show the welcome prompt again": the first-run Training Room prompt is offered again the
+## next time the title shows (offer_training_once).
+func reset_training_prompt() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("training", "prompted", false)
+	cfg.save(training_flag_path)
+	_training_prompt_pending = true
 
 
 ## The lobby's pause menu offers the Training Room only when nobody else would be left behind
@@ -177,12 +267,16 @@ func commit_profile() -> void:
 	_commit_profile()
 
 
-## First run (no profile file yet, never asked before): shows "New here? Try the Training
-## Room" once. Returns true if it was shown. Dev and test runs (`persist_profile` off) never ask.
+## First run (no profile file yet, never asked before), or after Settings > "Show the welcome
+## prompt again": shows "New here? Try the Training Room" once. Returns true if it was shown. Dev and test runs (`persist_profile` off) never ask.
 func offer_training_once() -> bool:
-	if not persist_profile or screen != TITLE or _in_game():
+	if not persist_profile or screen != TITLE or _in_game() or settings.visible:
 		return false
-	if FileAccess.file_exists(Cosmetics.profile_path) or FileAccess.file_exists(training_flag_path):
+	var flag := ConfigFile.new()
+	if flag.load(training_flag_path) == OK:
+		if bool(flag.get_value("training", "prompted", true)):
+			return false  # asked before (and not reset in Settings since)
+	elif FileAccess.file_exists(Cosmetics.profile_path):
 		return false
 	var cfg := ConfigFile.new()
 	cfg.set_value("training", "prompted", true)
@@ -233,6 +327,8 @@ func open_wardrobe() -> void:
 		if _wardrobe.has_signal(sig):
 			_wardrobe.connect(sig, func(..._args: Array) -> void: close_wardrobe(), CONNECT_ONE_SHOT)
 	_wardrobe_layer.add_child(_wardrobe)
+	if _wardrobe is Control:
+		UiMotion.enter(_wardrobe as Control)
 	show_screen(WARDROBE)
 
 
@@ -250,21 +346,35 @@ func finish_wardrobe() -> void:
 			close_wardrobe()
 
 
-## This machine's IPv4 LAN addresses (private ranges first; loopback and link-local skipped).
+## This machine's IPv4 LAN addresses, the likeliest home network first: 192.168.x, then 10.x,
+## then 172.16-31.x (often virtual adapters: WSL, Hyper-V, VPNs); public ones only when there is
+## no private one. Loopback and link-local are skipped.
 static func lan_addresses() -> PackedStringArray:
-	var private_ips: PackedStringArray = []
+	return sort_lan_addresses(IP.get_local_addresses())
+
+
+static func sort_lan_addresses(addresses: PackedStringArray) -> PackedStringArray:
+	var ranked: Array[Array] = []
 	var other: PackedStringArray = []
-	for a in IP.get_local_addresses():
+	for a in addresses:
 		if not a.contains(".") or a.begins_with("127.") or a.begins_with("169.254.") or a.begins_with("0."):
 			continue
 		var parts := a.split(".")
 		var second := parts[1].to_int() if parts.size() > 1 else -1
-		if a.begins_with("10.") or a.begins_with("192.168.") or (a.begins_with("172.") and second >= 16 and second <= 31):
-			private_ips.append(a)
+		if a.begins_with("192.168."):
+			ranked.append([0, a])
+		elif a.begins_with("10."):
+			ranked.append([1, a])
+		elif a.begins_with("172.") and second >= 16 and second <= 31:
+			ranked.append([2, a])
 		else:
 			other.append(a)
-	private_ips.sort()
-	return private_ips if not private_ips.is_empty() else other
+	ranked.sort_custom(func(x: Array, y: Array) -> bool:
+		return x[0] < y[0] if x[0] != y[0] else str(x[1]) < str(y[1]))
+	var out: PackedStringArray = []
+	for r in ranked:
+		out.append(str(r[1]))
+	return out if not out.is_empty() else other
 
 
 # --- Title -------------------------------------------------------------------------------
@@ -483,6 +593,8 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if settings.visible:
+		return  # the settings screen handles Esc / B itself
 	if pause.visible:
 		if event.is_action_pressed(&"pause") or event.is_action_pressed(&"ui_cancel"):
 			close_pause()
