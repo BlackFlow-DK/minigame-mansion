@@ -58,6 +58,10 @@ var _glance: Vector2 = Vector2.ZERO
 var _glance_in: float = 0.8
 var _pupil: Vector2 = Vector2.ZERO
 var _dragging: bool = false
+## Body size: the scale shown (a springy ease) and the loadout's (-1 before the first loadout).
+var _size: float = 1.0
+var _size_target: float = -1.0
+var _size_vel: float = 0.0
 
 
 func _init() -> void:
@@ -84,6 +88,11 @@ func get_model_root() -> Node3D:
 ## Dresses the blob in `new_loadout` (sanitized by the caller).
 func show_loadout(new_loadout: Dictionary) -> void:
 	loadout = new_loadout.duplicate()
+	var first := _size_target < 0.0
+	_size_target = float(Cosmetics.size_info(loadout.get("size", "normal"))["scale"])
+	if first:
+		_size = _size_target
+		_apply_size()
 	if rig == null:
 		return
 	Cosmetics.apply(rig.root, loadout)
@@ -91,7 +100,7 @@ func show_loadout(new_loadout: Dictionary) -> void:
 
 
 ## A reaction to a change. `kind`: &"colour" (a small hop), &"hat" / &"face" / &"neck" /
-## &"back" (hop, cheer, and turn so the new item is in view), &"random" (spin, hop, cheer).
+## &"back" / &"body" (hop, cheer, and turn so the new item is in view), &"random" (spin, hop, cheer).
 func react(kind: StringName) -> void:
 	_hop_t = 0.0
 	_landed = false
@@ -110,7 +119,7 @@ func react(kind: StringName) -> void:
 			_cheer_t = 0.0
 	if kind == &"back":
 		_face_towards(BACK_YAW)
-	elif kind == &"hat" or kind == &"face" or kind == &"neck":
+	elif kind == &"hat" or kind == &"face" or kind == &"neck" or kind == &"body":
 		_face_towards(REST_YAW)
 
 
@@ -124,6 +133,16 @@ func turn(radians: float) -> void:
 
 func get_yaw() -> float:
 	return _yaw_target
+
+
+## The body scale the blob shows now (eases to the loadout's size).
+func get_body_scale() -> float:
+	return _size
+
+
+func _apply_size() -> void:
+	if _turntable:
+		_turntable.scale = Vector3.ONE * maxf(_size, 0.1)
 
 
 ## `Look.apply_toon` (shared, cached toon materials: safe headless too).
@@ -173,6 +192,14 @@ func _process(delta: float) -> void:
 	if absf(_spin) < 0.001:
 		_spin = 0.0
 	_turntable.rotation.y = _yaw + _spin + 0.1 * sin(_clock * 0.55)
+	if _size_target > 0.0:
+		# Slightly under-damped spring: a size change pops, the whole blob (items too) follows.
+		_size_vel += ((_size_target - _size) * 220.0 - _size_vel * 18.0) * delta
+		_size += _size_vel * delta
+		if absf(_size_target - _size) < 0.0005 and absf(_size_vel) < 0.01:
+			_size = _size_target
+			_size_vel = 0.0
+		_apply_size()
 
 	# Hop: anticipation squash (react), stretch in the air, a squash on landing.
 	var hop := 0.0

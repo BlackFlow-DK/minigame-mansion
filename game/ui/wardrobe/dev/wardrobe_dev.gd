@@ -1,16 +1,16 @@
 extends Node3D
 ## Dev scene for the wardrobe (and screenshots). Uses its own profile file, so the real one is
 ## never touched. User args (all optional):
-##   --tab=colour|hat|face|neck|back      page to open
+##   --tab=colour|body|hat|face|neck|back page to open
 ##   --primary=#hex --secondary=#hex       saved colours to open with
-##   --hat=id --face=id --neck=id --back=id   saved items to open with
+##   --hat=id --face=id --neck=id --back=id --size=small|normal|big   saved items to open with
 ##   --name=Text                           saved name
 ##   --random=<seed>                       open with a random look (seeded)
 ##   --turn=<radians>                      turn the blob
 ##   --focus=tab|item|name|done            where the keyboard focus sits
 ##   --bg=title|world|menu                 plum backdrop (default), a 3D lobby stand-in, or the
 ##                                         real title menu opening it (as players reach it)
-##   --equip=slot:id                       equip after opening (the preview reacts)
+##   --equip=slot:id                       equip after opening (the preview reacts; size:big too)
 ## e.g. tools/godot-screenshot.ps1 -Scene res://ui/wardrobe/dev/wardrobe_dev.tscn -Frames 120 -GameArgs "--tab=hat --hat=crown"
 
 const WARDROBE_SCENE := "res://ui/wardrobe/wardrobe.tscn"
@@ -37,7 +37,7 @@ func _ready() -> void:
 		for slot: StringName in Cosmetics.SLOTS:
 			var items := Cosmetics.catalog(slot)
 			look[String(slot)] = items[rng.randi_range(0, items.size() - 1)]["id"]
-	for key in ["primary", "secondary", "hat", "face", "neck", "back"]:
+	for key in ["primary", "secondary", "hat", "face", "neck", "back", "size"]:
 		if _args.has(key):
 			look[key] = _args[key]
 	Cosmetics.save_profile(_args.get("name", "Sander"), look)
@@ -86,7 +86,9 @@ func _setup() -> void:
 		wardrobe.preview.turn(float(_args["turn"]))
 	if _args.has("equip"):
 		var parts := String(_args["equip"]).split(":")
-		if parts.size() == 2:
+		if parts.size() == 2 and parts[0] == "size":
+			wardrobe.select_size(parts[1])
+		elif parts.size() == 2:
 			wardrobe.select_item(StringName(parts[0]), parts[1])
 	await get_tree().process_frame
 	match _args.get("focus", "tab"):

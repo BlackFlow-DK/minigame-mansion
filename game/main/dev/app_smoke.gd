@@ -2,7 +2,7 @@ extends Node
 ## Multi-process full-game smoke actor, driven by game/main/dev/run_app_smoke.ps1.
 ## Runs the REAL main scene (child `Main`) and drives it through its menus:
 ##   godot_console --headless --path game res://main/dev/app_smoke.tscn -- --name=N --dir=<state dir>
-##       [--port=PORT] [--bind-ip=127.0.0.1] [--life=SEC] [--time-scale=X] [--round-time=S]
+##       [--port=PORT] [--bind-ip=127.0.0.1] [--life=SEC] [--time-scale=X] [--round-time=S] [--size=small]
 ## (`--name`, `--time-scale`, `--round-time` are read by main.gd itself.)
 ## Writes <dir>/<name>.json (what this peer's app shows: menu screen, message, Session, round
 ## UI panel, Stage players) ten times a second and runs new lines of <dir>/<name>.cmd:
@@ -51,6 +51,7 @@ func _ready() -> void:
 			"name": _name = v
 			"dir": _dir = v
 			"life": _life = float(v)
+			"size": _wear_size(v)
 	app.stage.players_spawned.connect(_on_players_spawned)
 	Net.server_closed.connect(func() -> void: _event("server_closed"))
 	Net.join_failed.connect(func(r: String) -> void: _event("join_failed:" + r))
@@ -60,6 +61,15 @@ func _ready() -> void:
 	Session.session_finished.connect(_on_session_finished)
 	app.menu.screen_changed.connect(func(s: StringName) -> void: _event("screen:" + s))
 	_event("ready")
+
+
+## `--size=<id>`: this peer's profile wears that body size (a colour no default slot uses, so
+## the "own colour" check still holds); the menu sends it with Host / Join.
+func _wear_size(size_id: String) -> void:
+	var l := Cosmetics.default_loadout(0)
+	l["primary"] = Cosmetics.palette(&"primary")[10]
+	l["size"] = size_id
+	app.menu.set(&"_loadout", l)
 
 
 func _on_players_spawned(spawned: Array[Player]) -> void:
@@ -232,9 +242,13 @@ func _write() -> void:
 		if not is_instance_valid(p):
 			continue
 		var pos := p.global_position
+		var visuals := p.get_component(&"visuals")
+		var capsule := (p.get_node(^"CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
 		ps[str(slot)] = {
 			"x": pos.x, "y": pos.y, "z": pos.z, "alive": p.alive, "frozen": p.frozen,
 			"auth": p.get_multiplayer_authority(), "local": p.is_authority(), "bot": p.is_bot,
+			"size": str(p.loadout.get("size", "")), "scale": visuals.scale.x if visuals else -1.0,
+			"radius": capsule.radius if capsule else -1.0,
 		}
 	var roster: Dictionary = {}
 	for slot: int in Net.roster:

@@ -91,6 +91,37 @@ const SECONDARY: Array[String] = [
 	"#7a4a2a", # 11 brown
 ]
 
+## Body sizes (loadout key `size`), in wardrobe order; free for everyone. `scale` sizes the whole
+## blob (model, worn items, collision capsule, name tag). The other numbers multiply component
+## tuning on top of whatever the minigame set (the `size` player component applies them):
+## `speed` movement.max_speed, `jump` jump.jump_height, `reach` shove.reach and shove.width;
+## `shove` (pushes you give) and `knockback` (pushes you take) are in felt slide distance: the
+## component applies their square root to shove.force / status.knockback_multiplier.
+## Starting point: docs/superpowers/specs/2026-09-30-night-features-design.md section 3;
+## tuned with game/tests/test_size_balance.gd (multipliers only; 96 mixed bot rounds, gate:
+## win-rate spread <= 8 points, every size wins in both minigames). Shove/knockback pairs tried
+## (small / big): 0.90-1.10 / 1.10-0.92 spread 13.5; 0.92-1.08 / 1.08-0.93 15.1;
+## 0.90-1.06 / 1.10-0.95 17.7; 0.95-1.06 / 1.06-0.95 7.3; 0.94-1.07 / 1.07-0.94 4.7 (chosen:
+## small 14.1 / normal 17.2 / big 18.8 % wins).
+const SIZES: Array[Dictionary] = [
+	{"id": "small", "name": "Small", "blurb": "Fast and bouncy, but shoves softer and flies further.",
+		"scale": 0.82, "speed": 1.15, "jump": 1.08, "shove": 0.94, "reach": 0.97, "knockback": 1.07},
+	{"id": "normal", "name": "Normal", "blurb": "The classic blob: good at everything.",
+		"scale": 1.0, "speed": 1.0, "jump": 1.0, "shove": 1.0, "reach": 1.0, "knockback": 1.0},
+	{"id": "big", "name": "Big", "blurb": "Shoves harder and is hard to budge, but slow and heavy.",
+		"scale": 1.22, "speed": 0.88, "jump": 0.94, "shove": 1.07, "reach": 1.04, "knockback": 0.94},
+]
+const DEFAULT_SIZE := "normal"
+
+
+## The SIZES entry for `id`; the normal entry for anything else.
+static func size_entry(id: Variant) -> Dictionary:
+	for entry: Dictionary in SIZES:
+		if entry["id"] == id:
+			return entry
+	return SIZES[1]
+
+
 ## Per roster slot 0..7: [primary index, secondary index, hat id].
 const DEFAULTS: Array[Array] = [
 	[0, 1, "party_cone"],

@@ -15,7 +15,8 @@ signal eliminated(reason: StringName)
 signal respawned(xform: Transform3D)
 
 ## Components that get physics_tick(), in this order, before move_and_slide().
-const TICK_ORDER: Array[StringName] = [&"controller", &"status", &"movement", &"jump", &"shove"]
+## `size` goes first: it scales the others' tuning before they use it this tick.
+const TICK_ORDER: Array[StringName] = [&"size", &"controller", &"status", &"movement", &"jump", &"shove"]
 
 ## Stable identity for the whole session, 0..7. Set by Stage at spawn.
 var slot: int = -1
@@ -47,6 +48,7 @@ func _enter_tree() -> void:
 func _physics_process(delta: float) -> void:
 	if not alive or not is_authority():
 		return
+	_tick(&"size", delta)
 	_tick(&"controller", delta)
 	if frozen:
 		intent.clear()

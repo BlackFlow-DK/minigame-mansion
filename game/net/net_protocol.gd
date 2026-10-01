@@ -13,7 +13,7 @@ const VERSION := 1
 const GAME_ID := "minigame-mansion"
 const BEACON_MAGIC := "MMANSION-LAN"
 const MAX_NAME_LENGTH := 16
-const LOADOUT_KEYS: Array[String] = ["primary", "secondary", "hat", "face", "neck", "back"]
+const LOADOUT_KEYS: Array[String] = ["primary", "secondary", "hat", "face", "neck", "back", "size"]
 
 const REASON_TIMEOUT := "timeout"
 const REASON_FULL := "full"

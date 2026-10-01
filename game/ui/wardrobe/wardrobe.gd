@@ -19,9 +19,10 @@ signal loadout_changed(loadout: Dictionary)
 
 const THEME_PATH := "res://ui/theme/mansion_theme.tres"
 const DESIGN_SIZE := Vector2(1280, 720)
-const TABS: Array[StringName] = [&"colour", &"hat", &"face", &"neck", &"back"]
-const TAB_TITLES: Dictionary = {&"colour": "Colour", &"hat": "Hat", &"face": "Face", &"neck": "Neck", &"back": "Back"}
+const TABS: Array[StringName] = [&"colour", &"body", &"hat", &"face", &"neck", &"back"]
+const TAB_TITLES: Dictionary = {&"colour": "Colour", &"body": "Body", &"hat": "Hat", &"face": "Face", &"neck": "Neck", &"back": "Back"}
 const GRID_COLUMNS := 5
+const SIZE_TILE_SIZE := Vector2(196, 356)
 const SWATCH_COLUMNS := 8
 const TILE_SIZE := Vector2(108, 138)
 const SWATCH_SIZE := 60.0
@@ -56,6 +57,8 @@ var pages: Dictionary = {}         # tab -> Control
 var swatches: Dictionary = {}
 ## slot -> Array of tile Buttons (catalog order, "None" first). Meta: &"slot", &"id".
 var tiles: Dictionary = {}
+## Body page: one big tile Button per size (small, normal, big). Meta: &"id".
+var size_tiles: Array = []
 
 var _frame: Control
 var _thumb_rects: Dictionary = {}  # "slot:id" -> TextureRect
@@ -97,7 +100,7 @@ func _ready() -> void:
 
 # --- Public API ------------------------------------------------------------------------------
 
-## Shows the page `tab` (&"colour", &"hat", &"face", &"neck", &"back").
+## Shows the page `tab` (&"colour", &"body", &"hat", &"face", &"neck", &"back").
 func open_tab(tab: StringName) -> void:
 	if not pages.has(tab):
 		return
@@ -131,7 +134,26 @@ func select_item(slot: StringName, id: String) -> bool:
 	return true
 
 
-## A random look: palette colours and a random item in most slots.
+## Sets the body size ("small", "normal", "big"). Returns false for an unknown id.
+func select_size(id: String) -> bool:
+	if not Cosmetics.is_valid_size(id):
+		return false
+	if loadout.get("size", "") == id:
+		return true
+	loadout["size"] = id
+	_loadout_updated(&"body")
+	return true
+
+
+func get_size_tile(id: String) -> Button:
+	for b: Button in size_tiles:
+		if String(b.get_meta(&"id")) == id:
+			return b
+	return null
+
+
+## A random look: palette colours and a random item in most slots (the body size is kept:
+## it changes how you play, not just how you look).
 func randomise() -> void:
 	var next := loadout
 	for attempt in 6:
@@ -143,9 +165,11 @@ func randomise() -> void:
 	Sfx.play(&"respawn")
 
 
-## Back to the default look for this player's slot (the name is kept).
+## Back to the default look for this player's slot (the name and the body size are kept).
 func reset() -> void:
+	var keep_size: String = loadout.get("size", "normal")
 	loadout = Cosmetics.default_loadout(maxi(Net.local_slot(), 0))
+	loadout["size"] = keep_size
 	_loadout_updated(&"random")
 
 
@@ -206,6 +230,7 @@ func _random_loadout() -> Dictionary:
 		if not items.is_empty() and _rng.randf() < float(RANDOM_CHANCE.get(slot, 0.5)):
 			id = items[_rng.randi_range(0, items.size() - 1)]["id"]
 		l[String(slot)] = id
+	l["size"] = loadout.get("size", "normal")
 	return Cosmetics.sanitize(l)
 
 
@@ -218,6 +243,12 @@ func _sync_selection() -> void:
 	for slot: StringName in tiles:
 		for b: Button in tiles[slot]:
 			b.set_pressed_no_signal(String(b.get_meta(&"id")) == loadout[String(slot)])
+	for b: Button in size_tiles:
+		b.set_pressed_no_signal(String(b.get_meta(&"id")) == loadout.get("size", ""))
+		for icon: Node in b.find_children("*", "Control", true, false):
+			if icon is _SizeIcon:
+				(icon as _SizeIcon).colour = Color.html(loadout["primary"])
+				icon.queue_redraw()
 
 
 func _on_thumb_ready(slot: StringName, id: String, texture: Texture2D) -> void:
@@ -302,6 +333,8 @@ func _page_focus_target() -> Control:
 func _page_groups(tab: StringName) -> Array:
 	if tab == &"colour":
 		return [swatches[&"primary"], swatches[&"secondary"]]
+	if tab == &"body":
+		return [size_tiles]
 	return [tiles[tab]]
 
 
@@ -333,6 +366,8 @@ func _link_focus() -> void:
 	# Grids.
 	var groups := _page_groups(current_tab)
 	var columns := SWATCH_COLUMNS if current_tab == &"colour" else GRID_COLUMNS
+	if current_tab == &"body":
+		columns = size_tiles.size()
 	var order: Array[Control] = []
 	order.append_array(tab_row)
 	for gi in groups.size():
@@ -481,7 +516,7 @@ func _build_panel() -> Control:
 	var col := _vbox(10)
 	panel.add_child(col)
 
-	var tab_row := _hbox(10)
+	var tab_row := _hbox(8)
 	tab_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	col.add_child(tab_row)
 	for t: StringName in TABS:
@@ -491,7 +526,8 @@ func _build_panel() -> Control:
 		b.theme_type_variation = &"ChipButton"
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_ALL
-		b.custom_minimum_size = Vector2(108, 0)
+		b.custom_minimum_size = Vector2(88, 0)
+		b.add_theme_font_size_override(&"font_size", 21)
 		b.set_meta(&"sfx_press", &"ui_click")
 		b.pressed.connect(_on_tab_pressed.bind(t))
 		b.focus_entered.connect(_on_tab_focused.bind(t))
@@ -506,6 +542,9 @@ func _build_panel() -> Control:
 	var colour_page := _build_colour_page()
 	pages[&"colour"] = colour_page
 	stack.add_child(colour_page)
+	var body_page := _build_body_page()
+	pages[&"body"] = body_page
+	stack.add_child(body_page)
 	for slot: StringName in Cosmetics.SLOTS:
 		var page := _build_item_page(slot)
 		pages[slot] = page
@@ -553,6 +592,78 @@ func _build_colour_page() -> Control:
 			list.append(s)
 		swatches[kind] = list
 	return page
+
+
+## Body page: three big tiles (Small / Normal / Big), each with a silhouette and its trade-off.
+func _build_body_page() -> Control:
+	var page := _vbox(12)
+	page.name = "Page_body"
+	var head := Label.new()
+	head.text = "Body size"
+	head.theme_type_variation = &"HeaderLabel"
+	head.add_theme_font_size_override(&"font_size", 24)
+	page.add_child(head)
+	var row := _hbox(GAP + 4)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	page.add_child(row)
+	size_tiles = []
+	for entry: Dictionary in Cosmetics.sizes():
+		var tile := _make_size_tile(entry)
+		row.add_child(tile)
+		size_tiles.append(tile)
+	var note := Label.new()
+	note.text = "Free for everyone. Your size changes how you play, so pick your style!"
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override(&"font_size", 16)
+	note.modulate = Color(1, 1, 1, 0.75)
+	page.add_child(note)
+	return page
+
+
+func _make_size_tile(entry: Dictionary) -> Button:
+	var id: String = entry["id"]
+	var b := Button.new()
+	b.name = "Tile_size_%s" % id
+	b.toggle_mode = true
+	b.theme_type_variation = &"ChipButton"
+	b.focus_mode = Control.FOCUS_ALL
+	b.custom_minimum_size = SIZE_TILE_SIZE
+	b.tooltip_text = "%s: %s" % [entry["name"], entry["blurb"]]
+	b.set_meta(&"id", id)
+	b.set_meta(&"sfx_press", &"ui_click")
+	b.pressed.connect(_on_size_pressed.bind(id))
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override(&"separation", 4)
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 10
+	box.offset_right = -10
+	box.offset_top = 10
+	box.offset_bottom = -12
+	b.add_child(box)
+	var icon := _SizeIcon.new()
+	icon.body_scale = float(entry["scale"])
+	icon.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(icon)
+	var title := Label.new()
+	title.text = entry["name"]
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override(&"font_size", 28)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(title)
+	var blurb := Label.new()
+	blurb.text = entry["blurb"]
+	blurb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	blurb.custom_minimum_size = Vector2(0, 66)
+	blurb.max_lines_visible = 3
+	blurb.add_theme_font_size_override(&"font_size", 16)
+	blurb.add_theme_constant_override(&"line_spacing", -2)
+	blurb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(blurb)
+	return b
 
 
 func _build_item_page(slot: StringName) -> Control:
@@ -701,6 +812,11 @@ func _on_tile_pressed(slot: StringName, id: String) -> void:
 	_sync_selection()
 
 
+func _on_size_pressed(id: String) -> void:
+	select_size(id)
+	_sync_selection()
+
+
 # --- Helpers ---------------------------------------------------------------------------------
 
 static func _vbox(separation: int) -> VBoxContainer:
@@ -725,6 +841,44 @@ static func _button(text: String, variation: StringName, min_width: float) -> Bu
 	b.focus_mode = Control.FOCUS_ALL
 	b.custom_minimum_size = Vector2(min_width, 0)
 	return b
+
+
+## A body-size tile picture: the blob at this size in the body colour, standing next to a
+## dashed outline of the normal blob, on a little floor line.
+class _SizeIcon extends Control:
+	var body_scale: float = 1.0
+	var colour: Color = Color("#e0303a")
+
+	func _draw() -> void:
+		var ppm := minf(size.x / 1.15, size.y / 1.4)
+		var ground := size.y - 10.0
+		var cx := size.x * 0.5
+		var ink := Color("#2e2a33")
+		draw_line(Vector2(cx - ppm * 0.62, ground), Vector2(cx + ppm * 0.62, ground), Color(ink, 0.35), 3.0, true)
+		var ref := _outline(cx, ground, ppm)
+		for i in range(0, ref.size() - 1, 2):
+			draw_line(ref[i], ref[i + 1], Color(ink, 0.3), 2.0, true)
+		var body := _outline(cx, ground, ppm * body_scale)
+		draw_colored_polygon(body, colour)
+		body.append(body[0])
+		draw_polyline(body, ink, 3.0, true)
+		var s := ppm * body_scale
+		for sgn: float in [-1.0, 1.0]:
+			var eye := Vector2(cx + sgn * 0.14 * s, ground - 0.66 * s)
+			draw_circle(eye, 0.075 * s, Color.WHITE)
+			draw_circle(eye + Vector2(0.0, 0.01 * s), 0.042 * s, ink)
+
+	## The blob's side outline (0.84 m wide, 1 m tall dome) at `ppm` pixels per metre.
+	func _outline(cx: float, ground: float, ppm: float) -> PackedVector2Array:
+		var pts := PackedVector2Array()
+		for i in 48:
+			var t := TAU * i / 48.0
+			var c := cos(t)
+			var sn := sin(t)
+			var x := signf(c) * pow(absf(c), 0.8) * 0.42
+			var y := 0.5 + signf(sn) * pow(absf(sn), 0.9 if sn > 0.0 else 0.6) * 0.5
+			pts.append(Vector2(cx + x * ppm, ground - y * ppm))
+		return pts
 
 
 ## "Nothing in this slot": a soft circle with a slash.
