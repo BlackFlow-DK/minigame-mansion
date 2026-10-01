@@ -2,8 +2,10 @@ extends Node
 ## Autoload `Cosmetics`: the cosmetic catalog, colour palettes, the local profile and applying a
 ## loadout to a blob model. Owner: cosmetics system. Data lives in `catalog.gd`.
 ##
-## Loadout: `{ "primary": "#rrggbb", "secondary": "#rrggbb", "hat": id, "face": id, "neck": id, "back": id }`
-## ("" = nothing in that slot). Anything that arrives from the network goes through `sanitize()`.
+## Loadout: `{ "primary": "#rrggbb", "secondary": "#rrggbb", "hat": id, "face": id, "neck": id, "back": id,
+## "size": "small" | "normal" | "big" }` ("" = nothing in that slot). Anything that arrives from the
+## network goes through `sanitize()`. The size itself is applied by the `size` player component.
+## Dev: user arg `--sizes=mixed` gives default loadouts a size by slot (normal, small, big, ...).
 
 const CatalogData := preload("res://cosmetics/catalog.gd")
 const Spinner := preload("res://cosmetics/spinner.gd")
@@ -11,6 +13,8 @@ const Spinner := preload("res://cosmetics/spinner.gd")
 ## Item slots, in the order the wardrobe shows them.
 const SLOTS: Array[StringName] = CatalogData.SLOTS
 const PROFILE_PATH := "user://profile.json"
+## 1: name + loadout. 2: also coins, unlocked, stats, claimed (Mansion Coins).
+const PROFILE_VERSION := 2
 const NAME_MAX := 16
 const DEFAULT_NAME := "Player"
 const MODEL_DIR := "res://assets/models/cosmetics/"
@@ -34,6 +38,8 @@ var _scenes: Dictionary = {}
 var _tinted: Dictionary = {}
 ## Warning keys already printed (warn once per bad id / colour).
 var _warned: Dictionary = {}
+## -1 not read yet, 0/1: the `--sizes=mixed` dev arg.
+var _mixed_sizes: int = -1
 
 
 func _init() -> void:
@@ -53,12 +59,12 @@ func _init() -> void:
 # --- Catalog -------------------------------------------------------------------------------
 
 ## The choices for `slot` (&"hat", &"face", &"neck", &"back"), first the "None" choice (id "").
-## Each entry: `{id, slot, name, model, offset, rotation, scale}` plus optional flags
-## (`spin_child`, `spin_speed`). Copies: changing them does not change the catalog.
+## Each entry: `{id, slot, name, model, tier, offset, rotation, scale}` plus optional flags
+## (`free`, `spin_child`, `spin_speed`). Copies: changing them does not change the catalog.
 func catalog(slot: StringName) -> Array:
 	if not _by_slot.has(slot):
 		return []
-	var out: Array = [{"id": "", "slot": slot, "name": "None", "model": "",
+	var out: Array = [{"id": "", "slot": slot, "name": "None", "model": "", "tier": "", "free": true,
 		"offset": Vector3.ZERO, "rotation": Vector3.ZERO, "scale": Vector3.ONE}]
 	for entry: Dictionary in _by_slot[slot]:
 		out.append(entry.duplicate(true))
@@ -76,6 +82,36 @@ func is_valid_item(slot: StringName, id: String) -> bool:
 	return id == "" or (_index.get(slot, {}) as Dictionary).has(id)
 
 
+## True for "" (nothing) and the starter set every player owns (`free` in the catalog).
+## Unknown ids are not free.
+func is_free_item(slot: StringName, id: String) -> bool:
+	if id == "":
+		return true
+	var entry: Dictionary = (_index.get(slot, {}) as Dictionary).get(id, {})
+	return bool(entry.get("free", false))
+
+
+## The unlock tier of an item ("common", "rare", "epic"); "" for nothing or an unknown id.
+func item_tier(slot: StringName, id: String) -> String:
+	var entry: Dictionary = (_index.get(slot, {}) as Dictionary).get(id, {})
+	return String(entry.get("tier", ""))
+
+
+## Mansion Coins to unlock an item: 0 for free (starter) items and "", the tier price otherwise
+## (-1 for an unknown id).
+func item_price(slot: StringName, id: String) -> int:
+	if not is_valid_item(slot, id):
+		return -1
+	if is_free_item(slot, id):
+		return 0
+	return int(CatalogData.TIER_PRICES.get(item_tier(slot, id), CatalogData.TIER_PRICES["common"]))
+
+
+## "slot:id", the key of an item in the profile's `unlocked` list.
+static func unlock_key(slot: StringName, id: String) -> String:
+	return "%s:%s" % [slot, id]
+
+
 ## The curated colours as "#rrggbb": `&"primary"` (16, body) or `&"secondary"` (12, belly,
 ## hands, feet). The first eight primaries are the defaults of slots 0..7.
 func palette(kind: StringName) -> Array[String]:
@@ -88,20 +124,45 @@ func palette(kind: StringName) -> Array[String]:
 
 
 ## The loadout a player in roster slot `slot_index` gets when they have not chosen one:
-## a distinct colour pair and hat for each of the 8 slots.
+## a distinct colour pair and hat for each of the 8 slots, normal size (see `--sizes=mixed`).
 func default_loadout(slot_index: int) -> Dictionary:
 	var d: Array = CatalogData.DEFAULTS[posmod(slot_index, CatalogData.DEFAULTS.size())]
 	return {
 		"primary": CatalogData.PRIMARY[d[0]],
 		"secondary": CatalogData.SECONDARY[d[1]],
 		"hat": d[2], "face": "", "neck": "", "back": "",
+		"size": _default_size(slot_index),
 	}
 
 
-## A clean loadout from anything (e.g. received over the network): exactly the six keys,
+## The body sizes in wardrobe order: `{id, name, blurb, scale, speed, jump, shove, reach, knockback}`
+## (see catalog.gd). Copies.
+func sizes() -> Array:
+	var out: Array = []
+	for entry: Dictionary in CatalogData.SIZES:
+		out.append(entry.duplicate())
+	return out
+
+
+## The size entry for `id` (a copy); the normal size for anything unknown.
+func size_info(id: Variant) -> Dictionary:
+	return CatalogData.size_entry(id).duplicate()
+
+
+## True if `id` is one of the size ids.
+func is_valid_size(id: Variant) -> bool:
+	for entry: Dictionary in CatalogData.SIZES:
+		if entry["id"] == id:
+			return true
+	return false
+
+
+## A clean loadout from anything (e.g. received over the network): exactly the seven keys,
 ## colours as lowercase "#rrggbb" (missing or bad ones replaced by `default_loadout(fallback_slot)`'s),
-## item ids that are not in the catalog for their slot replaced by "". Not a Dictionary at all:
-## `default_loadout(fallback_slot)`.
+## item ids that are not in the catalog for their slot replaced by "", a size that is not a
+## size id replaced by the fallback's. Not a Dictionary at all: `default_loadout(fallback_slot)`.
+## Items this player has not unlocked are kept: unlocks only gate the local wardrobe, and other
+## players' loadouts carry items they unlocked.
 func sanitize(loadout: Variant, fallback_slot: int = 0) -> Dictionary:
 	var fallback := default_loadout(fallback_slot)
 	if not (loadout is Dictionary):
@@ -115,6 +176,8 @@ func sanitize(loadout: Variant, fallback_slot: int = 0) -> Dictionary:
 		var value: Variant = src.get(String(slot), "")
 		var id: String = value if value is String else ""
 		out[String(slot)] = id if is_valid_item(slot, id) else ""
+	var size_id: Variant = src.get("size")
+	out["size"] = size_id if size_id is String and is_valid_size(size_id) else fallback["size"]
 	return out
 
 
@@ -133,22 +196,100 @@ func sanitize_name(player_name: Variant) -> String:
 
 ## The saved local profile `{ "name": String, "loadout": Dictionary }`. A missing or corrupt
 ## file gives the default name and `default_loadout(0)`; the loadout is always sanitized.
+## The progress saved alongside (coins, unlocks, stats) is `load_progress()`.
 func load_profile() -> Dictionary:
 	var fallback := {"name": DEFAULT_NAME, "loadout": default_loadout(0)}
-	if not FileAccess.file_exists(profile_path):
+	var data: Variant = _read_profile_data()
+	if not (data is Dictionary):
 		return fallback
+	return {"name": sanitize_name(data.get("name", DEFAULT_NAME)), "loadout": sanitize(data.get("loadout", {}))}
+
+
+## Saves the local profile (name sanitized, loadout sanitized), keeping the saved progress.
+## Returns OK or the file error.
+func save_profile(player_name: String, loadout: Dictionary) -> Error:
+	return _write_profile(sanitize_name(player_name), sanitize(loadout), load_progress())
+
+
+## The progress saved in the profile (owned by the `Progression` autoload):
+## `{ "coins": int >= 0, "unlocked": Array[String] ("slot:id" of bought items), "stats": {String: int},
+## "claimed": Array[String] (one-time rewards already given) }`. A missing or corrupt file gives
+## zero / empty. A profile from before coins existed (no "coins" key) keeps the items it is
+## wearing: they count as unlocked, so nobody loses a look they already had.
+func load_progress() -> Dictionary:
+	var data: Variant = _read_profile_data()
+	if not (data is Dictionary):
+		return sanitize_progress({})
+	var src: Dictionary = data
+	if not src.has("coins"):
+		var worn := sanitize(src.get("loadout", {}))
+		var keep: Array[String] = []
+		for slot in SLOTS:
+			var id: String = worn[String(slot)]
+			if not is_free_item(slot, id):
+				keep.append(unlock_key(slot, id))
+		return sanitize_progress({"unlocked": keep})
+	return sanitize_progress(src)
+
+
+## Saves `progress` (see `load_progress`, sanitized) into the profile, keeping the saved name
+## and loadout. Returns OK or the file error.
+func save_progress(progress: Dictionary) -> Error:
+	var p := load_profile()
+	return _write_profile(p["name"], p["loadout"], sanitize_progress(progress))
+
+
+## Clean progress from anything: coins a non-negative int, `unlocked` only known non-free items
+## ("slot:id", no duplicates), `stats` String -> int, `claimed` unique non-empty strings.
+func sanitize_progress(src: Variant) -> Dictionary:
+	var d: Dictionary = src if src is Dictionary else {}
+	var coins_v: Variant = d.get("coins", 0)
+	var coins := maxi(0, int(coins_v)) if (coins_v is int or coins_v is float) else 0
+	var unlocked: Array[String] = []
+	var raw_unlocked: Variant = d.get("unlocked", [])
+	if raw_unlocked is Array:
+		for v: Variant in raw_unlocked:
+			if not (v is String or v is StringName):
+				continue
+			var parts := String(v).split(":", true, 1)
+			if parts.size() != 2:
+				continue
+			var slot := StringName(parts[0])
+			if SLOTS.has(slot) and parts[1] != "" and is_valid_item(slot, parts[1]) \
+					and not is_free_item(slot, parts[1]) and not unlocked.has(String(v)):
+				unlocked.append(String(v))
+	var stats: Dictionary = {}
+	var raw_stats: Variant = d.get("stats", {})
+	if raw_stats is Dictionary:
+		for k: Variant in raw_stats:
+			var v: Variant = raw_stats[k]
+			if (k is String or k is StringName) and (v is int or v is float):
+				stats[String(k)] = maxi(0, int(v))
+	var claimed: Array[String] = []
+	var raw_claimed: Variant = d.get("claimed", [])
+	if raw_claimed is Array:
+		for v: Variant in raw_claimed:
+			if (v is String or v is StringName) and String(v) != "" and not claimed.has(String(v)):
+				claimed.append(String(v))
+	return {"coins": coins, "unlocked": unlocked, "stats": stats, "claimed": claimed}
+
+
+## The parsed profile Dictionary, or null when the file is missing or unreadable (warns once).
+func _read_profile_data() -> Variant:
+	if not FileAccess.file_exists(profile_path):
+		return null
 	var text := FileAccess.get_file_as_string(profile_path)
 	var json := JSON.new()
 	if text == "" or json.parse(text) != OK or not (json.data is Dictionary):
 		_warn_once("profile:" + profile_path, "Cosmetics: profile %s is unreadable, using defaults" % profile_path)
-		return fallback
-	var data: Dictionary = json.data
-	return {"name": sanitize_name(data.get("name", DEFAULT_NAME)), "loadout": sanitize(data.get("loadout", {}))}
+		return null
+	return json.data
 
 
-## Saves the local profile (name sanitized, loadout sanitized). Returns OK or the file error.
-func save_profile(player_name: String, loadout: Dictionary) -> Error:
-	var data := {"version": 1, "name": sanitize_name(player_name), "loadout": sanitize(loadout)}
+func _write_profile(player_name: String, loadout: Dictionary, progress: Dictionary) -> Error:
+	var data := {"version": PROFILE_VERSION, "name": player_name, "loadout": loadout,
+		"coins": progress["coins"], "unlocked": progress["unlocked"], "stats": progress["stats"],
+		"claimed": progress["claimed"]}
 	var f := FileAccess.open(profile_path, FileAccess.WRITE)
 	if f == null:
 		var err := FileAccess.get_open_error()
@@ -301,6 +442,15 @@ func _hex(value: Variant) -> String:
 	if value is String and value != "" and Color.html_is_valid(value):
 		return "#" + Color.html(value).to_html(false)
 	return ""
+
+
+## "normal", or with the dev user arg `--sizes=mixed` normal / small / big by slot.
+func _default_size(slot_index: int) -> String:
+	if _mixed_sizes == -1:
+		_mixed_sizes = 1 if OS.get_cmdline_user_args().has("--sizes=mixed") else 0
+	if _mixed_sizes == 1:
+		return ["normal", "small", "big"][posmod(slot_index, 3)]
+	return CatalogData.DEFAULT_SIZE
 
 
 func _warn_once(key: String, message: String) -> void:

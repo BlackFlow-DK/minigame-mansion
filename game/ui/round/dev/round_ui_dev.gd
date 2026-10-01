@@ -4,6 +4,9 @@ extends Node3D
 ## User args after `--`:
 ##   --players=N   2..8 (default 4)
 ##   --phase=X     intro | hud | results | podium | all (default all: loops through every panel)
+##   --coins=N     Mansion Coins before the round (default 0); Progression never saves here
+##   --local-place=P  put you (slot 0) at place P in the round and the final ranking
+##   --half-rate   offline half rate on (default off here, so the numbers match a LAN game)
 ## Esc quits.
 
 const DEV_ARENA: PackedScene = preload("res://dev/dev_arena.tscn")
@@ -14,16 +17,26 @@ const NAMES: Array[String] = ["Sander", "Mads", "Freja", "Bartholomew the Great"
 
 var _count: int = 4
 var _phase: String = "all"
+var _local_place: int = 0
 
 
 func _ready() -> void:
 	# Real-time animations: cap the frame rate so screenshot frame counts map to seconds.
 	Engine.max_fps = 60
+	Progression.persist = false
+	Progression.reset()
+	Progression.offline_half_rate = false
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--players="):
 			_count = clampi(arg.trim_prefix("--players=").to_int(), 2, Net.MAX_PLAYERS)
 		elif arg.begins_with("--phase="):
 			_phase = arg.trim_prefix("--phase=")
+		elif arg.begins_with("--coins="):
+			Progression.coins = maxi(0, arg.trim_prefix("--coins=").to_int())
+		elif arg.begins_with("--local-place="):
+			_local_place = arg.trim_prefix("--local-place=").to_int()
+		elif arg == "--half-rate":
+			Progression.offline_half_rate = true
 	Net.start_offline()
 	for i in _count - 1:
 		Net.add_bot()
@@ -78,7 +91,7 @@ func _podium() -> void:
 	var ranking: Array[int] = []
 	ranking.assign(Session.scores.keys())
 	ranking.sort_custom(func(a: int, b: int) -> bool: return Session.scores[a] > Session.scores[b])
-	Session.session_finished.emit(ranking)
+	Session.session_finished.emit(_place_local(ranking))
 
 
 func _loop() -> void:
@@ -102,7 +115,17 @@ func _ranking() -> Array[int]:
 	for s in order:
 		if Net.roster.has(s):
 			ranking.append(s)
-	return ranking
+	return _place_local(ranking)
+
+
+## `ranking` with slot 0 moved to `--local-place` (unchanged without it).
+func _place_local(ranking: Array[int]) -> Array[int]:
+	if _local_place < 1:
+		return ranking
+	var out := ranking.duplicate()
+	out.erase(0)
+	out.insert(clampi(_local_place - 1, 0, out.size()), 0)
+	return out
 
 
 func _points(ranking: Array[int]) -> Dictionary:

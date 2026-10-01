@@ -26,7 +26,7 @@ Design spec: `docs/superpowers/specs/2026-09-30-minigame-mansion-design.md`.
 ```gdscript
 class_name PlayerComponent extends Node3D
 var player: Player                                 # set by Player (in its _enter_tree) before the component's _ready
-func physics_tick(_delta: float) -> void: pass     # authority only, in tick order; only the 5 ticked components get it
+func physics_tick(_delta: float) -> void: pass     # authority only, in tick order; only the 6 ticked components get it
 func post_tick(_delta: float) -> void: pass        # authority only, every component, after move_and_slide()
 ```
 
@@ -49,7 +49,7 @@ Tuning: a component keeps its numbers in exported vars on its own component scri
 
 ### Tick order (authority only, inside `Player._physics_process`)
 
-`controller` (human input or bot brain fills `intent`) -> [`intent` cleared if `frozen`] -> `status` -> [`intent` cleared if `frozen` or `control_locked`] -> `movement` -> `jump` -> `shove` -> `move_and_slide()` -> `post_tick` on every component (child order). Nothing ticks while `alive` is false.
+`size` (scales the others' tuning) -> `controller` (human input or bot brain fills `intent`) -> [`intent` cleared if `frozen`] -> `status` -> [`intent` cleared if `frozen` or `control_locked`] -> `movement` -> `jump` -> `shove` -> `move_and_slide()` -> `post_tick` on every component (child order). Nothing ticks while `alive` is false.
 
 Remote copies do not tick; the `sync` component moves them. Anything that must run on every peer (visuals, sound, the sync itself) uses its own `_process`/`_physics_process`, not the ticks.
 
@@ -94,6 +94,7 @@ Visuals, effects and sound never get called by mechanics. They listen to these s
 | `shove` | `ShoveComponent` | shove | the action: hit detection, cooldown, calls `victim.apply_impulse` |
 | `visuals` | `VisualsComponent` | character animator | shows the blob model, procedural animation (stub: capsule with eyes) |
 | `cosmetics` | `CosmeticsComponent` | cosmetics system | applies `loadout` to the model |
+| `size` | `SizeComponent` | cosmetics system | body size from `loadout.size`: scale, capsule, tuning multipliers |
 | `fx` | `FxComponent` | look and effects | particles on events |
 | `sfx` | `SfxComponent` | audio | sounds on events |
 | `sync` | `SyncComponent` | player sync | replicates state and events to other peers |
@@ -112,7 +113,14 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 - Materials named `PlayerPrimary` and `PlayerSecondary` are recoloured per player. All other materials keep their colour.
 - Socket positions (Godot space): `HatSocket` (0, 1.00, 0) top of head; `FaceSocket` (0, 0.68, 0.37) between the eyes on the surface; `NeckSocket` (0, 0.40, 0) where the body is 0.40 m in radius; `BackSocket` (0, 0.50, -0.37).
 - Cosmetic models are authored with their origin at the socket they attach to, sized for the numbers above: `game/assets/models/cosmetics/<slot>_<id>.glb`, slots `hat`, `face`, `neck`, `back`.
-- Loadout dictionary: `{ "primary": "#rrggbb", "secondary": "#rrggbb", "hat": id, "face": id, "neck": id, "back": id }`; an empty string means nothing in that slot.
+- Loadout dictionary: `{ "primary": "#rrggbb", "secondary": "#rrggbb", "hat": id, "face": id, "neck": id, "back": id, "size": "small" | "normal" | "big" }`; an empty string means nothing in that slot; a missing or unknown `size` is `normal`. Anything that sanitizes a loadout must keep `size`.
+
+### Body size (`size` component, owner: cosmetics system)
+
+`game/player/components/size.*` (`SizeComponent`) reads `player.loadout["size"]` on every peer (numbers: `SIZES` in `game/cosmetics/catalog.gd`; `Cosmetics.sizes()`, `size_info(id)`).
+- Looks: scales the `visuals` component node (the model root's parent: squash, hats and items follow), gives the player its own collision capsule scaled (feet stay at y=0), scales `NameTag.height` and `FxComponent.head_height`.
+- Tuning: multiplies `movement.max_speed`, `jump.jump_height`, `shove.force`, `shove.reach`, `shove.width`, `status.knockback_multiplier` (the catalog gives shove/knockback as felt slide distance; the impulse gets the square root). It remembers the value it wrote; any other value (a minigame's write) becomes the new base, then `base * factor` is written back. Factors are 1 while `frozen`, so `_setup`/`_start` read and write base values. `SizeComponent.base_of(component, property)` gives the base.
+- Minigames: set tuning to absolute values (from what you read in `_setup`/`_start`), per frame if you like; never `*=` mid-round (the factor would compound).
 - Art scripts: `art/scripts/character/`, `art/scripts/cosmetics/`, `art/scripts/env/`, `art/scripts/props/`, all through `artlib` (multi-part: `finalize`, `empty`, `set_parent`, `from_godot`, `export_glb(name, family="character")`).
 
 ## Autoloads
@@ -121,9 +129,10 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 |---|---|---|
 | `Net` | net | `host_game(game_name: String) -> Error`, `join_game(address: String) -> Error`, `start_offline()`, `leave()`, `start_discovery()`, `stop_discovery()`, `is_host() -> bool`, `local_slot() -> int` (-1 if none), `roster: Dictionary[int, PlayerInfo]` (slot -> `PlayerInfo{slot, peer_id, name, is_bot, loadout}`, `game/net/player_info.gd`; `peer_id` is the simulating peer: the owner, or the host (1) for bots), `add_bot() -> int` (slot, -1 if full), `remove_bot(slot)`, `set_local_profile(player_name, loadout)`, `MAX_PLAYERS = 8`, `DEFAULT_PORT = 24565`; *`roster_changed`*, *`games_found(games: Array)`*, *`join_failed(reason: String)`*, *`server_closed`*. Offline: this peer is 1 and the local human is slot 0 |
 | `Session` | session | `start_session(rounds: int)` (host), `state: State`, `scores: Dictionary[int, int]` (slot -> points), `round_index` (0-based, -1 before the first), `round_count`, `current_minigame: Minigame`; *`state_changed(state: State)`*, *`round_intro(info: Dictionary, index: int)`* (info: `{id, title, rule_text}`), *`round_started`*, *`round_finished(ranking: Array[int], points: Dictionary)`*, *`session_finished(final_ranking: Array[int])`*. `enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM }` |
-| `Cosmetics` | cosmetics system | `catalog(slot: StringName) -> Array`, `default_loadout(slot_index: int) -> Dictionary`, `load_profile() -> Dictionary` (`{name, loadout}`), `save_profile(player_name, loadout)`, `apply(model_root: Node3D, loadout: Dictionary)` |
+| `Cosmetics` | cosmetics system | `catalog(slot: StringName) -> Array`, `default_loadout(slot_index: int) -> Dictionary`, `load_profile() -> Dictionary` (`{name, loadout}`), `save_profile(player_name, loadout)`, `apply(model_root: Node3D, loadout: Dictionary)` (items and colours; not the size), `sizes() -> Array`, `size_info(id) -> Dictionary`, `sanitize(loadout, fallback_slot)` |
 | `Fx` | look and effects | `play(effect: StringName, at: Vector3, color := Color.WHITE)` |
 | `Sfx` | audio | `play(sound: StringName, at := Vector3.INF)` |
+| `Progression` | progression | Mansion Coins of the local player, saved in its own profile; every peer pays itself from the Session signals (nothing networked; bots never earn; offline half rate). `coins`, `stats`, `award(reason: StringName, amount: int, once := true) -> int` (one-time per reason by default, e.g. the tutorial's `award(&"tutorial", 20)`), `is_unlocked(slot, id)` (wardrobe gate only), `unlock(slot, id) -> bool`, `price(slot, id)`, `dev_unlock_all()` / `--unlock-all` (testing); *`coins_changed(total)`*, *`awarded(reason, amount, total)`*, *`unlocks_changed(slot, id)`* |
 
 `Net` details (added after wave 1):
 - `join_game` accepts `"ip"` or `"ip:port"`. `join_failed` reasons are exactly `timeout`, `full`, `in progress`, `version mismatch`, `could not connect`.
@@ -132,7 +141,7 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 
 `Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place. Returning to LOBBY clears the stage.
 
-Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
+Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`, `game/progression/progression.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
 
 ## Stage and minigames
 
@@ -216,6 +225,7 @@ With `scripted = true` (default) controllers leave `intent` alone, so write `pla
 | `game/session/` | session |
 | `game/ui/menu/`, `game/ui/round/`, `game/ui/wardrobe/` | menu UI, round UI, wardrobe UI |
 | `game/cosmetics/` | cosmetics system |
+| `game/progression/` | progression (coins, unlocks; `CoinIcon`, `PadlockIcon`, `CoinBalance` for any UI) |
 | `game/look/`, `game/fx/` | look and effects |
 | `game/audio/` | audio |
 | `game/camera/` | arena camera |

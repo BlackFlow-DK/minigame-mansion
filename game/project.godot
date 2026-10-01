@@ -17,6 +17,7 @@ Session="*res://session/session.gd"
 Cosmetics="*res://cosmetics/cosmetics.gd"
 Fx="*res://fx/fx.gd"
 Sfx="*res://audio/sfx.gd"
+Progression="*res://progression/progression.gd"
 
 [display]
 

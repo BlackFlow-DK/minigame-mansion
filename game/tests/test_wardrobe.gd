@@ -12,6 +12,7 @@ var w: Wardrobe
 
 func before_each() -> void:
 	Net.leave()
+	Progression.reset()  # nothing bought: only the starter set is unlocked
 	Cosmetics.profile_path = TEST_PROFILE
 	_remove_profile()
 
@@ -21,6 +22,7 @@ func after_each() -> void:
 		remove_child(w)
 		w.queue_free()
 	Net.leave()
+	Progression.reset()
 	Cosmetics.profile_path = Cosmetics.PROFILE_PATH
 	_remove_profile()
 
@@ -38,7 +40,7 @@ func _open() -> Wardrobe:
 
 
 func _look(primary: String, secondary: String, hat := "", face := "", neck := "", back := "") -> Dictionary:
-	return {"primary": primary, "secondary": secondary, "hat": hat, "face": face, "neck": neck, "back": back}
+	return {"primary": primary, "secondary": secondary, "hat": hat, "face": face, "neck": neck, "back": back, "size": "normal"}
 
 
 ## The albedo shown on the Body surface that uses `material_name`.
@@ -131,6 +133,7 @@ func test_swatch_changes_preview() -> void:
 
 
 func test_item_tile_puts_item_under_socket() -> void:
+	Progression.dev_unlock_all()  # locked tiles buy instead (test_progression_wardrobe.gd)
 	await _open()
 	var model := w.preview.get_model_root()
 	for slot: StringName in SOCKETS:
@@ -159,6 +162,7 @@ func test_item_tile_puts_item_under_socket() -> void:
 
 
 func test_equipping_a_back_item_turns_the_blob_around() -> void:
+	Progression.dev_unlock_all()  # cape and crown are locked items
 	await _open()
 	var before := w.preview.get_yaw()
 	w.select_item(&"back", "cape")
@@ -197,6 +201,7 @@ func test_reset_gives_the_default_look() -> void:
 # --- Closing -------------------------------------------------------------------------------
 
 func test_done_saves_and_emits_closed() -> void:
+	Progression.dev_unlock_all()  # viking and gold_chain are locked items
 	Net.start_offline()
 	await _open()
 	var closed := watch(w, &"closed")
@@ -222,6 +227,7 @@ func test_done_saves_and_emits_closed() -> void:
 
 
 func test_escape_is_done() -> void:
+	Progression.dev_unlock_all()  # clown_nose is a locked item
 	await _open()
 	var closed := watch(w, &"closed")
 	w.select_item(&"face", "clown_nose")
@@ -282,7 +288,7 @@ func test_focus_links() -> void:
 	assert_eq(_neighbor(w.swatches[&"primary"][8], &"focus_neighbor_bottom"), sec_first, "body grid -> accent grid")
 	var last := w.swatches[&"secondary"][11] as Control
 	assert_eq(_neighbor(last, &"focus_neighbor_bottom"), w.done_button, "bottom row down -> Done")
-	assert_eq(_neighbor(tab, &"focus_neighbor_right"), w.tab_buttons[&"hat"], "tabs chain right")
+	assert_eq(_neighbor(tab, &"focus_neighbor_right"), w.tab_buttons[&"body"], "tabs chain right")
 	assert_eq(_neighbor(w.tab_buttons[&"colour"], &"focus_neighbor_left"), w.tab_buttons[&"back"], "tabs wrap")
 	assert_eq(_neighbor(w.done_button, &"focus_neighbor_right"), w.name_edit, "bottom bar wraps")
 	assert_eq(_neighbor(w.done_button, &"focus_neighbor_top"), blue, "bottom bar up -> chosen item")
@@ -316,7 +322,7 @@ func test_shoulder_buttons_switch_tabs() -> void:
 	rb.pressed = true
 	Input.parse_input_event(rb)
 	await step(2)
-	assert_eq(w.current_tab, &"hat", "RB -> next tab")
+	assert_eq(w.current_tab, &"body", "RB -> next tab")
 	var lb := InputEventJoypadButton.new()
 	lb.button_index = JOY_BUTTON_LEFT_SHOULDER
 	lb.pressed = true
@@ -330,6 +336,7 @@ func test_shoulder_buttons_switch_tabs() -> void:
 # --- In the title menu ---------------------------------------------------------------------
 
 func test_opens_and_closes_from_the_title_menu() -> void:
+	Progression.dev_unlock_all()  # chef is a locked item
 	var menu := (load("res://ui/menu/menu_root.tscn") as PackedScene).instantiate() as MenuRoot
 	add_child(menu)
 	await step(1)

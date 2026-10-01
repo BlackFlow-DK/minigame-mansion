@@ -243,7 +243,7 @@ func test_sanitize() -> void:
 		"neck": 12, "back": "cape", "evil": "x", "script": "rm -rf",
 	}
 	var clean := Cosmetics.sanitize(dirty, 3)
-	assert_eq(clean.keys().size(), 6, "exactly six keys")
+	assert_eq(clean.keys().size(), 7, "exactly seven keys (six + size)")
 	assert_false(clean.has("evil"), "unknown key dropped")
 	assert_eq(clean["primary"], "#aabbcc", "short hex normalised")
 	assert_eq(clean["secondary"], Cosmetics.default_loadout(3)["secondary"], "bad colour replaced by slot default")
@@ -270,6 +270,7 @@ func test_sanitize_name() -> void:
 func test_profile_round_trip() -> void:
 	Cosmetics.profile_path = TEST_PROFILE
 	var lo := _loadout("#b5227f", "#ffd23f", "chef", "star_shades", "flower_lei", "angel_wings")
+	lo["size"] = "big"
 	assert_eq(Cosmetics.save_profile("  Sir Blobsalot the Third  ", lo), OK)
 	var p := Cosmetics.load_profile()
 	assert_eq(p["name"], "Sir Blobsalot th", "trimmed to 16")

@@ -9,7 +9,7 @@ var player: Player
 
 
 ## Called by Player on the authority only, in tick order, before move_and_slide().
-## Only `controller`, `status`, `movement`, `jump` and `shove` get this call.
+## Only `size`, `controller`, `status`, `movement`, `jump` and `shove` get this call.
 func physics_tick(_delta: float) -> void:
 	pass
 
