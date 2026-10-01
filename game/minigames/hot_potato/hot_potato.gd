@@ -50,8 +50,8 @@ const OBSTACLES: Array = [
 ]
 
 # --- Rules (host) -------------------------------------------------------------------------
-## Fuse seconds for up to 4 players with everyone alive; scaled down for crowds and as
-## players drop out (see fuse_range_for).
+## Fuse seconds for 4 players with everyone alive; scaled up for 2-3 players, down for
+## crowds and as players drop out (see fuse_range_for).
 @export var fuse_range: Vector2 = Vector2(9.0, 16.0)
 @export var min_fuse: float = 3.5
 ## Holder and victim centres closer than this (m, flat) = a touch (blobs touch at 0.8).
@@ -71,6 +71,8 @@ const OBSTACLES: Array = [
 @export var blast_radius: float = 3.5
 @export var blast_force: float = 9.0
 @export var blast_lift: float = 4.0
+## Largest fuse scale for small rounds (2 players: 4.5 / 2.5 = 1.8).
+const SMALL_ROUND_FUSE_SCALE := 1.8
 ## Fraction of the fuse burnt at which the urgency level steps up (level = steps passed).
 const URGENCY_STEPS: Array[float] = [0.45, 0.72, 0.9]
 
@@ -185,7 +187,9 @@ func fuse_left() -> float:
 ## Fuse min/max for a bomb when `alive_count` of this round's players are alive.
 func fuse_range_for(alive_count: int) -> Vector2:
 	var n := players.size()
-	var crowd := clampf(4.5 / (n + 0.5), 0.5, 1.0)
+	# Balance pass: the cap was 1.0, so a 2-player round was one 9-16 s fuse (~12.5 s) and a
+	# 3-player round ~24 s; up to SMALL_ROUND_FUSE_SCALE they last ~22 s and ~30 s.
+	var crowd := clampf(4.5 / (n + 0.5), 0.5, SMALL_ROUND_FUSE_SCALE)
 	var t := 1.0 if n <= 2 else clampf(float(alive_count - 2) / float(n - 2), 0.0, 1.0)
 	var f := crowd * lerpf(0.75, 1.0, t)
 	return Vector2(maxf(fuse_range.x * f, min_fuse), maxf(fuse_range.y * f, min_fuse + 1.0))

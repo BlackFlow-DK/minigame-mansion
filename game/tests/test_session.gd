@@ -125,8 +125,19 @@ func test_full_session_walks_states_in_order() -> void:
 
 
 func test_scoring_table() -> void:
-	assert_eq(S.points_for_ranking([5, 4, 3, 2, 1, 0]), {5: 4, 4: 3, 3: 2, 2: 1, 1: 0, 0: 0}, "places 1..6")
-	assert_eq(S.points_for_ranking([0, 1, 2], 2), {0: 4, 1: 4, 2: 2}, "two tied first, next is third")
+	# The table scales with the players in the round: 2-3 3/2/1, 4-5 4/3/2/1, 6-8 5/4/3/2/1/1.
+	assert_eq(S.place_points(2), [3, 2, 1] as Array[int], "2 players")
+	assert_eq(S.place_points(3), [3, 2, 1] as Array[int], "3 players")
+	assert_eq(S.place_points(4), [4, 3, 2, 1] as Array[int], "4 players")
+	assert_eq(S.place_points(5), [4, 3, 2, 1] as Array[int], "5 players")
+	assert_eq(S.place_points(6), [5, 4, 3, 2, 1, 1] as Array[int], "6 players")
+	assert_eq(S.place_points(8), [5, 4, 3, 2, 1, 1] as Array[int], "8 players")
+	assert_eq(S.points_for_ranking([0, 1]), {0: 3, 1: 2}, "2 players: 3/2")
+	assert_eq(S.points_for_ranking([3, 2, 1, 0]), {3: 4, 2: 3, 1: 2, 0: 1}, "4 players: 4/3/2/1")
+	assert_eq(S.points_for_ranking([5, 4, 3, 2, 1, 0]), {5: 5, 4: 4, 3: 3, 2: 2, 1: 1, 0: 1}, "places 1..6 of 6")
+	assert_eq(S.points_for_ranking([7, 6, 5, 4, 3, 2, 1, 0]), {7: 5, 6: 4, 5: 3, 4: 2, 3: 1, 2: 1, 1: 0, 0: 0}, "8 players: last two score 0")
+	assert_eq(S.points_for_ranking([2, 0], 1, 4), {2: 4, 0: 3}, "table from player_count, not ranking length")
+	assert_eq(S.points_for_ranking([0, 1, 2], 2), {0: 3, 1: 3, 2: 1}, "two tied first, next is third")
 	assert_eq(S.points_for_ranking([]), {}, "empty")
 	# Through a round: missing players score 0, unknown slots are dropped.
 	_offline(4)
@@ -141,7 +152,7 @@ func test_scoring_table() -> void:
 
 func test_tie_break_by_wins_then_slot() -> void:
 	assert_eq(S.rank_totals([0, 1, 2, 3], {0: 5, 1: 5, 2: 5, 3: 7}, {0: 0, 1: 1, 2: 1, 3: 0}), [3, 1, 2, 0], "total, wins, slot")
-	# Session: 0 and 2 win a round each, all three end on 6 points.
+	# Session: 0 and 2 win a round each, all three end on 4 points.
 	_offline(3)
 	var ends := _rec(Session.session_finished)
 	Session.start_session(2)
@@ -150,7 +161,7 @@ func test_tie_break_by_wins_then_slot() -> void:
 			return
 		_finish(ranking)
 	assert_true(await _wait_state(S.State.PODIUM), "PODIUM")
-	assert_eq(Session.scores, {0: 6, 1: 6, 2: 6} as Dictionary[int, int], "all tied on points")
+	assert_eq(Session.scores, {0: 4, 1: 4, 2: 4} as Dictionary[int, int], "all tied on points (3 players: 3/2/1)")
 	assert_eq(Session.round_wins, {0: 1, 1: 0, 2: 1} as Dictionary[int, int], "wins")
 	assert_eq(ends, [[[0, 2, 1]]], "wins break the tie, then slot")
 
@@ -192,7 +203,7 @@ func test_time_limit_ends_round() -> void:
 	assert_eq(Session.state, S.State.PLAYING, "still playing before the limit")
 	assert_true(await _wait_state(S.State.RESULTS, 30), "time limit ended the round")
 	assert_true(Session.current_minigame.is_finished(), "Session finished the minigame")
-	assert_eq(finishes, [[[0, 2, 1], {0: 4, 2: 4, 1: 2}]], "survivors share first, then knocked out")
+	assert_eq(finishes, [[[0, 2, 1], {0: 3, 2: 3, 1: 1}]], "survivors share first, then knocked out (3 players: 3/2/1)")
 	assert_eq(Session.round_wins, {0: 1, 1: 0, 2: 1} as Dictionary[int, int], "tied survivors both win")
 
 
@@ -206,7 +217,7 @@ func test_player_leaving_mid_round_is_excluded() -> void:
 	await step(2)
 	assert_eq(Session.state, S.State.PLAYING, "round continues with 2 left")
 	_finish([2, 1, 0])
-	assert_eq(finishes, [[[1, 0], {1: 4, 0: 3}]], "departed player excluded")
+	assert_eq(finishes, [[[1, 0], {1: 3, 0: 2}]], "departed player excluded; the table is still the 3-player one")
 
 
 func test_early_finish_with_one_player_left() -> void:

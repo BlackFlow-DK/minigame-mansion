@@ -6,7 +6,7 @@ extends Minigame
 ## `platform_crack`, banner) for WARN_TIME seconds, then drops (`platform_fall`): its
 ## collider goes away on every peer when the host's reliable RPC arrives. The core never
 ## drops. A player below FALL_Y is knocked out (reason `fell`). Last blob standing wins.
-## Start radius: 2-3 players 7 m (ring 3 absent), 4+ players 9 m.
+## Start radius 9 m; rounds of SMALL_ROUND_PLAYERS or fewer start on 7 m (ring 3 absent).
 ##
 ## Collision: each ring's StaticBody3D carries a flat cylinder (built in _ready) of the
 ## ring's OUTER radius. Rings drop from the outside in, so the union of the present
@@ -39,10 +39,16 @@ const SAFE_MARGIN := 1.2
 const GOAL_SPREAD := 0.3
 const GOAL_MIN_RADIUS := 1.1
 
-## Tuning applied to every player on every peer in _setup.
-const SHOVE_FORCE := 10.0
+## Tuning applied to every player on every peer in _setup. Balance pass (docs/balance.md):
+## force 10 x knockback 1.05 rang blobs out from mid-platform, so 4-bot rounds lasted
+## ~22 s; 8.5 x 1.0 makes the shrinking rings the finisher (4 bots ~33 s, 8 bots ~38 s).
+const SHOVE_FORCE := 8.5
 const SHOVE_COOLDOWN := 0.45
-const KNOCKBACK_MULTIPLIER := 1.05
+const KNOCKBACK_MULTIPLIER := 1.0
+## Rounds with this many players or fewer start without ring 3 (on the 7 m platform).
+## 0: every round starts on the full 9 m platform (balance pass: with the softer shove,
+## 2-3 player rounds on 7 m were over in ~17 s; on 9 m they last ~27-30 s).
+const SMALL_ROUND_PLAYERS := 0
 
 const LANTERN_SCENE: PackedScene = preload("res://assets/models/props/sumo_lantern.glb")
 const CLOUD_SCENE: PackedScene = preload("res://assets/models/props/cloud_puff.glb")
@@ -103,8 +109,8 @@ func _setup(setup_players: Array[Player]) -> void:
 		var status := p.get_component(&"status") as StatusComponent
 		if status:
 			status.knockback_multiplier = KNOCKBACK_MULTIPLIER
-	# Small rounds start on the 7 m platform: ring 3 is simply not there.
-	if setup_players.size() <= 3:
+	# Small rounds (SMALL_ROUND_PLAYERS) start on the 7 m platform: ring 3 is simply not there.
+	if setup_players.size() <= SMALL_ROUND_PLAYERS:
 		ring_states[3] = RingState.DROPPED
 		_set_solid(3, false)
 		(_bodies[3].get_node(^"Model") as Node3D).visible = false

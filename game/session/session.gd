@@ -16,7 +16,9 @@ extends Node
 ## minigame's `time_limit`, Session finishes it itself: survivors (alive, by slot) share
 ## first place, then the knocked-out in reverse order.
 ##
-## Scoring: 1st 4, 2nd 3, 3rd 2, 4th 1, the rest (and anyone missing from the ranking) 0.
+## Scoring scales with the players in the round, so most players score most rounds
+## (`place_points`): 2-3 players 3/2/1; 4-5 players 4/3/2/1; 6-8 players 5/4/3/2/1/1. Places
+## past the table (and anyone missing from the ranking) score 0.
 ## Final ranking: total desc, then round wins desc, then slot asc.
 
 enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM }
@@ -29,8 +31,6 @@ signal round_started
 signal round_finished(ranking: Array[int], points: Dictionary)
 signal session_finished(final_ranking: Array[int])
 
-## Points by place (index 0 = first); places beyond the table score 0.
-const PLACE_POINTS: Array[int] = [4, 3, 2, 1]
 
 ## Seconds the title card shows before the countdown.
 @export var intro_time: float = 3.0
@@ -80,6 +80,8 @@ var _pending_ranking: Array[int] = []
 var _has_pending: bool = false
 ## Slots that share first place (set by the time-limit backstop). Host only.
 var _tied_top: Array[int] = []
+## Players the current round started with (picks the points table).
+var _round_player_count: int = 0
 
 
 func _ready() -> void:
@@ -162,13 +164,25 @@ static func build_round_order(rounds: int, rng: RandomNumberGenerator) -> Array[
 	return order
 
 
-## slot -> points for a round `ranking` (best first). The first `tied_top` entries all
-## score first place; the rest score by position (competition ranking).
-static func points_for_ranking(ranking: Array[int], tied_top: int = 1) -> Dictionary:
+## Points by place (index 0 = first) for a round of `player_count` players; places past
+## the table score 0.
+static func place_points(player_count: int) -> Array[int]:
+	if player_count <= 3:
+		return [3, 2, 1]
+	if player_count <= 5:
+		return [4, 3, 2, 1]
+	return [5, 4, 3, 2, 1, 1]
+
+
+## slot -> points for a round `ranking` (best first) of `player_count` players (-1: the
+## ranking's length). The first `tied_top` entries all score first place; the rest score by
+## position (competition ranking).
+static func points_for_ranking(ranking: Array[int], tied_top: int = 1, player_count: int = -1) -> Dictionary:
+	var table := place_points(player_count if player_count > 0 else ranking.size())
 	var points: Dictionary = {}
 	for i in ranking.size():
 		var place := 0 if i < tied_top else i
-		points[ranking[i]] = PLACE_POINTS[place] if place < PLACE_POINTS.size() else 0
+		points[ranking[i]] = table[place] if place < table.size() else 0
 	return points
 
 
@@ -276,7 +290,9 @@ func _end_round(ranking: Array[int]) -> void:
 				tied += 1
 		tied = maxi(tied, 1)
 	_tied_top = []
-	var points := points_for_ranking(clean, tied)
+	# The table goes by who started the round (a leaver does not shrink it).
+	var count := _round_player_count if _round_player_count > 0 else Net.roster.size()
+	var points := points_for_ranking(clean, tied, count)
 	for s: int in Net.roster:
 		if not points.has(s):
 			points[s] = 0
@@ -363,6 +379,7 @@ func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
 	else:
 		push_error("Session: no Stage in the tree (group 'stage') to load '%s'" % id)
 	var info := {"id": StringName(id), "title": "", "rule_text": ""}
+	_round_player_count = current_minigame.players.size() if current_minigame else Net.roster.size()
 	if current_minigame:
 		info["title"] = current_minigame.title
 		info["rule_text"] = current_minigame.rule_text
