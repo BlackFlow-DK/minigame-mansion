@@ -65,9 +65,9 @@ func test_sizes_scale_looks_capsule_and_tuning() -> void:
 		assert_near((p.get_node(^"CollisionShape3D") as Node3D).position.y, 0.5 * s, 0.0001, "%s capsule feet on the floor" % e["id"])
 		assert_near((p.get_component(&"movement") as MovementComponent).max_speed, 6.0 * e["speed"], 0.0001, "speed")
 		assert_near((p.get_component(&"jump") as JumpComponent).jump_height, 1.3 * e["jump"], 0.0001, "jump")
-		assert_near((p.get_component(&"shove") as ShoveComponent).force, 10.0 * e["shove"], 0.0001, "shove force")
+		assert_near((p.get_component(&"shove") as ShoveComponent).force, 10.0 * SizeComponent.effective(e, "shove"), 0.0001, "shove force")
 		assert_near((p.get_component(&"shove") as ShoveComponent).reach, 1.3 * e["reach"], 0.0001, "reach")
-		assert_near((p.get_component(&"status") as StatusComponent).knockback_multiplier, e["knockback"], 0.0001, "knockback")
+		assert_near((p.get_component(&"status") as StatusComponent).knockback_multiplier, SizeComponent.effective(e, "knockback"), 0.0001, "knockback")
 		assert_near((p.get_component(&"fx") as FxComponent).head_height, 1.12 * s, 0.0001, "fx head height")
 		assert_near(_size_of(p).base_of(&"movement", &"max_speed"), 6.0, 0.0001, "base kept")
 	# The shared scene capsule is never touched.
@@ -88,16 +88,16 @@ func test_stacks_on_bumper_sumo_tuning() -> void:
 	var big := CatalogData.size_entry("big")
 	var small := CatalogData.size_entry("small")
 	assert_near((ps[1].get_component(&"status") as StatusComponent).knockback_multiplier,
-		BumperSumo.KNOCKBACK_MULTIPLIER * big["knockback"], 0.0001, "sumo knockback x big")
+		BumperSumo.KNOCKBACK_MULTIPLIER * SizeComponent.effective(big, "knockback"), 0.0001, "sumo knockback x big")
 	assert_near((ps[1].get_component(&"shove") as ShoveComponent).force,
-		BumperSumo.SHOVE_FORCE * big["shove"], 0.0001, "sumo shove force x big")
+		BumperSumo.SHOVE_FORCE * SizeComponent.effective(big, "shove"), 0.0001, "sumo shove force x big")
 	assert_near((ps[2].get_component(&"status") as StatusComponent).knockback_multiplier,
-		BumperSumo.KNOCKBACK_MULTIPLIER * small["knockback"], 0.0001, "sumo knockback x small")
+		BumperSumo.KNOCKBACK_MULTIPLIER * SizeComponent.effective(small, "knockback"), 0.0001, "sumo knockback x small")
 	assert_eq((ps[1].get_component(&"shove") as ShoveComponent).cooldown, BumperSumo.SHOVE_COOLDOWN, "unscaled tuning untouched")
 	# A later absolute retune becomes the new base and is scaled again.
 	(ps[1].get_component(&"status") as StatusComponent).knockback_multiplier = 2.0
 	await step(1)
-	assert_near((ps[1].get_component(&"status") as StatusComponent).knockback_multiplier, 2.0 * big["knockback"], 0.0001, "retune rescaled")
+	assert_near((ps[1].get_component(&"status") as StatusComponent).knockback_multiplier, 2.0 * SizeComponent.effective(big, "knockback"), 0.0001, "retune rescaled")
 	assert_near(_size_of(ps[1]).base_of(&"status", &"knockback_multiplier"), 2.0, 0.0001, "new base")
 
 
@@ -123,14 +123,14 @@ func test_frozen_restores_base_values() -> void:
 	_set_size(ps[0], "big")
 	await step(2)
 	var status := ps[0].get_component(&"status") as StatusComponent
-	assert_near(status.knockback_multiplier, CatalogData.size_entry("big")["knockback"], 0.0001, "scaled while playing")
+	assert_near(status.knockback_multiplier, SizeComponent.effective(CatalogData.size_entry("big"), "knockback"), 0.0001, "scaled while playing")
 	ps[0].frozen = true
 	await step(30)
 	assert_eq(status.knockback_multiplier, 1.0, "base while frozen")
 	assert_near(ps[0].get_component(&"visuals").scale, Vector3.ONE * 1.22, 0.001, "still looks big while frozen")
 	ps[0].frozen = false
 	await step(2)
-	assert_near(status.knockback_multiplier, CatalogData.size_entry("big")["knockback"], 0.0001, "scaled again")
+	assert_near(status.knockback_multiplier, SizeComponent.effective(CatalogData.size_entry("big"), "knockback"), 0.0001, "scaled again")
 
 
 func test_small_is_faster_and_flies_further() -> void:

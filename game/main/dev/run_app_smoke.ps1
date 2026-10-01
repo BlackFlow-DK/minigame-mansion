@@ -3,7 +3,8 @@
 # drives its menus). Each actor writes what its app shows to build/app-smoke/<stamp>/<name>.json;
 # this runner drives them through <name>.cmd files and asserts:
 #   host + a bot in the lobby; Alice finds the game by LAN discovery, Bob joins by address;
-#   all three see 3 humans + 1 bot, at agreeing positions after scripted walking; the host
+#   all three see 3 humans + 1 bot, Alice (who joins wearing body size small) small on every
+#   peer, at agreeing positions after scripted walking; the host
 #   starts a 2-round session from the overlay (round 1 is -FirstRound, default bumper_sumo);
 #   on every peer each round's minigame is the one Session set up and started, with the same
 #   players and tuning, and round 1 ends with the same host-decided state (sumo rings);
@@ -24,10 +25,10 @@ New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 $GodotDir = $Dir -replace '\\', '/'
 $script:Procs = [ordered]@{}
 
-function Start-Actor([string]$Name) {
+function Start-Actor([string]$Name, [string[]]$Extra = @()) {
     $argList = @('--headless', '--path', $GameDir, 'res://main/dev/app_smoke.tscn', '--',
         "--name=$Name", "--dir=$GodotDir", "--port=$Port", '--bind-ip=127.0.0.1', '--life=240',
-        "--time-scale=$TimeScale", "--round-time=$RoundTime")
+        "--time-scale=$TimeScale", "--round-time=$RoundTime") + $Extra
     $p = Start-Process -FilePath $godot -ArgumentList (ConvertTo-ArgString $argList) -NoNewWindow -PassThru `
         -WorkingDirectory $Root -RedirectStandardOutput (Join-Path $Dir "$Name.out") -RedirectStandardError (Join-Path $Dir "$Name.err")
     $null = $p.Handle
@@ -154,7 +155,7 @@ try {
     Wait-For 'bot spawned in the hall' { (Get-PlayerCount 'Host') -eq 2 -and (Read-State 'Host').roster_size -eq 2 }
 
     # 2. Alice finds the game by LAN discovery; Bob joins by address.
-    Start-Actor 'Alice'
+    Start-Actor 'Alice' @('--size=small')
     Wait-For 'Alice app ready' { (Read-State 'Alice').events -contains 'ready' }
     Send-Cmd 'Alice' 'discover'
     Wait-For 'Alice discovered the host (other LAN games may be listed too)' { (@((Read-State 'Alice').game_ports) -contains $Port) -and (Read-State 'Alice').screen -eq 'join' }
@@ -181,6 +182,14 @@ try {
     }
     Wait-For 'every player has its own colour (all peers)' {
         Test-All $All { param($s) @($s.roster.PSObject.Properties | ForEach-Object { $_.Value.primary } | Where-Object { $_ -ne '' } | Select-Object -Unique).Count -eq 4 }
+    }
+    # Alice joined wearing size small: every peer shows her small (model and capsule), the others normal.
+    Wait-For 'Alice''s body size (small) reaches the host and Bob: scale 0.82, capsule 0.328' {
+        Test-All $All { param($s)
+            $a = $s.players."$A"; $b = $s.players."$B"
+            $a.size -eq 'small' -and [math]::Abs($a.scale - 0.82) -lt 0.005 -and [math]::Abs($a.radius - 0.328) -lt 0.001 -and
+            $b.size -eq 'normal' -and [math]::Abs($b.scale - 1.0) -lt 0.005 -and [math]::Abs($b.radius - 0.4) -lt 0.001
+        }
     }
     Send-Cmd 'Alice' 'walk 0 1 0.8'
     Send-Cmd 'Bob' 'walk 1 0.3 0.6'

@@ -31,6 +31,8 @@ const STATS: Array[Array] = [
 	[&"shove", &"width", "reach", "shove:width"],
 	[&"status", &"knockback_multiplier", "knockback", "status:knockback_multiplier"],
 ]
+## Factors given in felt push distance (applied as their square root to the impulse).
+const CURVED: Array[String] = ["shove", "knockback"]
 ## How fast the shown scale follows a size change (1/s, exponential). Spawn snaps.
 const SCALE_SHARPNESS := 16.0
 
@@ -63,12 +65,20 @@ func _ready() -> void:
 	_sync_stats()
 
 
-## The multiplier for `key` ("speed", "jump", "shove", "reach", "knockback") in effect now:
+## The multiplier written for `key` ("speed", "jump", "shove", "reach", "knockback") now:
 ## 1 while frozen.
 func factor(key: String) -> float:
 	if player == null or player.frozen:
 		return 1.0
-	return float(_entry.get(key, 1.0))
+	return effective(_entry, key)
+
+
+## The tuning multiplier for `key` of a SIZES entry. `shove` and `knockback` are given as how
+## far a push carries (a slide grows with the square of the push speed), so the impulse gets
+## their square root: 1.2 means a 20% longer slide, not 44%.
+static func effective(entry: Dictionary, key: String) -> float:
+	var f := float(entry.get(key, 1.0))
+	return sqrt(f) if CURVED.has(key) else f
 
 
 ## The base value (before the size factor) of `component_name`'s `property`, e.g.
