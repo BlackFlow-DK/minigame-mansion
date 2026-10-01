@@ -5,7 +5,8 @@ extends Node
 ##   Volumes 0..1 (linear) -> audio buses Master / Music / Sfx / Ui (through `Sfx.set_volume`;
 ##     a missing bus, e.g. Music before the music system exists, is created and sent to Master)
 ##   fullscreen, window_size ("1280x720" | "1600x900" | "1920x1080") -> the window
-##   quality ("high" | "low") -> `Look.set_quality`
+##   quality ("low" | "medium" | "high") -> `Look.set_quality`; with no settings file yet (first
+##     run) it is picked from the GPU (`detect_quality`); `--quality=` on the command line wins
 ##   screen_shake, reduced_motion -> flags other systems read (see below); show_fps -> overlay
 ##
 ## Other systems read the comfort flags without depending on this file existing:
@@ -32,7 +33,14 @@ const DEFAULTS := {
 ## Volume key -> audio bus.
 const BUSES := {&"master_volume": &"Master", &"music_volume": &"Music", &"sfx_volume": &"Sfx", &"ui_volume": &"Ui"}
 const WINDOW_SIZES: Array[String] = ["1280x720", "1600x900", "1920x1080"]
-const QUALITIES: Array[String] = ["low", "high"]
+const QUALITIES: Array[String] = ["low", "medium", "high"]
+## Adapter names (lower case) of integrated / software GPUs: LOW. See docs/performance.md.
+const LOW_GPUS: Array[String] = ["intel", "uhd", "iris", "hd graphics", "radeon(tm) graphics",
+	"radeon graphics", "radeon vega", "vega 3", "vega 6", "vega 8", "vega 10", "vega 11", "llvmpipe",
+	"swiftshader", "microsoft basic", "mali", "adreno", "powervr"]
+## Names of entry-level / older discrete GPUs: MEDIUM (Intel Arc is MEDIUM too).
+const MEDIUM_GPUS: Array[String] = ["gt 7", "gt 1030", "gtx 9", "gtx 10", "gtx 16", "mx1", "mx2", "mx3",
+	"mx4", "mx5", "rx 4", "rx 5", "rx 6400", "rx 6500", "radeon r5", "radeon r7", "radeon r9", "radeon hd", "quadro", "rtx 2050", "rtx 3050"]
 ## User args that make a run a dev/test run (no settings file). Mirrors Progression.DEV_ARGS.
 const DEV_ARGS: Array[String] = ["name", "offline", "auto-host", "auto-join", "bots", "auto-start",
 	"round-time", "time-scale", "round-minigame", "open-wardrobe", "min-players", "fps", "screenshot",
@@ -71,6 +79,8 @@ func _ready() -> void:
 		return
 	var had_file := FileAccess.file_exists(path)
 	load_settings()
+	if not had_file:
+		quality = detect_quality(RenderingServer.get_video_adapter_name(), RenderingServer.get_video_adapter_type())
 	apply_audio()
 	apply_quality()
 	if had_file:
@@ -196,9 +206,31 @@ func apply_display() -> void:
 ## `Look.set_quality` (unless `--quality=` was given on the command line).
 func apply_quality() -> void:
 	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--quality="):
+		if arg.begins_with("--quality=") and Look.quality_from_name(arg.trim_prefix("--quality=")) >= 0:
+			Look.set_quality(Look.get_quality())  # the arg's level, applied everywhere
 			return
-	Look.set_quality(Look.Quality.LOW if quality == "low" else Look.Quality.HIGH)
+	Look.set_quality(maxi(0, Look.quality_from_name(quality)) as Look.Quality)
+
+
+## First-run quality from the GPU: software / virtual -> "low"; Intel Arc -> "medium";
+## integrated (by device type or by name, LOW_GPUS) -> "low"; entry-level or older discrete
+## (MEDIUM_GPUS) -> "medium"; any other discrete GPU -> "high". `type` is a
+## RenderingDevice.DeviceType (RenderingServer.get_video_adapter_type()).
+static func detect_quality(adapter: String, type: int = RenderingDevice.DEVICE_TYPE_OTHER) -> String:
+	var gpu := adapter.to_lower()
+	if type == RenderingDevice.DEVICE_TYPE_CPU or type == RenderingDevice.DEVICE_TYPE_VIRTUAL_GPU:
+		return "low"
+	if gpu.contains("arc"):
+		return "medium"
+	if type == RenderingDevice.DEVICE_TYPE_INTEGRATED_GPU:
+		return "low"
+	for key in LOW_GPUS:
+		if gpu.contains(key):
+			return "low"
+	for key in MEDIUM_GPUS:
+		if gpu.contains(key):
+			return "medium"
+	return "medium" if gpu.is_empty() else "high"
 
 
 ## "1600x900" -> Vector2i(1600, 900) (unknown: 1280x720).

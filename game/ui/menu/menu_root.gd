@@ -29,6 +29,8 @@ signal training_skip_requested
 const WARDROBE_PATH := "res://ui/wardrobe/wardrobe.tscn"
 const SETTINGS_PATH := "res://ui/settings/settings.tscn"
 const JOIN_TIMEOUT_SEC := 12.0
+## The title's 3D hall renders at this share of its normal 3D scale on LOW and MEDIUM.
+const BACKDROP_SCALE_FACTOR := 0.67
 ## Remembers that the first-run Training Room prompt was shown (never asked twice).
 const TRAINING_FLAG_PATH := "user://training_prompt.cfg"
 ## Appended to join failures that can be a firewall block.
@@ -85,6 +87,7 @@ func _ready() -> void:
 	backdrop = MenuUI.full_rect(MenuBackdrop.new()) as MenuBackdrop
 	backdrop.name = "Backdrop"
 	root.add_child(backdrop)
+	_tune_backdrop_cost()
 	title = MenuTitleScreen.new()
 	join = MenuJoinScreen.new()
 	lobby = MenuLobbyOverlay.new()
@@ -151,6 +154,17 @@ func _ready() -> void:
 		_enter_lobby()
 	else:
 		show_screen(TITLE)
+
+
+## The live hall behind the title renders in its own SubViewport at window size: below HIGH
+## quality it renders at a fraction of that (Look reads `look_scale_factor`; it sits under a
+## wash and a vignette, so the softness does not show). See docs/performance.md.
+func _tune_backdrop_cost() -> void:
+	var vp := backdrop.get_node_or_null(^"MansionView") as SubViewport
+	if vp == null:
+		return
+	vp.set_meta(&"look_scale_factor", BACKDROP_SCALE_FACTOR)
+	Look.apply_viewport(vp)
 
 
 func show_screen(s: StringName) -> void:

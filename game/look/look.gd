@@ -5,7 +5,21 @@ extends RefCounted
 ##
 ##   Look.apply_toon($Model)              # soft-ramp toon + rim + outline on every surface
 ##   Look.toon_material(Look.RED)         # a shared toon material for code-built props
-##   Look.set_quality(Look.Quality.LOW)   # drops SSAO, glow, fog and outlines everywhere
+##   Look.set_quality(Look.Quality.LOW)   # LOW / MEDIUM / HIGH, live, everywhere (see below)
+##
+## Quality levels (docs/performance.md has the measurements behind them):
+##   HIGH    as designed: SSAO, glow, fog, soft 2-split sun shadows (4096 atlas), outlines,
+##           full resolution, each viewport's own MSAA.
+##   MEDIUM  for mid GPUs: glow, fog, 2-split sun shadows (2048 atlas, light blur), outlines,
+##           full resolution, MSAA off + FXAA. No SSAO.
+##   LOW     for integrated graphics: no SSAO / glow / fog / outlines, one low-res sun
+##           shadow split (1024 atlas, light blur), 3D at 0.75 scale (FSR1 upscale) + FXAA, effect pools and
+##           particle counts capped (Fx), the lobby keeps only its fire and portal lights.
+##   `is_high()` means "not LOW" (the full effect set: feel extras, flash lights, rings).
+## Viewports: every StageLook configures the viewport it renders into (`apply_viewport`); a
+## viewport may carry the meta `look_scale_factor` (the title's hall) which further scales its
+## 3D resolution below HIGH. Nodes in group QUALITY_GROUP get `apply_quality()` called on
+## every switch (lobby lights, the Fx pools).
 ##
 ## How the toon keeps albedo: every surface keeps a StandardMaterial3D (a copy of its own
 ## material, same resource_name, same albedo), only its shading switches to Godot's toon
@@ -22,7 +36,7 @@ extends RefCounted
 ## parameters: Parameter "material" is null` (the RID goes before its render instance), which
 ## fails tests. Cached materials outlive the nodes, and 8 players cost no extra materials.
 
-enum Quality { LOW, HIGH }
+enum Quality { LOW, MEDIUM, HIGH }
 
 # Palette (sRGB), shared with the artists.
 const WOOD := Color("#8a5a3c")
@@ -42,6 +56,14 @@ const LAVA := Color("#ff6a1f")
 const TOON_META := &"look_toon"
 ## StageLook nodes (re-applied by the quality switch).
 const STAGE_GROUP := &"stage_look"
+## Any node with an `apply_quality()` method that must follow the quality switch.
+const QUALITY_GROUP := &"look_quality"
+## Names accepted by `--quality=` and Settings, in Quality order.
+const QUALITY_NAMES: Array[String] = ["low", "medium", "high"]
+## 3D render scale per quality (before a viewport's `look_scale_factor`); below 1 upscales with FSR1.
+const RENDER_SCALE: Array[float] = [0.75, 1.0, 1.0]
+## Directional shadow atlas size per quality.
+const SHADOW_ATLAS: Array[int] = [1024, 2048, 4096]
 
 const OUTLINE_MATERIAL: ShaderMaterial = preload("res://look/materials/outline.tres")
 
@@ -63,48 +85,101 @@ static var _toon_cache: Dictionary = {}
 static var outline_debug: bool = false
 
 
-## Current quality. The first call reads `--quality=low|high` from the user args.
+## Current quality. The first call reads `--quality=low|medium|high` from the user args.
 static func get_quality() -> Quality:
 	if not _quality_from_args:
 		_quality_from_args = true
 		for arg in OS.get_cmdline_user_args():
-			if arg == "--quality=low":
-				quality = Quality.LOW
-			elif arg == "--quality=high":
-				quality = Quality.HIGH
+			if arg.begins_with("--quality="):
+				var q := quality_from_name(arg.trim_prefix("--quality="))
+				if q >= 0:
+					quality = q as Quality
 	return quality
 
 
+## "low" | "medium" | "high" -> Quality, -1 when unknown.
+static func quality_from_name(text: String) -> int:
+	return QUALITY_NAMES.find(text.strip_edges().to_lower())
+
+
+## MEDIUM or HIGH: the full effect set (feel extras, flash lights, rings) and outlines.
 static func is_high() -> bool:
-	return get_quality() == Quality.HIGH
+	return get_quality() != Quality.LOW
 
 
-## Switches quality at runtime: every StageLook re-applies (SSAO, glow, fog, shadows) and
-## every toon material gains or drops its outline pass.
+static func is_low() -> bool:
+	return get_quality() == Quality.LOW
+
+
+## Switches quality at runtime: every StageLook re-applies (environment, sun shadows, its
+## viewport's resolution and AA), every toon material gains or drops its outline pass and
+## every node in QUALITY_GROUP gets `apply_quality()`.
 static func set_quality(q: Quality) -> void:
 	_quality_from_args = true
 	quality = q
-	var high := q == Quality.HIGH
+	var outlines := q != Quality.LOW
 	# copies other systems made of toon materials share the outline material: collapse it
-	outline_material().set_shader_parameter(&"enabled", high)
+	outline_material().set_shader_parameter(&"enabled", outlines)
 	var kept: Array[WeakRef] = []
 	for ref in _outlined:
 		var m := ref.get_ref() as BaseMaterial3D
 		if m:
-			_set_outline(m, high)
+			_set_outline(m, outlines)
 			kept.append(ref)
 	_outlined = kept
+	apply_shadow_settings()
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
 		return
 	for n in tree.get_nodes_in_group(STAGE_GROUP):
 		if n.has_method(&"apply"):
 			n.call(&"apply")
+	for n in tree.get_nodes_in_group(QUALITY_GROUP):
+		if n.has_method(&"apply_quality"):
+			n.call(&"apply_quality")
+
+
+## Global shadow budget for the current quality: directional atlas size, soft-shadow filter.
+static func apply_shadow_settings() -> void:
+	var q := get_quality()
+	RenderingServer.directional_shadow_atlas_set_size(SHADOW_ATLAS[q], true)
+	# HARD on LOW leaves acne rings on round shapes at 1024 texels: the very-low PCF is cheap
+	var filter := RenderingServer.SHADOW_QUALITY_SOFT_LOW
+	if q != Quality.HIGH:
+		filter = RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW
+	RenderingServer.directional_soft_shadow_filter_set_quality(filter)
+	RenderingServer.positional_soft_shadow_filter_set_quality(filter)
+
+
+## 3D resolution and anti-aliasing of `vp` for the current quality. HIGH restores what the
+## viewport had before Look first touched it (its own MSAA / screen-space AA) at full scale.
+static func apply_viewport(vp: Viewport) -> void:
+	if vp == null:
+		return
+	if not vp.has_meta(&"look_base_msaa"):
+		vp.set_meta(&"look_base_msaa", vp.msaa_3d)
+		vp.set_meta(&"look_base_ssaa", vp.screen_space_aa)
+	var q := get_quality()
+	var factor := 1.0
+	if q != Quality.HIGH:
+		factor = float(vp.get_meta(&"look_scale_factor", 1.0))
+	var s := clampf(RENDER_SCALE[q] * factor, 0.25, 1.0)
+	vp.scaling_3d_scale = s
+	if s < 0.999 and RenderingServer.get_current_rendering_method() != "gl_compatibility":
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR
+	else:
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR  # FSR needs RenderingDevice
+	if q == Quality.HIGH:
+		vp.msaa_3d = vp.get_meta(&"look_base_msaa") as Viewport.MSAA
+		vp.screen_space_aa = vp.get_meta(&"look_base_ssaa") as Viewport.ScreenSpaceAA
+	else:
+		vp.msaa_3d = Viewport.MSAA_DISABLED
+		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 
 
 ## Gives every MeshInstance3D under `root` (root included) the house toon look while keeping
 ## each surface's albedo colour, texture and name. Unshaded and shader materials are left
-## alone. `outline` adds the inverted-hull outline pass (next_pass; HIGH quality only).
+## alone. `outline` adds the inverted-hull outline pass (next_pass; MEDIUM and HIGH only).
 ## Returns the number of surfaces changed.
 static func apply_toon(root: Node3D, outline: bool = true) -> int:
 	if root == null:
@@ -333,7 +408,7 @@ static func toon_material(color: Color, roughness: float = 0.6, outline: bool = 
 static func outline_material() -> ShaderMaterial:
 	if _outline == null:
 		_outline = OUTLINE_MATERIAL
-		_outline.set_shader_parameter(&"enabled", is_high())
+		_outline.set_shader_parameter(&"enabled", get_quality() != Quality.LOW)
 	return _outline
 
 
@@ -366,7 +441,7 @@ static func _configure(m: BaseMaterial3D, outline: bool) -> void:
 	m.rim_tint = RIM_TINT
 	m.set_meta(TOON_META, true)
 	if outline:
-		_set_outline(m, is_high())
+		_set_outline(m, get_quality() != Quality.LOW)
 		if _outlined.size() > 1024:
 			_outlined = _outlined.filter(func(r: WeakRef) -> bool: return r.get_ref() != null)
 		_outlined.append(weakref(m))
