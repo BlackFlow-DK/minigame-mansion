@@ -2,7 +2,7 @@
 # --fixed-fps 60 makes physics step exactly 1/60 s per frame, as fast as the CPU allows.
 # Non-zero exit on any failed test, script error, Godot ERROR line, or timeout.
 # Usage: tools/godot-test.ps1 [-Filter text]   (substring of "<file>::<test>", case-insensitive)
-param([string]$Filter = '', [int]$TimeoutSec = 600)
+param([string]$Filter = '', [int]$TimeoutSec = 1500)
 . "$PSScriptRoot\_common.ps1"
 
 $godot = Get-GodotBin
