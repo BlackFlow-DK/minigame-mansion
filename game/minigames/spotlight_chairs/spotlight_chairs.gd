@@ -61,8 +61,8 @@ const PAD_MOVE_MIN := 1.5
 const RING_RADIUS := 3.1
 const MAX_PADS := 7
 ## A blob whose centre is within this flat distance of a pad centre (and not high above it)
-## stands on it. The pad disc is 1.1 m across, a blob 0.8 m.
-const ON_PAD_RADIUS := 0.6
+## stands on it. The pad disc is 1.1 m across, a blob 0.8 m: at 0.7 a third of the blob is on it.
+const ON_PAD_RADIUS := 0.7
 const ON_PAD_MAX_Y := 0.8
 ## Players below this are out (nothing to fall off, but just in case).
 const FALL_Y := -5.0
@@ -80,6 +80,13 @@ const FALL_Y := -5.0
 @export var shuffle_time: float = 0.9
 ## Bots guess the music ends somewhere in this range (s after it started) and head for a pad.
 @export var bot_guess_range: Vector2 = Vector2(4.0, 7.5)
+## Bot brain hint (BotBrain reads it): calm while the music plays (no chasing, no shoving),
+## a scramble once it stops. Set by the phase RPCs (only the host's bots read it).
+var bot_aggression_scale: float = 0.0
+## The hint per phase: music, warning.
+const BOT_AGGRESSION_MUSIC := 0.0
+const BOT_AGGRESSION_WARNING := 0.25
+
 ## Tuning applied to every player on every peer in _setup.
 const SHOVE_COOLDOWN := 0.5
 
@@ -201,7 +208,7 @@ func _host_tick(delta: float) -> void:
 			if music_elapsed >= _music_len:
 				_rpc_stop.rpc(round_index)
 				_phase_left = warn_time
-				request_bot_rethink()
+				_rethink_unseated()
 		Phase.WARNING:
 			music_elapsed += dt
 			_phase_left -= dt
@@ -268,7 +275,7 @@ func _track_pads() -> void:
 	if owners != pad_owners:
 		_rpc_owners.rpc(owners)
 		if phase == Phase.WARNING:
-			request_bot_rethink()
+			_rethink_unseated()
 
 
 ## Host: owner per active pad from the current standings (-1 = nobody on it).
@@ -334,6 +341,14 @@ func _shuffle() -> void:
 		return
 	_rpc_layout.rpc(round_index + 1, random_layout(count, pad_positions))
 	request_bot_rethink()
+
+
+## Host: bots without a pad re-plan (to the nearest free pad). Seated bots are left alone: a
+## re-plan would re-roll their mood and could send them off their pad.
+func _rethink_unseated() -> void:
+	for p in _alive():
+		if not pad_owners.has(p.slot):
+			request_bot_rethink(p.slot)
 
 
 ## Host: once the music has run past a bot's personal guess, that bot re-plans (to a pad).
@@ -435,8 +450,14 @@ func get_bot_goal(player: Player) -> Vector3:
 	return player.global_position
 
 
+## Inside the room. During the warning only the pads count as safe: a seated bot's safety
+## filter keeps it on its pad, and a bot caught off a pad runs for the nearest one.
 func is_safe(pos: Vector3) -> bool:
-	return absf(pos.x) < SAFE_HALF_X and pos.z > SAFE_BACK_Z and pos.z < SAFE_FRONT_Z
+	if absf(pos.x) >= SAFE_HALF_X or pos.z <= SAFE_BACK_Z or pos.z >= SAFE_FRONT_Z:
+		return false
+	if phase == Phase.WARNING:
+		return _nearest_pad_dist(pos) <= ON_PAD_RADIUS - 0.1
+	return true
 
 
 func _seat_goal(player: Player) -> Vector3:
@@ -476,6 +497,7 @@ func _rpc_music(index: int) -> void:
 	round_index = index
 	phase = Phase.MUSIC
 	music_elapsed = 0.0
+	bot_aggression_scale = BOT_AGGRESSION_MUSIC
 	_phase_time = _anim_time
 	_second_beep = false
 	var none: Array[int] = []
@@ -496,6 +518,7 @@ func _rpc_stop(index: int) -> void:
 	if phase != Phase.MUSIC:
 		return
 	phase = Phase.WARNING
+	bot_aggression_scale = BOT_AGGRESSION_WARNING
 	_phase_time = _anim_time
 	_stop_music()
 	Sfx.play(&"countdown_beep")
