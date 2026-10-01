@@ -132,6 +132,7 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 | `Cosmetics` | cosmetics system | `catalog(slot: StringName) -> Array`, `default_loadout(slot_index: int) -> Dictionary`, `load_profile() -> Dictionary` (`{name, loadout}`), `save_profile(player_name, loadout)`, `apply(model_root: Node3D, loadout: Dictionary)` (items and colours; not the size), `sizes() -> Array`, `size_info(id) -> Dictionary`, `sanitize(loadout, fallback_slot)` |
 | `Fx` | look and effects | `play(effect: StringName, at: Vector3, color := Color.WHITE)` |
 | `Sfx` | audio | `play(sound: StringName, at := Vector3.INF)` |
+| `Music` | audio | `play(track: StringName, fade := 1.0)` (cross-fade; same track = no-op), `stop(fade := 1.0)`, `play_sting(track)` (one-shot over the music), `duck(amount: float, seconds: float)`, `set_volume(linear)` / `get_volume()` (bus `Music`), `current`; *`track_changed(track)`*. Tracks `Music.TRACKS` (`res://audio/music/*.ogg`). `game/audio/music_director.gd` (instanced in the main scene) picks them: title, lobby, round by the minigame's StageLook preset, results sting, podium. A minigame may declare `var music_track: StringName` (`&"none"` = silence) or call `Music.stop()` / `play()` from `_start()` on; the director only acts again at the next phase (RESULTS) |
 | `Progression` | progression | Mansion Coins of the local player, saved in its own profile; every peer pays itself from the Session signals (nothing networked; bots never earn; offline half rate). `coins`, `stats`, `award(reason: StringName, amount: int, once := true) -> int` (one-time per reason by default, e.g. the tutorial's `award(&"tutorial", 20)`), `is_unlocked(slot, id)` (wardrobe gate only), `unlock(slot, id) -> bool`, `price(slot, id)`, `dev_unlock_all()` / `--unlock-all` (testing); *`coins_changed(total)`*, *`awarded(reason, amount, total)`*, *`unlocks_changed(slot, id)`* |
 
 `Net` details (added after wave 1):
@@ -141,7 +142,7 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 
 `Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place. Returning to LOBBY clears the stage.
 
-Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`, `game/progression/progression.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
+Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`, `game/audio/music.gd`, `game/progression/progression.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
 
 ## Stage and minigames
 
