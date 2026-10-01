@@ -67,6 +67,8 @@ const POP_LIFT := 0.07
 const BUCKET_SCALE := 1.25
 const ARROW_HEIGHT := 2.6
 const RING_COLOR := Color(1.0, 0.86, 0.3, 0.9)
+## Albedo multiplier on painted tile tops (see _get_tile_mesh).
+const PAINT_SHADE := 0.86
 
 @export_group("Paint")
 ## Feet higher than this (mid-jump) do not paint.
@@ -751,7 +753,11 @@ static func _get_tile_mesh() -> Mesh:
 		if m and m.resource_name == "PaintTop":
 			var paint := (toon as BaseMaterial3D).duplicate() as BaseMaterial3D
 			paint.resource_name = "PaintTop"
-			paint.albedo_color = Color.WHITE
+			# A touch under white and no specular/rim, so lit tops keep the true player hue
+			# instead of washing out to pastel.
+			paint.albedo_color = Color(PAINT_SHADE, PAINT_SHADE, PAINT_SHADE)
+			paint.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+			paint.rim_enabled = false
 			paint.vertex_color_use_as_albedo = true
 			paint.vertex_color_is_srgb = true
 			toon = paint

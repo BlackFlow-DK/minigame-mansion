@@ -16,9 +16,9 @@ preset = 1
 [node name="ArenaCamera" parent="." instance=ExtResource("3_cam")]
 current = true
 mode = 2
-pitch_degrees = 58.0
-fixed_focus = Vector3(0, 0, 0.6)
-fixed_distance = 20.5
+pitch_degrees = 62.0
+fixed_focus = Vector3(0, 0, 0.9)
+fixed_distance = 19.5
 
 [node name="Tiles" type="Node3D" parent="."]
 
