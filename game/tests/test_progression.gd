@@ -1,6 +1,6 @@
 extends GameTest
-## Progression (Mansion Coins): round and session awards by placement, half rate offline, bots
-## never earn, one-time awards, unlocking (deducts, persists, refuses when poor), the profile
+## Progression (Mansion Coins): round and session awards by placement, half rate offline and
+## with fewer than 2 humans, bots never earn, one-time awards, unlocking (deducts, persists, refuses when poor), the profile
 ## upgrade from a pre-coins profile, --unlock-all, and sanitize keeping locked items.
 
 const TEST_PROFILE := "user://test_progression_profile.json"
@@ -34,14 +34,22 @@ func _remove_profile() -> void:
 		DirAccess.remove_absolute(TEST_PROFILE)
 
 
-## Hosts a LAN game (a full-rate session): this peer is slot 0. False if no port was free.
-func _host() -> bool:
+## Hosts a LAN game with a second human (a full-rate session): this peer is slot 0, the friend
+## slot 7 (added straight into the roster; no second process). False if no port was free.
+func _host(with_friend: bool = true) -> bool:
 	for i in 4:
 		Net.port = TEST_PORT + i
 		if Net.host_game("Coins test") == OK:
+			if with_friend:
+				_friend()
 			return true
 	fail("could not host on ports %d-%d" % [TEST_PORT, TEST_PORT + 3])
 	return false
+
+
+## A second human in the roster (slot 7, another peer).
+func _friend() -> void:
+	Net.roster[7] = PlayerInfo.new(7, 99, "Friend", false, Cosmetics.default_loadout(7))
 
 
 ## Adds `count` bots (slots 1..count).
@@ -133,11 +141,41 @@ func test_offline_sessions_earn_half_rounded_up() -> void:
 	assert_eq(Progression.coins, 3, "offline round win pays 3")
 	Session.session_finished.emit(ranking)
 	assert_eq(Progression.coins, 23, "offline session win pays 20")
-	# Hosting a LAN game is full rate.
+	# Hosting a LAN game with a friend is full rate.
 	Net.leave()
 	if not _host():
 		return
 	assert_false(Progression.is_offline(), "hosting is not offline")
+	assert_false(Progression.is_half_rate(), "two humans: full rate")
+
+
+func test_fewer_than_two_humans_earn_half() -> void:
+	if not _host(false):
+		return
+	_bots(3)
+	assert_false(Progression.is_offline(), "hosted")
+	assert_eq(Progression.human_count(), 1, "one human")
+	assert_true(Progression.is_half_rate(), "a host alone with bots: half rate")
+	var ranking: Array[int] = [0, 1, 2, 3]
+	assert_eq(Progression.local_round_award(ranking, _points(ranking)), 3, "round win: 6 -> 3")
+	assert_eq(Progression.local_session_award(ranking), 20, "session win: 40 -> 20")
+	Session.round_finished.emit(ranking, _points(ranking))
+	Session.session_finished.emit(ranking)
+	assert_eq(Progression.coins, 23, "paid at half rate")
+	# A friend joins: full rate again.
+	_friend()
+	assert_eq(Progression.human_count(), 2, "two humans")
+	assert_false(Progression.is_half_rate(), "full rate")
+	assert_eq(Progression.local_round_award(ranking, _points(ranking)), 6, "round win: 6")
+	assert_eq(Progression.local_session_award(ranking), 40, "session win: 40")
+	# The friend leaves again before the end: half.
+	Net.roster.erase(7)
+	assert_true(Progression.is_half_rate(), "alone again: half rate")
+	# Offline can never be full rate.
+	Net.leave()
+	Net.start_offline()
+	_friend()
+	assert_true(Progression.is_half_rate(), "offline is always half rate")
 
 
 func test_bots_never_earn() -> void:

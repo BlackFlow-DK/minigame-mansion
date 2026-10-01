@@ -17,7 +17,8 @@ extends Minigame
 ## - Splash bombs: the host picks the spot (`_rpc_bomb`) and who claims it (`_rpc_splash`);
 ##   the splash tiles follow in the same tick's `_rpc_paint`. The fall is cosmetic.
 ## - The end (`_rpc_end`) carries the host's ranking and counts; every peer freezes all
-##   players for the final splat, the host calls finish() `final_freeze` seconds later.
+##   players for the final splat, and the host calls `finish(ranking, final_freeze)`: Session
+##   holds the frozen floor on screen for `final_freeze` seconds before the results.
 ##
 ## Rendering: one MultiMeshInstance3D holds every tile (the paint_tile mesh: a grout body
 ## plus the `PaintTop` surface). PaintTop gets one shared toon material that takes its
@@ -136,7 +137,6 @@ var _bombs: Dictionary[int, Dictionary] = {}
 var _next_bomb_id: int = 1
 var _next_bomb_t: float = 0.0
 ## Host: round time at which the frozen floor hands over to Session.
-var _finish_at: float = INF
 ## Host: goal picks per bot (drives the "sometimes" of leader avoidance).
 var _goal_calls: Dictionary[int, int] = {}
 ## tile -> seconds since its colour changed (pop animation), every peer.
@@ -191,8 +191,6 @@ func _host_tick(_delta: float) -> void:
 	if not _running:
 		return
 	if _over:
-		if _t >= _finish_at:
-			finish(final_ranking)
 		return
 	_rescue_fallen()
 	var claims: Dictionary[int, int] = {}
@@ -231,7 +229,7 @@ func _process(delta: float) -> void:
 
 
 ## Host: ends the round now with the tile ranking (also called at the time limit). The floor
-## stays frozen for `final_freeze` before finish().
+## stays frozen for `final_freeze` (Session's end grace) before the results.
 func end_round() -> void:
 	if _over or is_finished():
 		return
@@ -239,8 +237,8 @@ func end_round() -> void:
 	var n := PackedInt32Array()
 	for s in ranking:
 		n.append(counts.get(s, 0))
-	_finish_at = _t + final_freeze * _clock_scale()
 	_rpc_end.rpc(PackedInt32Array(ranking), n)
+	finish(ranking, final_freeze)
 
 
 ## Seconds on the round clock since play started (every peer).
@@ -515,9 +513,6 @@ func _rpc_splash(id: int, slot: int) -> void:
 @rpc("authority", "call_local", "reliable")
 func _rpc_end(ranking: PackedInt32Array, tile_counts: PackedInt32Array) -> void:
 	_over = true
-	# Keep Session's time-limit backstop (time_limit + its grace) behind the frozen final splat.
-	if time_limit > 0.0:
-		time_limit += final_freeze + 0.5
 	final_ranking.clear()
 	for k in ranking.size():
 		final_ranking.append(ranking[k])

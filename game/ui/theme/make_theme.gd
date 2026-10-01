@@ -7,9 +7,14 @@ extends SceneTree
 ## with a hard drop "lip", plum focus ring, outlined text.
 ##
 ## Type variations (set `theme_type_variation` on a node):
-##   Label:          TitleLabel, SubtitleLabel, HeaderLabel, LightLabel, MutedLabel, ErrorLabel, ChipLabel
-##   Button:         PrimaryButton (gold), DangerButton (red), SmallButton, ChipButton (toggle), RowButton
-##   PanelContainer: RowPanel, ErrorPanel, ChipPanel, DarkPanel
+##   Label:          TitleLabel, SubtitleLabel, HeaderLabel, LightLabel, MutedLabel, ErrorLabel, ChipLabel,
+##                   ScrimLabel, ScrimHeader (cream on the dark lobby scrims)
+##   Button:         PrimaryButton (gold), BigButton (large teal), SecondaryButton (small teal), SecondaryDangerButton,
+##                   DangerButton (red), SmallButton, ChipButton (toggle), RowButton, CopyButton (scrim)
+##   PanelContainer: RowPanel, ErrorPanel, ChipPanel, DarkPanel, ScrimRow
+##   HSlider:        teal fill, gold grabber (settings volumes)
+## Focus: every focusable type uses FocusRingStyle (focus_ring.gd): a gold ring with a charcoal
+## rim, readable on cream, dark and plum alike.
 
 const OUT := "res://ui/theme/mansion_theme.tres"
 
@@ -22,6 +27,7 @@ const CHARCOAL := Color("#2e2a33")
 const PAPER := Color("#fffaf0")
 const MUTED := Color("#5e5263")
 const DISABLED := Color("#a79ca8")
+const FOCUS_RING := preload("res://ui/theme/focus_ring.gd")
 
 
 func _initialize() -> void:
@@ -36,6 +42,7 @@ func _initialize() -> void:
 	_labels(t)
 	_buttons(t)
 	_line_edit(t)
+	_slider(t)
 	_misc(t)
 
 	var err := ResourceSaver.save(t, OUT)
@@ -66,16 +73,11 @@ func _box(bg: Color, border: Color, border_w: int, radius: int, margin_h: float,
 	return s
 
 
-func _ring(color: Color, width: int, radius: int, expand: float) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.draw_center = false
-	s.border_color = color
-	s.set_border_width_all(width)
-	s.set_corner_radius_all(radius)
-	s.corner_detail = 10
-	s.anti_aliasing = true
-	s.set_expand_margin_all(expand)
-	return s
+## The shared focus ring, sized for a control with corner `radius`.
+func _focus(radius: int) -> StyleBox:
+	var f: StyleBox = FOCUS_RING.new()
+	f.set(&"radius", radius)
+	return f
 
 
 func _panels(t: Theme) -> void:
@@ -86,13 +88,14 @@ func _panels(t: Theme) -> void:
 	t.set_stylebox(&"panel", &"PanelContainer", panel)
 	t.set_stylebox(&"panel", &"Panel", panel)
 
-	for v: StringName in [&"RowPanel", &"ErrorPanel", &"ChipPanel", &"DarkPanel"]:
+	for v: StringName in [&"RowPanel", &"ErrorPanel", &"ChipPanel", &"DarkPanel", &"ScrimRow"]:
 		t.set_type_variation(v, &"PanelContainer")
 	t.set_stylebox(&"panel", &"RowPanel", _box(PAPER, CHARCOAL, 3, 14, 12, 6))
 	t.set_stylebox(&"panel", &"ErrorPanel", _box(Color("#fbe0dc"), RED, 4, 14, 14, 8))
 	t.set_stylebox(&"panel", &"ChipPanel", _box(TEAL, CHARCOAL, 2, 10, 8, 1))
 	var dark := _box(PLUM, CHARCOAL, 5, 20, 20, 12, 6)
 	t.set_stylebox(&"panel", &"DarkPanel", dark)
+	t.set_stylebox(&"panel", &"ScrimRow", _box(Color(CHARCOAL, 0.62), Color(CREAM, 0.18), 2, 12, 10, 3))
 
 
 func _labels(t: Theme) -> void:
@@ -108,6 +111,8 @@ func _labels(t: Theme) -> void:
 	_label_variation(t, &"MutedLabel", 18, MUTED, 0, Vector2.ZERO)
 	_label_variation(t, &"ErrorLabel", 20, Color("#a8281d"), 0, Vector2.ZERO)
 	_label_variation(t, &"ChipLabel", 14, PAPER, 4, Vector2.ZERO)
+	_label_variation(t, &"ScrimLabel", 19, CREAM, 6, Vector2.ZERO)
+	_label_variation(t, &"ScrimHeader", 30, CREAM, 9, Vector2(0, 3))
 
 
 func _label_variation(t: Theme, v: StringName, size: int, color: Color, outline: int, shadow: Vector2) -> void:
@@ -126,9 +131,18 @@ func _label_variation(t: Theme, v: StringName, size: int, color: Color, outline:
 func _buttons(t: Theme) -> void:
 	# Default: teal, cream text with a charcoal outline.
 	_button_type(t, &"Button", TEAL, CREAM, 8, 26, 16, 22, 12, 4, 6)
-	for v: StringName in [&"PrimaryButton", &"DangerButton", &"SmallButton", &"ChipButton", &"RowButton"]:
+	for v: StringName in [&"PrimaryButton", &"BigButton", &"SecondaryButton", &"SecondaryDangerButton", &"DangerButton", &"SmallButton",
+			&"ChipButton", &"RowButton", &"CopyButton"]:
 		t.set_type_variation(v, &"Button")
 	_button_type(t, &"PrimaryButton", GOLD, CHARCOAL, 0, 30, 18, 26, 14, 5, 7)
+	_button_type(t, &"BigButton", TEAL, CREAM, 9, 28, 18, 26, 13, 5, 7)
+	_button_type(t, &"SecondaryButton", TEAL, CREAM, 7, 19, 14, 14, 7, 4, 5)
+	_button_type(t, &"SecondaryDangerButton", RED, CREAM, 7, 19, 14, 14, 7, 4, 5)
+	_button_type(t, &"CopyButton", Color(CHARCOAL, 0.45), CREAM, 7, 24, 12, 12, 4, 2, 0)
+	for st: StringName in [&"normal", &"hover", &"pressed", &"hover_pressed"]:
+		var cb := t.get_stylebox(st, &"CopyButton") as StyleBoxFlat
+		cb.border_color = Color(CREAM, 0.35 if st == &"normal" else 0.8)
+		cb.bg_color = Color(CHARCOAL, 0.45) if st == &"normal" else Color(TEAL, 0.45)
 	_button_type(t, &"DangerButton", RED, CREAM, 8, 26, 16, 22, 12, 4, 6)
 	_button_type(t, &"SmallButton", RED, CREAM, 6, 18, 12, 12, 4, 3, 3)
 	_button_type(t, &"RowButton", PAPER, CHARCOAL, 0, 22, 14, 16, 10, 3, 4)
@@ -154,7 +168,7 @@ func _button_type(t: Theme, type: StringName, bg: Color, fg: Color, outline: int
 	t.set_stylebox(&"pressed", type, pressed)
 	t.set_stylebox(&"hover_pressed", type, pressed)
 	t.set_stylebox(&"disabled", type, disabled)
-	t.set_stylebox(&"focus", type, _ring(PLUM, 5, radius + 6, 6))
+	t.set_stylebox(&"focus", type, _focus(radius))
 	t.set_font_size(&"font_size", type, font_size)
 	for c: StringName in [&"font_color", &"font_hover_color", &"font_pressed_color", &"font_hover_pressed_color", &"font_focus_color"]:
 		t.set_color(c, type, fg)
@@ -167,7 +181,7 @@ func _button_type(t: Theme, type: StringName, bg: Color, fg: Color, outline: int
 func _line_edit(t: Theme) -> void:
 	t.set_stylebox(&"normal", &"LineEdit", _box(PAPER, CHARCOAL, 4, 14, 16, 10))
 	t.set_stylebox(&"read_only", &"LineEdit", _box(CREAM, Color(CHARCOAL, 0.5), 4, 14, 16, 10))
-	t.set_stylebox(&"focus", &"LineEdit", _ring(PLUM, 5, 20, 5))
+	t.set_stylebox(&"focus", &"LineEdit", _focus(14))
 	t.set_font_size(&"font_size", &"LineEdit", 24)
 	t.set_color(&"font_color", &"LineEdit", CHARCOAL)
 	t.set_color(&"font_placeholder_color", &"LineEdit", Color(PLUM, 0.55))
@@ -175,6 +189,39 @@ func _line_edit(t: Theme) -> void:
 	t.set_color(&"selection_color", &"LineEdit", Color(TEAL, 0.4))
 	t.set_color(&"font_selected_color", &"LineEdit", CHARCOAL)
 	t.set_constant(&"caret_width", &"LineEdit", 3)
+
+
+func _slider(t: Theme) -> void:
+	var track := _box(Color(CHARCOAL, 0.22), CHARCOAL, 3, 10, 0, 7)
+	var fill := _box(TEAL, CHARCOAL, 3, 10, 0, 7)
+	t.set_stylebox(&"slider", &"HSlider", track)
+	t.set_stylebox(&"grabber_area", &"HSlider", fill)
+	t.set_stylebox(&"grabber_area_highlight", &"HSlider", _box(TEAL.lightened(0.15), CHARCOAL, 3, 10, 0, 7))
+	t.set_stylebox(&"focus", &"HSlider", _focus(14))
+	t.set_icon(&"grabber", &"HSlider", _knob(GOLD, 30))
+	t.set_icon(&"grabber_highlight", &"HSlider", _knob(GOLD.lightened(0.25), 30))
+	t.set_icon(&"grabber_disabled", &"HSlider", _knob(DISABLED, 30))
+	t.set_icon(&"tick", &"HSlider", ImageTexture.create_from_image(Image.create_empty(1, 1, false, Image.FORMAT_RGBA8)))
+	t.set_constant(&"center_grabber", &"HSlider", 0)
+	t.set_constant(&"grabber_offset", &"HSlider", 0)
+
+
+## A round slider knob: `fill` with a charcoal rim, antialiased.
+func _knob(fill: Color, px: int) -> ImageTexture:
+	var img := Image.create_empty(px, px, false, Image.FORMAT_RGBA8)
+	var c := Vector2(px, px) * 0.5
+	var r := px * 0.5 - 0.5
+	for y in px:
+		for x in px:
+			var d := (Vector2(x, y) + Vector2(0.5, 0.5)).distance_to(c)
+			var a := clampf(r - d + 0.5, 0.0, 1.0)
+			if a <= 0.0:
+				continue
+			var col := CHARCOAL if d > r - 3.5 else fill
+			if d <= r - 3.5 and d > r - 4.5:
+				col = CHARCOAL.lerp(fill, clampf(r - 3.5 - d + 1.0, 0.0, 1.0))
+			img.set_pixel(x, y, Color(col, a))
+	return ImageTexture.create_from_image(img)
 
 
 func _misc(t: Theme) -> void:

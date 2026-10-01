@@ -123,9 +123,10 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## Through Settings, so the choice is saved and the settings screen shows it.
 func toggle_fullscreen() -> void:
 	var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if fs else DisplayServer.WINDOW_MODE_FULLSCREEN)
+	Settings.set_value(&"fullscreen", not fs)
 
 
 # --- App flow ------------------------------------------------------------------------------

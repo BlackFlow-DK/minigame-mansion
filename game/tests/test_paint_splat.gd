@@ -213,16 +213,14 @@ func test_ranking_tie_break_and_final_splat() -> void:
 			break
 		await step(1)
 	assert_eq(over.size(), 1, "round_over once, at the time limit")
-	assert_false(mg.is_finished(), "the floor freezes before the ranking goes out")
 	assert_eq(mg.final_ranking, [2, 0, 1] as Array[int], "tie broken by who reached 1 first")
-	assert_true(mg.time_limit > limit + mg.final_freeze, "time limit pushed past the freeze (Session's backstop waits)")
-	var frames := 0
-	while not mg.is_finished() and frames < 600:
-		await step(1)
-		frames += 1
-	assert_true(mg.is_finished(), "finished after the freeze")
-	assert_near(frames / 60.0, mg.final_freeze, 0.1, "the final splat lasts final_freeze")
+	assert_true(mg.is_finished(), "finished at once: Session holds the final splat (end grace)")
+	assert_near(mg.finish_grace, mg.final_freeze, 0.001, "the final splat lasts final_freeze (Session.end_grace)")
+	assert_near(mg.time_limit, limit, 0.001, "the time limit is left alone")
+	for p in players:
+		assert_true(p.frozen, "everyone frozen for the final splat")
 	assert_eq(ranking, [2, 0, 1] as Array[int], "finished with the tile ranking")
+	await step(30)
 	assert_eq(over.size(), 1, "round_over still once")
 
 

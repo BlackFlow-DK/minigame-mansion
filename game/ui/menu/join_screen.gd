@@ -340,14 +340,18 @@ func _set_inputs_enabled(on: bool) -> void:
 	_refresh_focus_links()
 
 
-func _refresh_focus_links() -> void:
+func _refresh_focus_links() -> Array[Control]:
 	if not is_inside_tree():
-		return
-	var order: Array = [back_button]
-	order.append_array(list_box.get_children())
-	order.append_array([ip_edit, ip_join_button, cancel_button])
-	MenuUI.chain_vertical(order)
-	ip_join_button.focus_neighbor_left = ip_join_button.get_path_to(ip_edit)
+		return []
+	var rows: Array = [back_button]
+	rows.append_array(list_box.get_children())
+	rows.append_array([[ip_edit, ip_join_button], cancel_button])
+	return MenuUI.chain_grid(rows)
+
+
+## Every focusable control in navigation order (tests walk it).
+func focus_chain() -> Array[Control]:
+	return _refresh_focus_links()
 
 
 func _focus_inside() -> bool:

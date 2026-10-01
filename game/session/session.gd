@@ -16,6 +16,11 @@ extends Node
 ## minigame's `time_limit`, Session finishes it itself: survivors (alive, by slot) share
 ## first place, then the knocked-out in reverse order.
 ##
+## End grace: a minigame that finishes with `finish(ranking, grace)` keeps the round on screen:
+## Session sends `_rpc_end_grace(grace)` (every peer freezes all players and counts `end_grace`
+## down), stays in PLAYING, and the host scores the round when the grace runs out. The
+## time-limit backstop does not interrupt it.
+##
 ## Scoring scales with the players in the round, so most players score most rounds
 ## (`place_points`): 2-3 players 3/2/1; 4-5 players 4/3/2/1; 6-8 players 5/4/3/2/1/1. Places
 ## past the table (and anyone missing from the ranking) score 0.
@@ -72,6 +77,9 @@ var round_order: Array[StringName] = []
 var phase_duration: float = 0.0
 ## Seconds left in the current phase (counts down on every peer at `time_scale`).
 var phase_time_left: float = 0.0
+## Seconds left of a minigame's end grace (0 = none): the round is over, everyone is frozen,
+## RESULTS follows when it reaches 0. Replicated; counts down on every peer at `time_scale`.
+var end_grace: float = 0.0
 
 ## Seconds of play in the current round (scaled), host only.
 var _play_elapsed: float = 0.0
@@ -82,6 +90,9 @@ var _has_pending: bool = false
 var _tied_top: Array[int] = []
 ## Players the current round started with (picks the points table).
 var _round_player_count: int = 0
+## The ranking waiting for the end grace to run out. Host only.
+var _grace_ranking: Array[int] = []
+var _grace_active: bool = false
 
 
 func _ready() -> void:
@@ -208,6 +219,7 @@ func _physics_process(delta: float) -> void:
 	if state == State.LOBBY:
 		return
 	phase_time_left = maxf(0.0, phase_time_left - delta * time_scale)
+	end_grace = maxf(0.0, end_grace - delta * time_scale)
 	if not Net.is_host():
 		return
 	match state:
@@ -233,12 +245,17 @@ func _physics_process(delta: float) -> void:
 
 
 func _tick_playing(delta: float) -> void:
+	if _grace_active:
+		if end_grace <= 0.0:
+			_grace_active = false
+			_end_round(_grace_ranking)
+		return
 	if not is_instance_valid(current_minigame):
 		_end_round([])
 		return
 	if not current_minigame.is_finished():
 		current_minigame._host_tick(delta * time_scale)
-	if state != State.PLAYING:
+	if state != State.PLAYING or _grace_active:
 		return  # the minigame finished during its tick
 	_play_elapsed += delta * time_scale
 	var limit := current_minigame.time_limit
@@ -261,7 +278,7 @@ func _force_finish() -> void:
 			ranking.append(s)
 	_tied_top = survivors
 	current_minigame.finish(ranking)
-	if state == State.PLAYING:  # finish() was ignored (already finished earlier)
+	if state == State.PLAYING and not _grace_active:  # finish() was ignored (already finished earlier)
 		_end_round(ranking)
 
 
@@ -269,7 +286,12 @@ func _on_minigame_finished(ranking: Array[int], minigame: Minigame) -> void:
 	if minigame != current_minigame:
 		return
 	if state == State.PLAYING:
-		_end_round(ranking)
+		if minigame.finish_grace > 0.0 and not _grace_active:
+			_grace_ranking = ranking.duplicate()
+			_grace_active = true
+			_rpc_end_grace.rpc(minigame.finish_grace)
+		elif not _grace_active:
+			_end_round(ranking)
 	elif state == State.INTRO:
 		_pending_ranking = ranking.duplicate()
 		_has_pending = true
@@ -364,6 +386,7 @@ func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
 	_has_pending = false
 	_pending_ranking = []
 	_tied_top = []
+	_clear_grace()
 	current_minigame = null
 	var stage := _stage()
 	if stage:
@@ -410,6 +433,7 @@ func _rpc_results(ranking: Array, points: Dictionary, totals: Dictionary, wins: 
 	for s: Variant in points:
 		pts[int(s)] = int(points[s])
 	_assign_totals(totals, wins)
+	_clear_grace()
 	for p in _stage_players():
 		p.frozen = true
 	_set_phase(State.RESULTS, duration)
@@ -422,10 +446,25 @@ func _rpc_podium(final_ranking: Array, totals: Dictionary, wins: Dictionary, dur
 	for s: Variant in final_ranking:
 		r.append(int(s))
 	_assign_totals(totals, wins)
+	_clear_grace()
 	for p in _stage_players():
 		p.frozen = true
 	_set_phase(State.PODIUM, duration)
 	session_finished.emit(r)
+
+
+## The round is decided; hold it on screen for `seconds` (every player frozen) before RESULTS.
+@rpc("authority", "call_local", "reliable")
+func _rpc_end_grace(seconds: float) -> void:
+	end_grace = maxf(0.0, seconds)
+	for p in _stage_players():
+		p.frozen = true
+
+
+func _clear_grace() -> void:
+	end_grace = 0.0
+	_grace_active = false
+	_grace_ranking = []
 
 
 ## Back to LOBBY: clears the stage, keeps `scores` of the last session for the lobby UI.
@@ -444,6 +483,7 @@ func _rpc_lobby() -> void:
 	_has_pending = false
 	_pending_ranking = []
 	_tied_top = []
+	_clear_grace()
 	if state != State.LOBBY:
 		_set_phase(State.LOBBY, 0.0)
 	else:

@@ -9,7 +9,8 @@ extends Node
 ##   round_finished   -> the local human gets coins by placement: 1st 6, 2nd 4, 3rd 3, else 2
 ##                       (only when in the round's ranking; slots sharing first place all get 6)
 ##   session_finished -> session bonus by final placement: 1st 40, 2nd 25, 3rd 15, else 10
-##   offline sessions (`Net.start_offline`) earn half of both, rounded up; bots never earn
+##   half rate (half of both, rounded up) for offline sessions (`Net.start_offline`) and for any
+##   session with fewer than 2 human players (a host alone with bots); bots never earn
 ##   award(reason, amount)  -> generic reward, one-time per reason by default (the tutorial
 ##                             calls `Progression.award(&"tutorial", 20)` once)
 ##
@@ -35,6 +36,8 @@ const ROUND_COINS_TAKING_PART := 2
 ## Session bonus by final placement; everyone else in the final ranking gets the last value.
 const SESSION_COINS: Array[int] = [40, 25, 15]
 const SESSION_COINS_TAKING_PART := 10
+## Fewer humans than this in the game: the half (offline) rate.
+const MIN_FULL_RATE_HUMANS := 2
 ## User args that make a run a dev/test run (no saving). Mirrors MainApp.DEV_ARGS plus tooling.
 const DEV_ARGS: Array[String] = ["name", "offline", "auto-host", "auto-join", "bots", "auto-start",
 	"round-time", "time-scale", "round-minigame", "open-wardrobe", "min-players", "fps", "screenshot",
@@ -51,7 +54,8 @@ var stats: Dictionary = {}
 var claimed: Array[String] = []
 ## Write changes to the profile. See the header for when it starts off.
 var persist: bool = true
-## Offline sessions earn half (rounded up). Dev scenes may turn it off for screenshots.
+## Half-rate sessions (offline, or fewer than 2 humans) earn half (rounded up). Dev scenes may
+## turn it off for screenshots.
 var offline_half_rate: bool = true
 ## Everything counts as unlocked (testing only: `--unlock-all`, `dev_unlock_all()`).
 var unlock_all: bool = false
@@ -160,10 +164,24 @@ func has_claimed(reason: StringName) -> bool:
 	return claimed.has(String(reason))
 
 
-## True when this is an offline game (`Net.start_offline`): sessions earn half.
+## True when this is an offline game (`Net.start_offline`).
 func is_offline() -> bool:
 	var peer := multiplayer.multiplayer_peer
 	return peer == null or peer is OfflineMultiplayerPeer
+
+
+## Humans (not bots) in the game right now.
+static func human_count() -> int:
+	var n := 0
+	for slot: int in Net.roster:
+		if not Net.roster[slot].is_bot:
+			n += 1
+	return n
+
+
+## True when sessions pay the half rate: offline, or fewer than MIN_FULL_RATE_HUMANS humans.
+func is_half_rate() -> bool:
+	return is_offline() or human_count() < MIN_FULL_RATE_HUMANS
 
 
 ## Placement (1-based) of `slot` in a round: its index in `ranking`, except that slots with the
@@ -180,35 +198,35 @@ static func round_place(ranking: Array, points: Dictionary, slot: int) -> int:
 
 
 ## Coins a round gives `slot` (0 for a bot or a slot not in the ranking), halved (rounded up)
-## when `offline`.
-func round_award(ranking: Array, points: Dictionary, slot: int, offline: bool) -> int:
+## when `half` (see is_half_rate).
+func round_award(ranking: Array, points: Dictionary, slot: int, half: bool) -> int:
 	if not _is_human(slot):
 		return 0
 	var place := round_place(ranking, points, slot)
 	if place == 0:
 		return 0
 	var coins_for := ROUND_COINS[place - 1] if place <= ROUND_COINS.size() else ROUND_COINS_TAKING_PART
-	return _rate(coins_for, offline)
+	return _rate(coins_for, half)
 
 
 ## Session bonus for `slot` at its place in `final_ranking` (0 for a bot or a missing slot).
-func session_award(final_ranking: Array, slot: int, offline: bool) -> int:
+func session_award(final_ranking: Array, slot: int, half: bool) -> int:
 	if not _is_human(slot):
 		return 0
 	var i := final_ranking.find(slot)
 	if i < 0:
 		return 0
-	return _rate(SESSION_COINS[i] if i < SESSION_COINS.size() else SESSION_COINS_TAKING_PART, offline)
+	return _rate(SESSION_COINS[i] if i < SESSION_COINS.size() else SESSION_COINS_TAKING_PART, half)
 
 
 ## What the local player gets for this round (what the results screen shows).
 func local_round_award(ranking: Array, points: Dictionary) -> int:
-	return round_award(ranking, points, Net.local_slot(), is_offline())
+	return round_award(ranking, points, Net.local_slot(), is_half_rate())
 
 
 ## What the local player gets for this session (what the podium shows).
 func local_session_award(final_ranking: Array) -> int:
-	return session_award(final_ranking, Net.local_slot(), is_offline())
+	return session_award(final_ranking, Net.local_slot(), is_half_rate())
 
 
 func _on_round_finished(ranking: Array, points: Dictionary) -> void:
@@ -299,8 +317,8 @@ func _bump(stat: StringName) -> void:
 	stats[String(stat)] = int(stats.get(String(stat), 0)) + 1
 
 
-func _rate(amount: int, offline: bool) -> int:
-	return ceili(amount / 2.0) if offline and offline_half_rate else amount
+func _rate(amount: int, half: bool) -> int:
+	return ceili(amount / 2.0) if half and offline_half_rate else amount
 
 
 func _is_human(slot: int) -> bool:

@@ -6,6 +6,7 @@ config_version=5
 [application]
 
 config/name="Minigame Mansion"
+config/version="0.2"
 run/main_scene="res://main/main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
@@ -20,6 +21,7 @@ Sfx="*res://audio/sfx.gd"
 Music="*res://audio/music.gd"
 Progression="*res://progression/progression.gd"
 Feel="*res://feel/feel.gd"
+Settings="*res://ui/settings/settings.gd"
 
 [display]
 

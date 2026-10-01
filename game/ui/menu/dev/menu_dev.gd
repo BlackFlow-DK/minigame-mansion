@@ -1,7 +1,8 @@
 extends Node3D
 ## Dev scene for looking at the menu screens (and screenshots). Offline; fakes the network
 ## paths by emitting the autoload signals. User args:
-##   --menu-screen=title|title_msg|join|join_error|join_connecting|lobby|lobby_full|lobby_client|lobby_offline|pause
+##   --menu-screen=title|title_msg|title_prompt|title_focus_quit|join|join_error|join_connecting|lobby|lobby_full|
+##                 lobby_client|lobby_offline|lobby_focus|pause|settings|pause_settings
 ##   --coins=N   Mansion Coin balance shown (never saved)
 ## e.g. tools/godot-screenshot.ps1 -Scene res://ui/menu/dev/menu_dev.tscn -GameArgs "--menu-screen=lobby"
 
@@ -58,6 +59,28 @@ func _setup(which: String) -> void:
 				roster[s] = PlayerInfo.new(s, [1, 77, 1, 88][s], names[s], s == 2, Cosmetics.default_loadout(s))
 			menu.lobby.refresh(roster, 1, false)
 			menu.lobby.set_addresses(PackedStringArray(), false)
+		"settings":
+			menu.title.set_player_name("Sander")
+			menu.open_settings()
+		"pause_settings":
+			menu.title.host_button.pressed.emit()
+			for i in 3:
+				Net.add_bot()
+			Session.state_changed.emit(Session.State.PLAYING)
+			menu.open_pause()
+			menu.open_settings()
+		"title_prompt":
+			menu.title.show_training_prompt()
+		"title_focus_quit":
+			menu.title.quit_button.grab_focus()
+		"lobby_focus":
+			menu.title.set_player_name("Sander")
+			menu.title.host_button.pressed.emit()
+			for i in 3:
+				Net.add_bot()
+			menu.offline_game = false
+			menu.lobby.set_addresses(PackedStringArray(["192.168.1.23", "10.0.0.7"]), false)
+			menu.lobby.focus_default()
 		_:
 			push_warning("menu_dev: unknown --menu-screen=%s" % which)
 

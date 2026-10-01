@@ -133,16 +133,17 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 | `Fx` | look and effects | `play(effect: StringName, at: Vector3, color := Color.WHITE)` |
 | `Sfx` | audio | `play(sound: StringName, at := Vector3.INF)` |
 | `Music` | audio | `play(track: StringName, fade := 1.0)` (cross-fade; same track = no-op), `stop(fade := 1.0)`, `play_sting(track)` (one-shot over the music), `duck(amount: float, seconds: float)`, `set_volume(linear)` / `get_volume()` (bus `Music`), `current`; *`track_changed(track)`*. Tracks `Music.TRACKS` (`res://audio/music/*.ogg`). `game/audio/music_director.gd` (instanced in the main scene) picks them: title, lobby, round by the minigame's StageLook preset, results sting, podium. A minigame may declare `var music_track: StringName` (`&"none"` = silence) or call `Music.stop()` / `play()` from `_start()` on; the director only acts again at the next phase (RESULTS) |
-| `Progression` | progression | Mansion Coins of the local player, saved in its own profile; every peer pays itself from the Session signals (nothing networked; bots never earn; offline half rate). `coins`, `stats`, `award(reason: StringName, amount: int, once := true) -> int` (one-time per reason by default, e.g. the tutorial's `award(&"tutorial", 20)`), `is_unlocked(slot, id)` (wardrobe gate only), `unlock(slot, id) -> bool`, `price(slot, id)`, `dev_unlock_all()` / `--unlock-all` (testing); *`coins_changed(total)`*, *`awarded(reason, amount, total)`*, *`unlocks_changed(slot, id)`* |
+| `Progression` | progression | Mansion Coins of the local player, saved in its own profile; every peer pays itself from the Session signals (nothing networked; bots never earn; half rate offline and with fewer than 2 humans: `is_half_rate()`). `coins`, `stats`, `award(reason: StringName, amount: int, once := true) -> int` (one-time per reason by default, e.g. the tutorial's `award(&"tutorial", 20)`), `is_unlocked(slot, id)` (wardrobe gate only), `unlock(slot, id) -> bool`, `price(slot, id)`, `dev_unlock_all()` / `--unlock-all` (testing); *`coins_changed(total)`*, *`awarded(reason, amount, total)`*, *`unlocks_changed(slot, id)`* |
+| `Settings` | UI polish (`game/ui/settings/settings.gd`; screen `settings.tscn`) | The player's options, `user://settings.json`, applied at startup: `master_volume`, `music_volume`, `sfx_volume`, `ui_volume` (0..1 -> buses Master / Music / Sfx / Ui), `fullscreen`, `window_size`, `quality` ("high"/"low" -> `Look.set_quality`), `show_fps`, and the comfort flags **`screen_shake: bool`** (false: no camera shake) and **`reduced_motion: bool`** (calmer animations); `set_value(key, value)`, *`changed(key)`*. Other systems read the flags without a hard dependency: `get_tree().root.get_node_or_null(^"Settings")` then `.screen_shake` / `.reduced_motion` |
 
 `Net` details (added after wave 1):
 - `join_game` accepts `"ip"` or `"ip:port"`. `join_failed` reasons are exactly `timeout`, `full`, `in progress`, `version mismatch`, `could not connect`.
 - `games_found` entries: `{id, address ("ip:port", pass it to join_game), ip, port, game_name, host_name, players, max_players, in_lobby, version, compatible}`.
 - `session_in_progress: bool` (host sets, clients receive) and `accept_late_joiners: bool` (default false: joins during a session are refused with `in progress`). `Session` sets `session_in_progress` at session start and clears it when it returns to LOBBY.
 
-`Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place. Returning to LOBBY clears the stage.
+`Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these), `end_grace` (seconds left of a minigame's end grace, 0 = none; see `finish`). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place. Returning to LOBBY clears the stage.
 
-Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`, `game/audio/music.gd`, `game/progression/progression.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
+Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`, `game/audio/music.gd`, `game/progression/progression.gd`, `game/ui/settings/settings.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
 
 ## Stage and minigames
 
@@ -172,7 +173,7 @@ func get_spawn_points() -> Array[Transform3D]  # Marker3D children of $Spawns; t
 func _setup(players: Array[Player]) -> void    # every peer, players are frozen
 func _start() -> void                          # every peer, after the countdown, players unfrozen
 func _host_tick(delta: float) -> void          # host only, each physics frame while playing
-func finish(ranking: Array[int]) -> void       # host only; later calls ignored
+func finish(ranking: Array[int], grace := 0.0) -> void  # host only; later calls ignored. grace > 0: Session holds PLAYING, every player frozen on every peer, for `grace` s (Session.end_grace) before RESULTS
 func is_finished() -> bool
 func knock_out(player: Player) -> void         # host only helper: eliminates and records order; when <= 1 is left, finishes with the survivor first, then reverse knock-out order
 func get_bot_goal(player: Player) -> Vector3   # where a bot should want to be (default: a random spawn point)
@@ -225,6 +226,7 @@ With `scripted = true` (default) controllers leave `intent` alone, so write `pla
 | `game/net/` | net, player sync (`game/net/sync/`) |
 | `game/session/` | session |
 | `game/ui/menu/`, `game/ui/round/`, `game/ui/wardrobe/` | menu UI, round UI, wardrobe UI |
+| `game/ui/settings/`, `game/ui/theme/` (theme, `UiMotion`, focus ring) | UI polish |
 | `game/cosmetics/` | cosmetics system |
 | `game/progression/` | progression (coins, unlocks; `CoinIcon`, `PadlockIcon`, `CoinBalance` for any UI) |
 | `game/look/`, `game/fx/` | look and effects |

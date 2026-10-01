@@ -107,6 +107,41 @@ static func chain_horizontal(row: Array, above: Control = null, below: Control =
 			c.focus_neighbor_bottom = c.get_path_to(below)
 
 
+## Links a grid of controls: `rows` is an Array of rows, each a Control or an Array of Controls
+## (left to right). Up/down move between rows (to the same column, or the row's last one),
+## left/right walk the row; both wrap. Tab / Shift+Tab follow reading order. Hidden or disabled
+## entries are skipped (an emptied row disappears). Returns the linked controls in order.
+static func chain_grid(rows: Array) -> Array[Control]:
+	var live_rows: Array = []
+	for r: Variant in rows:
+		var row: Array[Control] = []
+		for c: Variant in (r as Array if r is Array else [r]):
+			if c is Control and focusable(c as Control):
+				row.append(c as Control)
+		if not row.is_empty():
+			live_rows.append(row)
+	var flat: Array[Control] = []
+	for row: Array[Control] in live_rows:
+		flat.append_array(row)
+	var n := live_rows.size()
+	for ri in n:
+		var row: Array[Control] = live_rows[ri]
+		var up: Array[Control] = live_rows[(ri - 1 + n) % n]
+		var down: Array[Control] = live_rows[(ri + 1) % n]
+		var w := row.size()
+		for ci in w:
+			var c := row[ci]
+			c.focus_neighbor_left = c.get_path_to(row[(ci - 1 + w) % w])
+			c.focus_neighbor_right = c.get_path_to(row[(ci + 1) % w])
+			c.focus_neighbor_top = c.get_path_to(up[mini(ci, up.size() - 1)])
+			c.focus_neighbor_bottom = c.get_path_to(down[mini(ci, down.size() - 1)])
+	var m := flat.size()
+	for i in m:
+		flat[i].focus_previous = flat[i].get_path_to(flat[(i - 1 + m) % m])
+		flat[i].focus_next = flat[i].get_path_to(flat[(i + 1) % m])
+	return flat
+
+
 ## Gives focus to the first usable control of `candidates`. Returns it (or null).
 static func focus_first(candidates: Array) -> Control:
 	for c: Variant in candidates:

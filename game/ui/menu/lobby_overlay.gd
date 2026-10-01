@@ -1,29 +1,40 @@
 class_name MenuLobbyOverlay
 extends Control
 ## Lobby overlay drawn over the 3D lobby world: roster (colour, name, bot tag, host crown),
-## host-only controls (rounds 4/8/12, add/remove bot, Start), "Waiting for host" for clients,
-## the host's LAN address(es), your Mansion Coins, Wardrobe (change your look; everyone sees it
-## live) and Leave. Pure view: `refresh()` feeds it, signals report clicks.
-## The middle of the screen stays clear (and click-through) for the world.
+## host-only controls (rounds 4/8/12, add/remove bot, a pulsing START), "Waiting for host" for
+## clients, the host's LAN address(es) (click one to copy it: "Copied!"), your Mansion Coins,
+## Wardrobe (change your look; everyone sees it live) and Leave. Pure view: `refresh()` feeds
+## it, signals report clicks.
+## No solid panels: every block sits on a soft dark scrim (a gradient that fades out), so blobs
+## standing at the screen edges stay visible through it, and the middle stays clear (and
+## click-through) for the world.
 
 signal start_pressed(rounds: int)
 signal add_bot_pressed
 signal remove_bot_pressed(slot: int)
 signal leave_pressed
 signal wardrobe_pressed
+## An address was copied to the clipboard.
+signal address_copied(address: String)
 
 const ROUND_CHOICES: Array[int] = [4, 8, 12]
 const DEFAULT_ROUNDS := 8
 const MIN_PLAYERS := 2
+## Seconds "Copied!" shows on an address button.
+const COPIED_SECONDS := 1.4
+const MAX_ADDRESSES := 3
+const ROSTER_W := 300.0
+const INFO_W := 330.0
 
 var selected_rounds: int = DEFAULT_ROUNDS
 var is_host_view: bool = false
 
 var info_label: Label
-var address_label: Label
+## The address buttons' holder ("Friends can join at" block).
+var address_box: VBoxContainer
 var leave_button: Button
 var wardrobe_button: Button
-## Your Mansion Coins (top-left card, beside "LOBBY").
+## Your Mansion Coins (top-left, beside "LOBBY").
 var coin_balance: CoinBalance
 var count_label: Label
 var roster_list: VBoxContainer
@@ -35,11 +46,17 @@ var start_button: Button
 var start_hint: Label
 ## rounds -> toggle Button
 var round_buttons: Dictionary[int, Button] = {}
+## The soft dark gradients behind each block (tests check they stay translucent).
+var scrims: Array[TextureRect] = []
 
 var _max_players: int = 8
 ## slot -> remove Button (bots only, host view only)
 var _remove_buttons: Dictionary[int, Button] = {}
 var _player_count: int = 0
+var _info_block: VBoxContainer
+var _roster_block: VBoxContainer
+var _roster_scrim: TextureRect
+var _info_scrim: TextureRect
 
 
 func _init() -> void:
@@ -47,87 +64,100 @@ func _init() -> void:
 	MenuUI.full_rect(self)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	# Top-left: lobby card with address and Leave.
-	var info := PanelContainer.new()
-	info.position = Vector2(24, 24)
-	info.custom_minimum_size = Vector2(330, 0)
-	add_child(info)
-	var info_col := MenuUI.vbox(8)
-	info.add_child(info_col)
-	var info_head := MenuUI.hbox(10)
-	info_col.add_child(info_head)
-	var lobby_l := MenuUI.label("LOBBY", &"HeaderLabel")
-	lobby_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Scrims first (drawn under the blocks).
+	_info_scrim = _scrim(Vector2(0.0, 0.0), Vector2(1.0, 0.0))
+	_info_scrim.position = Vector2.ZERO
+	add_child(_info_scrim)
+	_roster_scrim = _scrim(Vector2(1.0, 0.0), Vector2(0.0, 0.0))
+	_roster_scrim.anchor_left = 1.0
+	_roster_scrim.anchor_right = 1.0
+	add_child(_roster_scrim)
+	var bottom_scrim := _scrim(Vector2(0.5, 1.0), Vector2(1.0, 1.0))
+	bottom_scrim.anchor_left = 0.5
+	bottom_scrim.anchor_right = 0.5
+	bottom_scrim.anchor_top = 1.0
+	bottom_scrim.anchor_bottom = 1.0
+	bottom_scrim.offset_left = -470.0
+	bottom_scrim.offset_right = 470.0
+	bottom_scrim.offset_top = -300.0
+	add_child(bottom_scrim)
+
+	# Top-left: LOBBY, coins, how friends join, Wardrobe / Leave.
+	_info_block = MenuUI.vbox(8)
+	_info_block.position = Vector2(24, 18)
+	_info_block.custom_minimum_size = Vector2(INFO_W, 0)
+	_info_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_info_block)
+	var info_head := MenuUI.hbox(12)
+	_info_block.add_child(info_head)
+	var lobby_l := MenuUI.label("LOBBY", &"ScrimHeader")
 	info_head.add_child(lobby_l)
 	coin_balance = CoinBalance.make(18)
 	coin_balance.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	info_head.add_child(coin_balance)
-	info_label = MenuUI.label("", &"MutedLabel")
+	info_label = MenuUI.label("", &"ScrimLabel")
 	info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	info_col.add_child(info_label)
-	address_label = MenuUI.label("", &"")
-	address_label.add_theme_font_size_override(&"font_size", 26)
-	address_label.add_theme_color_override(&"font_color", MenuUI.PLUM)
-	address_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	info_col.add_child(address_label)
+	info_label.custom_minimum_size = Vector2(INFO_W, 0)
+	_info_block.add_child(info_label)
+	address_box = MenuUI.vbox(6)
+	_info_block.add_child(address_box)
 	var buttons := MenuUI.hbox(10)
-	info_col.add_child(buttons)
-	wardrobe_button = MenuUI.button("Wardrobe")
-	wardrobe_button.custom_minimum_size = Vector2(150, 0)
+	_info_block.add_child(buttons)
+	wardrobe_button = MenuUI.button("Wardrobe", &"SecondaryButton", 150)
 	buttons.add_child(wardrobe_button)
-	leave_button = MenuUI.button("Leave", &"DangerButton")
-	leave_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	leave_button.custom_minimum_size = Vector2(140, 0)
+	leave_button = MenuUI.button("Leave", &"SecondaryDangerButton", 120)
 	buttons.add_child(leave_button)
-	var hint := MenuUI.label("Tab / Select: use this menu", &"MutedLabel")
+	var hint := MenuUI.label("Tab / Select: use this menu", &"ScrimLabel")
 	hint.add_theme_font_size_override(&"font_size", 15)
-	info_col.add_child(hint)
+	hint.modulate.a = 0.85
+	_info_block.add_child(hint)
 
-	# Right: players.
-	var roster_panel := PanelContainer.new()
-	roster_panel.anchor_left = 1.0
-	roster_panel.anchor_right = 1.0
-	roster_panel.offset_left = -404
-	roster_panel.offset_right = -24
-	roster_panel.offset_top = 24
-	roster_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	add_child(roster_panel)
-	var roster_col := MenuUI.vbox(8)
-	roster_panel.add_child(roster_col)
+	# Top-right: players.
+	_roster_block = MenuUI.vbox(5)
+	_roster_block.anchor_left = 1.0
+	_roster_block.anchor_right = 1.0
+	_roster_block.offset_left = -24.0 - ROSTER_W
+	_roster_block.offset_right = -24.0
+	_roster_block.offset_top = 18.0
+	_roster_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_roster_block)
 	var head := MenuUI.hbox()
-	roster_col.add_child(head)
-	var players_l := MenuUI.label("Players", &"HeaderLabel")
+	_roster_block.add_child(head)
+	var players_l := MenuUI.label("Players", &"ScrimHeader")
 	players_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(players_l)
-	count_label = MenuUI.label("0/8", &"HeaderLabel")
-	count_label.add_theme_color_override(&"font_color", MenuUI.CHARCOAL)
+	count_label = MenuUI.label("0/8", &"ScrimHeader")
+	count_label.add_theme_color_override(&"font_color", MenuUI.GOLD)
 	head.add_child(count_label)
-	roster_list = MenuUI.vbox(6)
-	roster_col.add_child(roster_list)
-	add_bot_button = MenuUI.button("+ Add bot", &"")
-	add_bot_button.add_theme_font_size_override(&"font_size", 22)
-	roster_col.add_child(add_bot_button)
+	roster_list = MenuUI.vbox(4)
+	roster_list.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_roster_block.add_child(roster_list)
+	add_bot_button = MenuUI.button("+ Add bot", &"SecondaryButton")
+	_roster_block.add_child(add_bot_button)
+	_roster_block.resized.connect(_fit_scrims)
+	_info_block.resized.connect(_fit_scrims)
 
-	# Bottom centre: start bar (host) / waiting bar (client).
+	# Bottom centre: start bar (host) / waiting text (client).
 	var bottom := MenuUI.full_rect(CenterContainer.new())
 	bottom.anchor_top = 1.0
-	bottom.offset_top = -130
-	bottom.offset_bottom = -24
+	bottom.offset_top = -124
+	bottom.offset_bottom = -14
 	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bottom)
-	var host_panel := PanelContainer.new()
-	host_bar = host_panel
-	bottom.add_child(host_panel)
 	var host_col := MenuUI.vbox(4)
-	host_panel.add_child(host_col)
-	var host_row := MenuUI.hbox(14)
+	host_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	host_bar = host_col
+	bottom.add_child(host_col)
+	var host_row := MenuUI.hbox(12)
+	host_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	host_col.add_child(host_row)
-	var rounds_l := MenuUI.label("Rounds", &"")
+	var rounds_l := MenuUI.label("Rounds", &"ScrimLabel")
+	rounds_l.add_theme_font_size_override(&"font_size", 22)
 	rounds_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	host_row.add_child(rounds_l)
 	var group := ButtonGroup.new()
 	for r in ROUND_CHOICES:
-		var b := MenuUI.button(str(r), &"ChipButton", 64)
+		var b := MenuUI.button(str(r), &"ChipButton", 60)
 		b.toggle_mode = true
 		b.button_group = group
 		b.button_pressed = r == selected_rounds
@@ -137,20 +167,17 @@ func _init() -> void:
 		host_row.add_child(b)
 		round_buttons[r] = b
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(10, 0)
+	spacer.custom_minimum_size = Vector2(14, 0)
 	host_row.add_child(spacer)
-	start_button = MenuUI.button("START!", &"PrimaryButton", 200)
+	start_button = MenuUI.button("START!", &"PrimaryButton", 210)
 	host_row.add_child(start_button)
-	start_hint = MenuUI.label("Need at least 2 players: add a bot or wait for friends.", &"MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	start_hint = MenuUI.label("Need at least 2 players: add a bot or wait for friends.", &"ScrimLabel", HORIZONTAL_ALIGNMENT_CENTER)
 	host_col.add_child(start_hint)
 
-	var client_panel := PanelContainer.new()
-	client_panel.theme_type_variation = &"DarkPanel"
-	client_bar = client_panel
-	bottom.add_child(client_panel)
-	waiting_label = MenuUI.label("Waiting for the host to start...", &"LightLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	waiting_label = MenuUI.label("Waiting for the host to start...", &"ScrimHeader", HORIZONTAL_ALIGNMENT_CENTER)
 	waiting_label.add_theme_font_size_override(&"font_size", 28)
-	client_panel.add_child(waiting_label)
+	client_bar = waiting_label
+	bottom.add_child(waiting_label)
 
 	leave_button.pressed.connect(func() -> void: leave_pressed.emit())
 	wardrobe_button.pressed.connect(func() -> void: wardrobe_pressed.emit())
@@ -158,6 +185,11 @@ func _init() -> void:
 	start_button.pressed.connect(func() -> void:
 		if _player_count >= MIN_PLAYERS and is_host_view:
 			start_pressed.emit(selected_rounds))
+	visibility_changed.connect(_update_pulse)
+
+
+func _ready() -> void:
+	_fit_scrims.call_deferred()
 
 
 ## Rebuilds the view. `roster`: slot -> PlayerInfo (Net.roster). `local_slot`: this peer's
@@ -190,6 +222,7 @@ func refresh(roster: Dictionary, local_slot: int, is_host: bool, max_players: in
 	add_bot_button.disabled = _player_count >= max_players
 	start_button.disabled = _player_count < MIN_PLAYERS
 	start_hint.visible = start_button.disabled
+	_update_pulse()
 
 	_refresh_focus_links()
 	if had_focus and not _focus_inside():
@@ -199,23 +232,48 @@ func refresh(roster: Dictionary, local_slot: int, is_host: bool, max_players: in
 			focus_default()
 
 
-## Address lines for friends; `offline` shows a note instead.
+## Address lines for friends; `offline` shows a note instead. Each address is a button that
+## copies it to the clipboard.
 func set_addresses(addresses: PackedStringArray, offline: bool, note: String = "") -> void:
+	for c in address_box.get_children():
+		address_box.remove_child(c)
+		c.queue_free()
 	if offline:
 		info_label.text = note if note != "" else "Offline game: friends cannot join."
-		address_label.text = ""
-		address_label.visible = false
 	elif is_host_view:
 		if addresses.is_empty():
 			info_label.text = "Friends on your network will see this game in their Join list."
-			address_label.visible = false
 		else:
-			info_label.text = "Friends can join at:"
-			address_label.text = "\n".join(addresses)
-			address_label.visible = true
+			info_label.text = "Friends can join at (click to copy):"
+			for i in mini(addresses.size(), MAX_ADDRESSES):
+				address_box.add_child(_make_address_button(addresses[i]))
 	else:
 		info_label.text = note if note != "" else "You joined this game. Run around while you wait!"
-		address_label.visible = false
+	address_box.visible = address_box.get_child_count() > 0
+	_refresh_focus_links()
+
+
+## The address buttons, in order.
+func address_buttons() -> Array[Button]:
+	var out: Array[Button] = []
+	for c in address_box.get_children():
+		if c is Button and not c.is_queued_for_deletion():
+			out.append(c as Button)
+	return out
+
+
+## Copies `address` to the clipboard and flashes "Copied!" on its button.
+func copy_address(address: String) -> void:
+	DisplayServer.clipboard_set(address)
+	for b in address_buttons():
+		if str(b.get_meta(&"address", "")) == address:
+			b.text = "Copied!"
+			var t := b.create_tween()
+			t.tween_interval(COPIED_SECONDS)
+			t.tween_callback(func() -> void:
+				if is_instance_valid(b):
+					b.text = address)
+	address_copied.emit(address)
 
 
 func remove_button_for(slot: int) -> Button:
@@ -228,23 +286,33 @@ func row_count() -> int:
 
 func focus_default() -> void:
 	_refresh_focus_links()
-	MenuUI.focus_first([start_button, add_bot_button, leave_button])
+	MenuUI.focus_first([start_button, add_bot_button, wardrobe_button, leave_button])
+
+
+## Every focusable control in navigation order (tests walk it).
+func focus_chain() -> Array[Control]:
+	return _refresh_focus_links()
 
 
 func _make_row(info: PlayerInfo, is_me: bool, host_view: bool) -> Control:
 	var panel := PanelContainer.new()
-	panel.theme_type_variation = &"RowPanel"
-	panel.custom_minimum_size = Vector2(0, 44)
-	var row := MenuUI.hbox(10)
+	panel.theme_type_variation = &"ScrimRow"
+	panel.custom_minimum_size = Vector2(0, 36)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var row := MenuUI.hbox(8)
 	panel.add_child(row)
 	var colour := Color.from_string(str(info.loadout.get("primary", "")), Color(MenuUI.TEAL))
-	row.add_child(MenuIcon.blob(colour, 30))
-	var name_l := MenuUI.label(info.name + ("  (you)" if is_me else ""), &"")
+	row.add_child(MenuIcon.blob(colour, 26))
+	var name_l := MenuUI.label(info.name + ("  (you)" if is_me else ""), &"ScrimLabel")
 	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_l.clip_text = true
 	name_l.custom_minimum_size = Vector2(60, 0)
+	name_l.tooltip_text = info.name
+	name_l.mouse_filter = Control.MOUSE_FILTER_PASS
+	if is_me:
+		name_l.add_theme_color_override(&"font_color", MenuUI.GOLD)
 	row.add_child(name_l)
 	if info.is_bot:
 		var chip := PanelContainer.new()
@@ -253,10 +321,11 @@ func _make_row(info: PlayerInfo, is_me: bool, host_view: bool) -> Control:
 		chip.add_child(MenuUI.label("BOT", &"ChipLabel", HORIZONTAL_ALIGNMENT_CENTER))
 		row.add_child(chip)
 	elif info.peer_id == 1:
-		row.add_child(MenuIcon.crown(28))
+		row.add_child(MenuIcon.crown(24))
 	if info.is_bot and host_view:
 		var rm := MenuUI.button("X", &"SmallButton")
-		rm.custom_minimum_size = Vector2(38, 32)
+		rm.custom_minimum_size = Vector2(32, 28)
+		rm.add_theme_font_size_override(&"font_size", 16)
 		rm.tooltip_text = "Remove %s" % info.name
 		var slot := info.slot
 		rm.pressed.connect(func() -> void: remove_bot_pressed.emit(slot))
@@ -265,30 +334,83 @@ func _make_row(info: PlayerInfo, is_me: bool, host_view: bool) -> Control:
 	return panel
 
 
-func _refresh_focus_links() -> void:
+func _make_address_button(address: String) -> Button:
+	var b := MenuUI.button(address, &"CopyButton")
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.set_meta(&"address", address)
+	b.set_meta(&"sfx_press", &"ui_click")
+	b.tooltip_text = "Click to copy %s" % address
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	b.pressed.connect(copy_address.bind(address))
+	return b
+
+
+## A soft dark gradient: darkest at `from` (UV in the rect), clear at the distance of `to`
+## (an ellipse that reaches 0 at the rect's edges).
+func _scrim(from: Vector2, to: Vector2) -> TextureRect:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.5, 0.8, 1.0])
+	g.colors = PackedColorArray([Color(MenuUI.CHARCOAL, 0.68), Color(MenuUI.CHARCOAL, 0.55),
+		Color(MenuUI.CHARCOAL, 0.25), Color(MenuUI.CHARCOAL, 0.0)])
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = from
+	tex.fill_to = to
+	tex.width = 128
+	tex.height = 128
+	var r := TextureRect.new()
+	r.texture = tex
+	r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	r.stretch_mode = TextureRect.STRETCH_SCALE
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	scrims.append(r)
+	return r
+
+
+## Sizes the corner scrims to their blocks (plus a soft margin).
+func _fit_scrims() -> void:
+	var info_size := _info_block.size + Vector2(170, 130)
+	_info_scrim.size = info_size
+	var rs := _roster_block.size + Vector2(170, 130)
+	_roster_scrim.offset_left = -rs.x
+	_roster_scrim.offset_right = 0.0
+	_roster_scrim.offset_top = 0.0
+	_roster_scrim.offset_bottom = rs.y
+
+
+## START pulses for the host while it can be pressed.
+func _update_pulse() -> void:
+	var want := is_visible_in_tree() and is_host_view and not start_button.disabled
+	if want:
+		UiMotion.pulse(start_button)
+	else:
+		UiMotion.stop_pulse(start_button)
+
+
+## True while START is pulsing.
+func is_start_pulsing() -> bool:
+	return UiMotion.is_pulsing(start_button)
+
+
+func _refresh_focus_links() -> Array[Control]:
 	if not is_inside_tree():
-		return
-	var order: Array = []
+		return []
+	var rows: Array = []
+	for b in address_buttons():
+		rows.append(b)
+	rows.append([wardrobe_button, leave_button])
 	var slots: Array = _remove_buttons.keys()
 	slots.sort()
 	for s: int in slots:
-		order.append(_remove_buttons[s])
-	order.append(add_bot_button)
-	var first_round: Button = round_buttons[ROUND_CHOICES[0]]
-	order.append_array([first_round, start_button, wardrobe_button, leave_button])
-	var live := MenuUI.chain_vertical(order)
-	# The rounds chips and Start share a row: left/right walks it, up/down leaves it.
-	var row: Array = []
+		rows.append(_remove_buttons[s])
+	rows.append(add_bot_button)
+	var bottom_row: Array = []
 	for r in ROUND_CHOICES:
-		row.append(round_buttons[r])
-	row.append(start_button)
-	var i := live.find(first_round)
-	if i >= 0 and live.size() > 1:
-		var above := live[(i - 1 + live.size()) % live.size()]
-		var below: Control = wardrobe_button if MenuUI.focusable(wardrobe_button) 				else (leave_button if MenuUI.focusable(leave_button) else null)
-		MenuUI.chain_horizontal(row, above, below)
-		if MenuUI.focusable(start_button):
-			start_button.focus_neighbor_top = start_button.get_path_to(above)
+		bottom_row.append(round_buttons[r])
+	bottom_row.append(start_button)
+	rows.append(bottom_row)
+	return MenuUI.chain_grid(rows)
 
 
 func _focus_inside() -> bool:

@@ -65,7 +65,7 @@ func test_starts_on_title_with_default_focus() -> void:
 	assert_eq(_neighbor(t.host_button, &"focus_neighbor_bottom"), t.join_button, "Host -> Join")
 	assert_eq(_neighbor(t.name_edit, &"focus_neighbor_bottom"), t.host_button, "name -> Host")
 	assert_eq(_neighbor(t.quit_button, &"focus_neighbor_bottom"), t.name_edit, "Quit wraps to name")
-	assert_eq(_neighbor(t.name_edit, &"focus_neighbor_top"), t.quit_button, "name wraps up to Quit")
+	assert_eq(_neighbor(t.name_edit, &"focus_neighbor_top"), t.settings_button, "name wraps up to the last row (Settings | Quit)")
 
 
 func test_wardrobe_button_follows_scene_presence() -> void:
