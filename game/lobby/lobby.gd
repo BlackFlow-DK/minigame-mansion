@@ -133,6 +133,11 @@ var _fire_lights: Array[OmniLight3D] = []
 var _candle_lights: Array[OmniLight3D] = []
 var _candle_energy: PackedFloat32Array = []
 var _portal_light: OmniLight3D = null
+## Candelabra lights (off on LOW quality) and the moonlight spots (off on LOW).
+var _small_lights: Array[OmniLight3D] = []
+var _moon_spots: Array[SpotLight3D] = []
+## LOW quality (Look): fewer lights, no fire shadow, no fire flicker on the material.
+var _low: bool = false
 var _key_mats: Array[StandardMaterial3D] = []
 var _key_glow: PackedFloat32Array = []
 var _key_down: Array[bool] = []
@@ -158,6 +163,20 @@ func _ready() -> void:
 	_collect_emissives()
 	_build_lights()
 	_apply_look()
+	add_to_group(Look.QUALITY_GROUP)
+	apply_quality()
+
+
+## Look quality switch (also live): LOW keeps the fire (unshadowed), the chandeliers and the
+## portal light; the candelabras and moonbeams live on as emissive glow only.
+func apply_quality() -> void:
+	_low = Look.is_low()
+	for l in _fire_lights:
+		l.shadow_enabled = not _low
+	for l in _small_lights:
+		l.visible = not _low
+	for s in _moon_spots:
+		s.visible = not _low
 
 
 # --- Minigame ------------------------------------------------------------------------------
@@ -239,9 +258,11 @@ func _process(delta: float) -> void:
 	var flicker := 1.0 + 0.16 * sin(_time * 9.3) + 0.1 * sin(_time * 23.1 + 1.3) + 0.08 * sin(_time * 4.1 + 0.4)
 	for l in _fire_lights:
 		l.light_energy = FIRE_ENERGY * flicker
-	if _emit.has("EmitFire"):
+	if _emit.has("EmitFire") and not _low:
 		_emit["EmitFire"].emission_energy_multiplier = EMIT_ENERGY["EmitFire"] * flicker
 	for i in _candle_lights.size():
+		if _low and not _candle_lights[i].visible:
+			continue
 		_candle_lights[i].light_energy = _candle_energy[i] * (1.0 + 0.05 * sin(_time * 7.0 + i * 1.7))
 	var live := _live_players()
 	_update_portal(delta, live)
@@ -502,6 +523,7 @@ func _build_lights() -> void:
 		if c.name.begins_with("candelabra"):
 			var n3 := c as Node3D
 			_add_candle_light(lights, n3.position + Vector3(0.0, 1.3, 0.0) + n3.basis.z * 0.25, Color(1.0, 0.75, 0.45), 0.9, 4.0)
+			_small_lights.append(_candle_lights[-1])
 	_portal_light = _omni(lights, PORTAL_POS + Vector3(0.0, 1.3, 0.9), Color(0.35, 1.0, 0.88), 2.0, 7.5, false)
 	# Moonlight through the windows on the moon's side (back and left walls).
 	_moon_spot(lights, Vector3(-10.0, 3.8, BACK_Z + 0.6), Vector3(-8.8, 0.0, -4.5))
@@ -632,6 +654,7 @@ func _moon_spot(parent: Node, from: Vector3, to: Vector3) -> void:
 	s.spot_attenuation = 0.6
 	s.shadow_enabled = false
 	parent.add_child(s)
+	_moon_spots.append(s)
 	s.look_at_from_position(from, to, Vector3.UP)
 
 

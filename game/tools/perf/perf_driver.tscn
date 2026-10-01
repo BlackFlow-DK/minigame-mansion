@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/perf/perf_driver.gd" id="1_driver"]
+
+[node name="PerfDriver" type="Node"]
+script = ExtResource("1_driver")

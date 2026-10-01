@@ -15,8 +15,11 @@ extends Node
 ## Raised on every successful play() call, also headless. Tests and tools listen to it.
 signal played(effect: StringName, at: Vector3, color: Color)
 
-## Most live nodes per effect; past it the oldest one is restarted.
+## Most live nodes per effect (HIGH quality); past it the oldest one is restarted.
 const POOL_MAX := 10
+## Look quality (LOW, MEDIUM, HIGH) -> most live nodes per effect, particle count factor.
+const POOL_MAX_BY_QUALITY: Array[int] = [4, 8, POOL_MAX]
+const AMOUNT_BY_QUALITY: Array[float] = [0.5, 0.75, 1.0]
 
 ## Master switch (a settings menu may turn effects off).
 var enabled: bool = true
@@ -31,6 +34,27 @@ var _warned: Dictionary[StringName, bool] = {}
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	add_to_group(Look.QUALITY_GROUP)
+
+
+## Look quality switch: idle nodes built for another quality are rebuilt on their next use.
+func apply_quality() -> void:
+	for k: StringName in _idle:
+		var keep: Array = []
+		for v: Variant in _idle[k]:
+			if not is_instance_valid(v):
+				continue
+			var fx := v as FxEffect
+			if int(fx.get_meta(&"fx_quality", -1)) == Look.get_quality():
+				keep.append(fx)
+			else:
+				fx.queue_free()
+		_idle[k] = keep
+
+
+## Most live nodes per effect at the current quality.
+func pool_max() -> int:
+	return POOL_MAX_BY_QUALITY[Look.get_quality()]
 
 
 ## Plays `effect` at world position `at`, tinted `color`. Returns the node, or null.
@@ -92,7 +116,10 @@ func _take(effect: StringName) -> FxEffect:
 		fx = idle.pop_back() as FxEffect
 		if not is_instance_valid(fx):
 			fx = null
-	if fx == null and live.size() >= POOL_MAX:
+		elif int(fx.get_meta(&"fx_quality", -1)) != Look.get_quality():
+			fx.queue_free()  # built for another quality
+			fx = null
+	if fx == null and live.size() >= pool_max():
 		fx = live.pop_front() as FxEffect
 		fx.stop()  # goes to idle through _on_done
 		idle.erase(fx)
@@ -100,10 +127,23 @@ func _take(effect: StringName) -> FxEffect:
 		fx = FxLibrary.build(effect)
 		if fx == null:
 			return null
+		_cap_particles(fx)
 		fx.done.connect(_on_done)
 		add_child(fx)
 	live.append(fx)
 	return fx
+
+
+## Scales every emitter's particle count for the current quality (LOW: half).
+func _cap_particles(fx: FxEffect) -> void:
+	var q := Look.get_quality()
+	fx.set_meta(&"fx_quality", q)
+	var k := AMOUNT_BY_QUALITY[q]
+	if k >= 1.0:
+		return
+	for p in fx.find_children("*", "CPUParticles3D", true, false):
+		var e := p as CPUParticles3D
+		e.amount = maxi(1, ceili(e.amount * k))
 
 
 func _on_done(fx: FxEffect) -> void:

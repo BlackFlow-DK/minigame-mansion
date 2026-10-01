@@ -4,7 +4,9 @@ extends Node3D
 ## with soft shadows sized for a 20-30 m arena, and a shadowless fill. Instance
 ## `res://look/stage_look.tscn` in a minigame or the lobby, pick `preset`, and delete the
 ## scene's own WorldEnvironment and sun (only one WorldEnvironment may be active).
-## `Look.set_quality()` re-applies every StageLook (LOW drops SSAO, glow and fog).
+## `Look.set_quality()` re-applies every StageLook: HIGH everything; MEDIUM drops SSAO and
+## lightens the shadows; LOW also drops glow and fog and keeps one low-res sun shadow split. Each
+## apply also sets the resolution / AA of the viewport the look renders into (Look.apply_viewport).
 ## Owner: look and effects.
 
 enum Preset { WARM_HALL, BRIGHT_DAY, LAVA_CAVE, NIGHT_PARTY }
@@ -78,13 +80,18 @@ func _ready() -> void:
 ## Rebuilds the environment and lights from `preset` and the current Look quality.
 func apply() -> void:
 	var d: Dictionary = PRESETS[preset]
-	var high := Look.is_high()
-	world_environment.environment = _build_environment(d, high)
-	_setup_key(d, high)
+	var q := Look.get_quality()
+	world_environment.environment = _build_environment(d, q)
+	_setup_key(d, q)
 	_setup_fill(d)
+	Look.apply_shadow_settings()
+	if is_inside_tree():
+		Look.apply_viewport(get_viewport())
 
 
-func _build_environment(d: Dictionary, high: bool) -> Environment:
+func _build_environment(d: Dictionary, q: Look.Quality) -> Environment:
+	var high := q == Look.Quality.HIGH
+	var low := q == Look.Quality.LOW
 	var sky_mat := ProceduralSkyMaterial.new()
 	sky_mat.sky_top_color = d["sky_top"]
 	sky_mat.sky_horizon_color = d["sky_horizon"]
@@ -115,7 +122,7 @@ func _build_environment(d: Dictionary, high: bool) -> Environment:
 	env.adjustment_contrast = d["contrast"]
 
 	# Glow: only HDR (emissive: lava, coins, sparkles) blooms; lit surfaces stay crisp.
-	env.glow_enabled = high
+	env.glow_enabled = not low
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	env.glow_hdr_threshold = 1.9
 	env.glow_hdr_scale = 2.0
@@ -140,7 +147,7 @@ func _build_environment(d: Dictionary, high: bool) -> Environment:
 	env.ssao_light_affect = 0.1
 
 	# Soft distance fog for depth; the sky stays clean.
-	env.fog_enabled = high and float(d["fog_density"]) > 0.0
+	env.fog_enabled = not low and float(d["fog_density"]) > 0.0
 	env.fog_light_color = d["fog_color"]
 	env.fog_light_energy = 1.0
 	env.fog_density = d["fog_density"]
@@ -148,17 +155,20 @@ func _build_environment(d: Dictionary, high: bool) -> Environment:
 	return env
 
 
-func _setup_key(d: Dictionary, high: bool) -> void:
+func _setup_key(d: Dictionary, q: Look.Quality) -> void:
+	var high := q == Look.Quality.HIGH
+	var low := q == Look.Quality.LOW
 	key_light.light_color = d["key_color"]
 	key_light.light_energy = d["key_energy"]
 	key_light.rotation_degrees = Vector3(d["key_pitch"], float(d["key_yaw"]) + light_yaw, 0.0)
 	key_light.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	key_light.shadow_enabled = true
-	key_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	key_light.directional_shadow_max_distance = shadow_distance if high else shadow_distance * 0.75
+	# LOW: one split (one shadow pass, not two) over a shorter range
+	key_light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if low else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	key_light.directional_shadow_max_distance = shadow_distance if high else shadow_distance * (0.6 if low else 0.75)
 	key_light.directional_shadow_split_1 = 0.35
 	key_light.directional_shadow_blend_splits = high
-	key_light.shadow_blur = 1.6 if high else 1.0
+	key_light.shadow_blur = 1.6 if high else 1.0  # 0 leaves acne rings on round shapes
 	key_light.shadow_bias = 0.04
 	key_light.shadow_normal_bias = 1.2
 	key_light.shadow_opacity = 0.85
