@@ -29,6 +29,8 @@ var _counts: Dictionary = {}
 var _rounds: Array = []
 var _final_scores: Dictionary = {}
 var _final_wins: Dictionary = {}
+## Players in the current round when it started (the points table depends on it).
+var _round_players: int = 0
 var _final_ranking: Array = []
 var _cmds_done: int = 0
 var _poll: float = 0.0
@@ -60,6 +62,7 @@ func _ready() -> void:
 	stage.players_spawned.connect(_on_players_spawned)
 	Net.server_closed.connect(func() -> void: _event("server_closed"); _quit())
 	Net.join_failed.connect(func(r: String) -> void: _event("join_failed:" + r); _quit())
+	Session.round_started.connect(_on_round_started)
 	Session.round_finished.connect(_on_round_finished)
 	Session.session_finished.connect(_on_session_finished)
 	Net.set_local_profile(_name, {})
@@ -88,11 +91,16 @@ func _count(sig: StringName, slot: int) -> void:
 	_counts[key] = int(_counts.get(key, 0)) + 1
 
 
+func _on_round_started() -> void:
+	_round_players = stage.players.size()
+
+
 func _on_round_finished(ranking: Array[int], points: Dictionary) -> void:
 	var pts: Dictionary = {}
 	for s: Variant in points:
 		pts[str(s)] = points[s]
-	_rounds.append({"ranking": ranking, "points": pts})
+	_rounds.append({"ranking": ranking, "points": pts, "players": _round_players,
+			"table": Session.place_points(_round_players)})
 	_event("round_finished")
 
 
