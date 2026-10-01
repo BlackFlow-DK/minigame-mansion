@@ -257,3 +257,13 @@ func test_card_shows_the_last_used_device_first() -> void:
 	assert_eq(ui.device, TrainingUI.Device.KEYBOARD, "a key switches back")
 	assert_true(ui.is_row_current(TrainingRoom.Id.JUMP), "checklist highlights Jump")
 	assert_false(ui.is_row_current(TrainingRoom.Id.MOVE), "Move is not current")
+	# Done: the green check pops on the card, then the next card slides in.
+	var sounds := watch(Sfx, &"played")
+	_st(TrainingRoom.Id.JUMP).complete()
+	await step(2)
+	assert_true(ui.card_done, "green check on the Jump card")
+	assert_true(sounds.any(func(a: Array) -> bool: return a[0] == &"join_chime"), "completion chime")
+	assert_false(room.gates[TrainingRoom.Id.JUMP].is_blocking(), "gate opened")
+	await step(90)
+	assert_eq(ui.shown_station, TrainingRoom.Id.SHOVE, "the Shove card replaced it")
+	assert_false(ui.card_done, "no check on the new card")
