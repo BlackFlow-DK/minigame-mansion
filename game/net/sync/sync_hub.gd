@@ -5,15 +5,22 @@ extends Node
 ## come and go with rounds), everything goes through here keyed by slot and tagged with
 ## `Stage.net_load_id`, and traffic for another load or an unknown slot is dropped.
 ##
+## Star topology, host-forwarded (SceneMultiplayer's server_relay is off, see Net): a client
+## sends only to the host; the host applies what it receives, checks it, and forwards it to
+## the other clients with the true origin peer attached (`_rpc_fwd_*`, callable by the host
+## only, so a client cannot claim to be someone else).
 ## - State: 30 times a second each peer sends one unreliable packet with the state of every
 ##   player it is authority for (SyncComponent.pack_state). Accepted only from that player's
 ##   authority. The receiving SyncComponent buffers and interpolates it.
-## - Events: `Player.emit_event` -> SyncComponent.relay_event -> every other peer (reliable,
-##   clients reach each other through the host's relay) -> `Player.receive_event`. Accepted
-##   from the player's authority or the host; `eliminated` / `respawned` only from the host.
+## - Events: `Player.emit_event` -> SyncComponent.relay_event -> every other peer (reliable)
+##   -> `Player.receive_event`. Accepted from the player's authority or the host;
+##   `eliminated` / `respawned` only from the host.
 ## - Impulses: `Player.apply_impulse` on a non-authority -> the authority only (reliable).
 ##   Accepted from the host, or from the authority of the source player.
 ## Offline (no connected ENet peer) it sends nothing.
+## Every send goes peer by peer to `live_peers()` only: when several clients drop in the same
+## network poll, the ones not handled yet are ENet zombies (0 channels) still listed in
+## `multiplayer.get_peers()`, and sending to them logs "Unable to send packet".
 
 const FLAG_ON_FLOOR := 1
 const FLAG_CONTROL_LOCKED := 2
@@ -48,6 +55,26 @@ static func is_networked(mp: MultiplayerAPI) -> bool:
 			and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 
+## Peers this one can send to right now: `multiplayer.get_peers()` minus any whose direct
+## ENet link (host -> client, client -> host) is no longer CONNECTED, i.e. a peer whose
+## disconnect has arrived but whose `peer_disconnected` has not been handled yet. Peers that
+## already left are not listed by `get_peers()`. Clients reach other clients through the host's
+## relay; those links are the host's business.
+static func live_peers(mp: MultiplayerAPI) -> Array[int]:
+	var out: Array[int] = []
+	if not is_networked(mp):
+		return out
+	var enet := mp.multiplayer_peer as ENetMultiplayerPeer
+	var server := mp.is_server()
+	for id in mp.get_peers():
+		if enet and (server or id == HOST_PEER):
+			var pp := enet.get_peer(id)
+			if pp == null or pp.get_state() != ENetPacketPeer.STATE_CONNECTED:
+				continue
+		out.append(id)
+	return out
+
+
 func _physics_process(delta: float) -> void:
 	clock += delta
 	if stage == null or not is_networked(multiplayer) or multiplayer.get_peers().is_empty():
@@ -68,7 +95,11 @@ func _physics_process(delta: float) -> void:
 	if data.is_empty():
 		return
 	_seq += 1
-	_rpc_states.rpc(stage.net_load_id, _seq, clock, data)
+	if multiplayer.is_server():
+		for id in live_peers(multiplayer):
+			_rpc_fwd_states.rpc_id(id, HOST_PEER, stage.net_load_id, _seq, clock, data)
+	elif live_peers(multiplayer).has(HOST_PEER):
+		_rpc_states.rpc_id(HOST_PEER, stage.net_load_id, _seq, clock, data)
 
 
 ## The sender's clock "now" as estimated here (for interpolation), or -INF if unknown.
@@ -84,7 +115,10 @@ func sender_clock(peer_id: int) -> float:
 func send_event(p: Player, event: StringName, args: Array) -> void:
 	if stage == null or not is_networked(multiplayer) or multiplayer.get_peers().is_empty():
 		return
-	_rpc_event.rpc(stage.net_load_id, p.slot, event, args)
+	if multiplayer.is_server():
+		_forward_event(HOST_PEER, stage.net_load_id, p.slot, event, args)
+	elif live_peers(multiplayer).has(HOST_PEER):
+		_rpc_event.rpc_id(HOST_PEER, stage.net_load_id, p.slot, event, args)
 
 
 ## Hands an impulse for `p` to its authority.
@@ -95,24 +129,78 @@ func send_impulse(p: Player, impulse: Vector3, source: Player) -> void:
 	if auth == multiplayer.get_unique_id():
 		return
 	var source_slot := source.slot if is_instance_valid(source) else -1
-	_rpc_impulse.rpc_id(auth, stage.net_load_id, p.slot, impulse, source_slot)
+	if multiplayer.is_server():
+		if live_peers(multiplayer).has(auth):
+			_rpc_fwd_impulse.rpc_id(auth, HOST_PEER, stage.net_load_id, p.slot, impulse, source_slot)
+	elif live_peers(multiplayer).has(HOST_PEER):
+		_rpc_impulse.rpc_id(HOST_PEER, stage.net_load_id, p.slot, impulse, source_slot)
 
 
 # --- RPCs --------------------------------------------------------------------------------------
 
+# Client -> host. The host applies, checks and forwards; anywhere else they are ignored.
+
 @rpc("any_peer", "call_remote", "unreliable")
 func _rpc_states(load_id: Variant, seq: Variant, t: Variant, data: Variant) -> void:
-	receive_states(multiplayer.get_remote_sender_id(), load_id, seq, t, data)
+	if not multiplayer.is_server():
+		return
+	var origin := multiplayer.get_remote_sender_id()
+	receive_states(origin, load_id, seq, t, data)
+	if typeof(load_id) != TYPE_INT or typeof(seq) != TYPE_INT or typeof(t) != TYPE_FLOAT or typeof(data) != TYPE_ARRAY:
+		return
+	for id in live_peers(multiplayer):
+		if id != origin:
+			_rpc_fwd_states.rpc_id(id, origin, load_id, seq, t, data)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_event(load_id: Variant, slot: Variant, event: Variant, args: Variant) -> void:
-	receive_event(multiplayer.get_remote_sender_id(), load_id, slot, event, args)
+	if not multiplayer.is_server():
+		return
+	var origin := multiplayer.get_remote_sender_id()
+	if receive_event(origin, load_id, slot, event, args):
+		_forward_event(origin, load_id, slot, event, args)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_impulse(load_id: Variant, slot: Variant, impulse: Variant, source_slot: Variant) -> void:
-	receive_impulse(multiplayer.get_remote_sender_id(), load_id, slot, impulse, source_slot)
+	if not multiplayer.is_server():
+		return
+	var origin := multiplayer.get_remote_sender_id()
+	var victim := _impulse_victim(origin, load_id, slot, impulse, source_slot)
+	if victim == null:
+		return
+	if victim.is_authority():
+		receive_impulse(origin, load_id, slot, impulse, source_slot)
+	elif live_peers(multiplayer).has(victim.get_multiplayer_authority()):
+		_rpc_fwd_impulse.rpc_id(victim.get_multiplayer_authority(), origin, load_id, slot, impulse, source_slot)
+
+
+# Host -> client, with the origin peer the host saw (only the host may call these).
+
+@rpc("authority", "call_remote", "unreliable")
+func _rpc_fwd_states(origin: Variant, load_id: Variant, seq: Variant, t: Variant, data: Variant) -> void:
+	if typeof(origin) == TYPE_INT:
+		receive_states(origin, load_id, seq, t, data)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_fwd_event(origin: Variant, load_id: Variant, slot: Variant, event: Variant, args: Variant) -> void:
+	if typeof(origin) == TYPE_INT:
+		receive_event(origin, load_id, slot, event, args)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_fwd_impulse(origin: Variant, load_id: Variant, slot: Variant, impulse: Variant, source_slot: Variant) -> void:
+	if typeof(origin) == TYPE_INT:
+		receive_impulse(origin, load_id, slot, impulse, source_slot)
+
+
+## Host: raises an event from `origin` on every live client except `origin`.
+func _forward_event(origin: int, load_id: Variant, slot: Variant, event: Variant, args: Variant) -> void:
+	for id in live_peers(multiplayer):
+		if id != origin:
+			_rpc_fwd_event.rpc_id(id, origin, load_id, slot, event, args)
 
 
 # --- Incoming (public so tests can play any sender) ----------------------------------------------
@@ -163,17 +251,26 @@ func receive_event(sender: int, load_id: Variant, slot: Variant, event: Variant,
 
 ## An impulse for a player this peer simulates. Returns true if it was applied.
 func receive_impulse(sender: int, load_id: Variant, slot: Variant, impulse: Variant, source_slot: Variant) -> bool:
+	var p := _impulse_victim(sender, load_id, slot, impulse, source_slot)
+	if p == null or not p.is_authority():
+		return false
+	p.apply_impulse(impulse, stage.get_player(source_slot) if source_slot >= 0 else null)
+	return true
+
+
+## The victim of a well-formed impulse `sender` may give (host: anyone; others: only as the
+## authority of the source player), or null.
+func _impulse_victim(sender: int, load_id: Variant, slot: Variant, impulse: Variant, source_slot: Variant) -> Player:
 	if stage == null or typeof(load_id) != TYPE_INT or load_id != stage.net_load_id \
 			or typeof(slot) != TYPE_INT or typeof(impulse) != TYPE_VECTOR3 or typeof(source_slot) != TYPE_INT:
-		return false
+		return null
 	var p := stage.get_player(slot)
-	if p == null or not p.is_authority() or not (impulse as Vector3).is_finite():
-		return false
+	if p == null or not (impulse as Vector3).is_finite():
+		return null
 	var source: Player = stage.get_player(source_slot) if source_slot >= 0 else null
 	if sender != HOST_PEER and (source == null or source.get_multiplayer_authority() != sender):
-		return false
-	p.apply_impulse(impulse, source)
-	return true
+		return null
+	return p
 
 
 ## Only the signals declared by the Player script (not Node's own, like tree_exited).

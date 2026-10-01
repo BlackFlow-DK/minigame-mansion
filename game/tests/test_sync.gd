@@ -304,3 +304,13 @@ func test_manifest_loads_and_reconciles_like_a_client() -> void:
 	stage.apply_manifest(10, "res://nope.tscn", false, [])
 	assert_true(stage.minigame == local, "unknown scene ignored")
 	await step(2)
+
+
+func test_live_peers_offline_is_empty_and_sends_are_skipped() -> void:
+	var ps := spawn_arena(2)
+	assert_eq(SyncHub.live_peers(multiplayer), [] as Array[int], "offline: nobody to send to")
+	_remote(ps[1])
+	ps[1].apply_impulse(Vector3.RIGHT, ps[0])  # relay to a peer that is not there: no send, no error
+	ps[0].emit_event(&"jumped")
+	stage.clear()
+	await step(2)
