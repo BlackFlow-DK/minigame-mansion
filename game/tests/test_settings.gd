@@ -43,8 +43,9 @@ func after_each() -> void:
 
 
 func _remove() -> void:
-	if FileAccess.file_exists(TEST_PATH):
-		DirAccess.remove_absolute(TEST_PATH)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the file and its crash-safe save sidecars
+		if FileAccess.file_exists(TEST_PATH + suffix):
+			DirAccess.remove_absolute(TEST_PATH + suffix)
 
 
 func _bus_linear(bus: StringName) -> float:
@@ -55,6 +56,28 @@ func _bus_linear(bus: StringName) -> float:
 
 
 # --- Autoload ------------------------------------------------------------------------------------
+
+func test_settings_save_is_atomic_and_recovers_from_backup() -> void:
+	Settings.persist = true
+	Settings.reset_to_defaults()
+	Settings.set_value(&"music_volume", 0.25)
+	Settings.set_value(&"music_volume", 0.5)
+	assert_false(FileAccess.file_exists(TEST_PATH + ".tmp"), "no tmp left behind")
+	assert_true(FileAccess.file_exists(TEST_PATH + ".bak"), "previous save kept as .bak")
+	# A crash mid-write: the main file is truncated, the .bak holds the last good save.
+	var f := FileAccess.open(TEST_PATH, FileAccess.WRITE)
+	f.store_string("{\"music_vol")
+	f.close()
+	Settings.load_settings()
+	assert_near(Settings.music_volume, 0.25, 0.001, "value recovered from the .bak")
+	# Saving over the corrupt file sets it aside first.
+	Settings.set_value(&"music_volume", 0.75)
+	assert_true(FileAccess.file_exists(TEST_PATH + ".corrupt"), "corrupt file backed up before the overwrite")
+	assert_false(FileAccess.file_exists(TEST_PATH + ".tmp"), "no tmp left behind after recovery")
+	Settings.music_volume = 0.0
+	Settings.load_settings()
+	assert_near(Settings.music_volume, 0.75, 0.001, "new save is live")
+
 
 func test_settings_persist_and_come_back() -> void:
 	Settings.persist = true

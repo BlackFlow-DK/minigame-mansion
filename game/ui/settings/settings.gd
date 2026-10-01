@@ -129,16 +129,17 @@ func to_dict() -> Dictionary:
 
 # --- File ------------------------------------------------------------------------------------
 
-## Reads `path` (missing or broken file: defaults). Does not apply.
+## Reads `path` (missing or broken file: its `.bak`, else defaults). Does not apply.
 func load_settings() -> void:
+	const Store := preload("res://cosmetics/cosmetics.gd")
 	for key: StringName in KEYS:
 		set(key, DEFAULTS[key])
-	if not FileAccess.file_exists(path):
-		return
-	var json := JSON.new()
-	var data: Variant = json.data if json.parse(FileAccess.get_file_as_string(path)) == OK else null
+	var data: Variant = Store.read_json_dict(path)
+	if data == null:
+		data = Store.read_json_dict(path + Store.BACKUP_SUFFIX)
+		if FileAccess.file_exists(path):
+			push_warning("Settings: %s is unreadable, using %s" % [path, "the backup" if data != null else "defaults"])
 	if not data is Dictionary:
-		push_warning("Settings: %s is unreadable, using defaults" % path)
 		return
 	var d := data as Dictionary
 	for key: StringName in KEYS:
@@ -146,17 +147,16 @@ func load_settings() -> void:
 			set(key, _clean(key, d[String(key)]))
 
 
-## Writes `path` when `persist`. Returns OK when skipped.
+## Writes `path` when `persist`, crash-safe (tmp + rename, previous file kept as `.bak`).
+## Returns OK when skipped.
 func save_settings() -> Error:
+	const Store := preload("res://cosmetics/cosmetics.gd")
 	if not persist:
 		return OK
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	if f == null:
-		push_warning("Settings: cannot write %s (%s)" % [path, error_string(FileAccess.get_open_error())])
-		return FileAccess.get_open_error()
-	f.store_string(JSON.stringify(to_dict(), "\t"))
-	f.close()
-	return OK
+	var err := Store.write_json_atomic(path, JSON.stringify(to_dict(), "\t"))
+	if err != OK:
+		push_warning("Settings: cannot write %s (%s)" % [path, error_string(err)])
+	return err
 
 
 # --- Applying --------------------------------------------------------------------------------

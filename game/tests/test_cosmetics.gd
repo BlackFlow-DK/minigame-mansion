@@ -16,8 +16,9 @@ func after_each() -> void:
 			b.free()
 	_blobs.clear()
 	Cosmetics.profile_path = Cosmetics.PROFILE_PATH
-	if FileAccess.file_exists(TEST_PROFILE):
-		DirAccess.remove_absolute(TEST_PROFILE)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		if FileAccess.file_exists(TEST_PROFILE + suffix):
+			DirAccess.remove_absolute(TEST_PROFILE + suffix)
 
 
 func _blob() -> Node3D:
@@ -294,6 +295,49 @@ func test_profile_missing_or_corrupt_gives_defaults() -> void:
 	assert_eq(p["loadout"]["hat"], "wizard")
 	assert_eq(p["loadout"]["face"], "")
 	assert_eq(p["loadout"]["primary"], Cosmetics.default_loadout(0)["primary"])
+
+
+func _write_raw(path: String, text: String) -> void:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(text)
+	f.close()
+
+
+func test_profile_save_is_atomic_with_backup() -> void:
+	Cosmetics.profile_path = TEST_PROFILE
+	var lo := _loadout("#b5227f", "#ffd23f", "chef", "", "", "")
+	assert_eq(Cosmetics.save_profile("First", lo), OK)
+	assert_false(FileAccess.file_exists(TEST_PROFILE + ".tmp"), "no tmp left after the first save")
+	assert_false(FileAccess.file_exists(TEST_PROFILE + ".bak"), "nothing to back up on the first save")
+	assert_eq(Cosmetics.save_profile("Second", lo), OK)
+	assert_false(FileAccess.file_exists(TEST_PROFILE + ".tmp"), "no tmp left after a resave")
+	var bak: Variant = Cosmetics.read_json_dict(TEST_PROFILE + ".bak")
+	assert_true(bak is Dictionary and bak["name"] == "First", "previous save kept as .bak")
+	assert_eq(Cosmetics.load_profile()["name"], "Second", "the new save is live")
+
+
+func test_profile_corrupt_falls_back_to_backup() -> void:
+	Cosmetics.profile_path = TEST_PROFILE
+	var lo := _loadout("#b5227f", "#ffd23f", "chef", "", "", "")
+	Cosmetics.save_profile("Good", lo)
+	Cosmetics.save_progress({"coins": 77, "unlocked": [], "stats": {}, "claimed": []})
+	Cosmetics.save_profile("Good", lo)  # the .bak now holds Good + 77 coins
+	# A crash mid-write of the next save: truncated garbage in the profile, the .bak intact.
+	_write_raw(TEST_PROFILE, "{\"name\": \"Tru")
+	assert_eq(Cosmetics.load_profile()["name"], "Good", "corrupt profile: name from the .bak")
+	assert_eq(int(Cosmetics.load_progress()["coins"]), 77, "corrupt profile: coins from the .bak")
+	# Missing profile (crash between the renames) also reads the .bak.
+	DirAccess.remove_absolute(TEST_PROFILE)
+	assert_eq(int(Cosmetics.load_progress()["coins"]), 77, "missing profile: coins from the .bak")
+	# Saving over a corrupt file sets it aside and never replaces the good .bak with it.
+	_write_raw(TEST_PROFILE, "\u0001garbage")
+	assert_eq(Cosmetics.save_profile("Next", lo), OK)
+	assert_true(FileAccess.file_exists(TEST_PROFILE + ".corrupt"), "corrupt file backed up before the overwrite")
+	assert_eq(FileAccess.get_file_as_string(TEST_PROFILE + ".corrupt"), "\u0001garbage", "corrupt bytes kept")
+	assert_eq(Cosmetics.read_json_dict(TEST_PROFILE + ".bak")["name"], "Good", "good .bak kept")
+	assert_eq(Cosmetics.load_profile()["name"], "Next", "new save is live")
+	assert_eq(int(Cosmetics.load_progress()["coins"]), 77, "coins carried through the recovery")
+	assert_false(FileAccess.file_exists(TEST_PROFILE + ".tmp"), "no tmp left behind")
 
 
 # --- component ---------------------------------------------------------------------------

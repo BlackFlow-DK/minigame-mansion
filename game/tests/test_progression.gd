@@ -30,8 +30,9 @@ func after_each() -> void:
 
 
 func _remove_profile() -> void:
-	if FileAccess.file_exists(TEST_PROFILE):
-		DirAccess.remove_absolute(TEST_PROFILE)
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		if FileAccess.file_exists(TEST_PROFILE + suffix):
+			DirAccess.remove_absolute(TEST_PROFILE + suffix)
 
 
 ## Hosts a LAN game with a second human (a full-rate session): this peer is slot 0, the friend

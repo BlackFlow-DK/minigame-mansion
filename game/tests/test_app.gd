@@ -25,7 +25,8 @@ func before_each() -> void:
 	# The wardrobe saves on Done: keep the player's real profile out of it.
 	_saved_profile_path = Cosmetics.profile_path
 	Cosmetics.profile_path = "user://test_app_profile.json"
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path))
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path + suffix))
 	app = (load(MAIN_SCENE_PATH) as PackedScene).instantiate() as MainApp
 	add_child(app)
 	app.menu.persist_profile = false  # never write the real user://profile.json
@@ -43,7 +44,8 @@ func after_each() -> void:
 	Session.order_seed = -1
 	Session.scene_override = null
 	Session.podium_time = _saved_podium_time
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path))
+	for suffix: String in ["", ".bak", ".tmp", ".corrupt"]:  # the profile and its crash-safe save sidecars
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Cosmetics.profile_path + suffix))
 	Cosmetics.profile_path = _saved_profile_path
 	if is_instance_valid(app):
 		app.stage.clear()
