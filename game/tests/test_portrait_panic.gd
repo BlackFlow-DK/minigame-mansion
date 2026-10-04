@@ -355,6 +355,34 @@ func test_swap_trades_two_rows_deterministically() -> void:
 	assert_eq(r1, r2, "row pick is deterministic by seed")
 
 
+## Flips and SWAP slides never bring a tile's top above the floor (y = 0), where blobs stand.
+func test_flips_and_swap_slides_stay_below_the_feet() -> void:
+	var half := Vector3(PortraitPanic.TILE * 0.5, PortraitPanic.THICK * 0.5, PortraitPanic.TILE * 0.5)
+	for k in 65:
+		var a := PI * float(k) / 32.0
+		# The tile's centre sits THICK/2 below the floor, turned `a` about X, sunk by flip_sink.
+		var top := -PortraitPanic.THICK * 0.5 - PortraitPanic.flip_sink(a) \
+				+ half.z * absf(sin(a)) + half.y * absf(cos(a))
+		assert_true(top <= 0.0005, "flip %.2f rad: top at %.3f m" % [a, top])
+	assert_near(PortraitPanic.flip_sink(0.0), 0.0, 0.0001, "flat: no sink")
+	assert_near(PortraitPanic.flip_sink(PI), 0.0, 0.0001, "face down: no sink")
+	var dz := 3.0 * PortraitPanic.PITCH
+	for arc: float in [1.0, -1.0]:
+		var lowest := 0.0
+		for k in 101:
+			var t := float(k) / 100.0
+			var off := PortraitPanic.slide_offset(t, dz, arc)
+			assert_true(off.y <= 0.0001, "slide %.2f: never above the floor" % t)
+			# Away from home (more than a gap's width), the whole tile is under the other tiles.
+			if absf(off.z) > PortraitPanic.GAP and absf(off.z - dz) > PortraitPanic.GAP:
+				assert_true(off.y <= -PortraitPanic.THICK - 0.01, "slide %.2f (arc %d): under the floor while it travels (%.2f)" % [t, int(arc), off.y])
+			lowest = minf(lowest, off.y)
+		assert_near(PortraitPanic.slide_offset(0.0, dz, arc), Vector3(0.0, 0.0, dz), 0.001, "starts in the other row")
+		assert_near(PortraitPanic.slide_offset(1.0, dz, arc), Vector3.ZERO, 0.001, "ends home")
+	assert_true(PortraitPanic.slide_offset(0.5, dz, -1.0).y < PortraitPanic.slide_offset(0.5, dz, 1.0).y - PortraitPanic.THICK,
+		"the two rows pass each other at different depths")
+
+
 func test_is_safe_and_bot_goals() -> void:
 	var ps := _spawn(8)
 	var g := _game()
