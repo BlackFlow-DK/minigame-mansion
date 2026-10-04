@@ -15,10 +15,14 @@ extends Node
 ##   Arena intro    round_intro: ArenaCamera.intro_sweep(INTRO_SWEEP_TIME) and letterbox bars;
 ##                  round_started (GO) lifts the bars and ends any sweep still running.
 ##   Round end      round_finished: the winner (every member of a tied winning group, e.g. a
-##                  team: Session.round_groups[0]) cheers under a spotlight with a sparkle. When the
+##                  team: Session.round_groups[0]) cheers under a spotlight with a sparkle, and
+##                  the last place (the last tied group, when there are 2+ groups) sulks; both
+##                  stop when the phase moves on (VOTE, INTRO, PODIUM, LOBBY). When the
 ##                  round ended by knockout (exactly one player left standing) there is first a
 ##                  SLOWMO_TIME slow-motion (FeelTime.scale = SLOWMO_SCALE: effects and blob
 ##                  animation only), a camera push-in on the winner, a vignette, then confetti.
+##   Podium         session_finished: the spotlight moves to the session winner(s) (a tie on
+##                  total and round wins shares it); the round UI owns the podium poses.
 ##   shake(amount)  screen shake on the active ArenaCamera (the players' fx component uses it).
 ##
 ## Quality LOW (Look.is_high() false) skips the spotlight, vignette, sparkle and extra confetti.
@@ -105,6 +109,8 @@ var _main: Node = null
 ## curtain does not close again in the same phase.
 var _closed_phase: int = -1
 var _app_state: int = -1
+## Blobs this node set cheering / sulking at the round end (stopped when the phase moves on).
+var _posed: Array[WeakRef] = []
 
 
 func _ready() -> void:
@@ -115,6 +121,7 @@ func _ready() -> void:
 	Session.round_intro.connect(_on_round_intro)
 	Session.round_started.connect(_on_round_started)
 	Session.round_finished.connect(_on_round_finished)
+	Session.session_finished.connect(_on_session_finished)
 
 
 func _process(delta: float) -> void:
@@ -252,6 +259,8 @@ func _on_round_started() -> void:
 
 func _on_state_changed(state: int) -> void:
 	_closed_phase = -1
+	if state != Session.State.RESULTS and state != Session.State.PLAYING:
+		_stop_poses()
 	if state == Session.State.LOBBY:
 		reset_moment()
 		open_curtain(true)
@@ -275,6 +284,10 @@ func _on_round_finished(ranking: Array, _points: Dictionary) -> void:
 		var w := stage.get_player(slot)
 		if w != null and is_instance_valid(w) and w.is_inside_tree() and w.alive:
 			winners.append(w)
+	for slot in losing_group(ranking):
+		var l := stage.get_player(slot)
+		if l != null and is_instance_valid(l) and l.is_inside_tree() and l.alive and not winners.has(l):
+			_sulk(l)
 	if winners.is_empty():
 		return
 	var total := 0
@@ -290,6 +303,44 @@ func _on_round_finished(ranking: Array, _points: Dictionary) -> void:
 		_spot_on(winners)
 	if total >= 2 and alive == 1 and winners.size() == 1:
 		_start_knockout(winners[0])
+
+
+## The slots in last place: the last tied group of the round (`Session.round_groups`) when
+## there are two or more groups, else the last of a flat `ranking` of 2+; empty when everyone
+## shares first place.
+func losing_group(ranking: Array) -> Array[int]:
+	var out: Array[int] = []
+	var groups: Array = Session.round_groups
+	if groups.size() >= 2 and groups.back() is Array and (groups.back() as Array).has(int(ranking.back())):
+		for s: Variant in groups.back():
+			out.append(int(s))
+		return out
+	if groups.size() == 1 or ranking.size() < 2:
+		return out
+	out.append(int(ranking.back()))
+	return out
+
+
+func _on_session_finished(final_ranking: Array) -> void:
+	_stop_poses()
+	_spot_off(true)
+	if not enabled or final_ranking.is_empty() or not Look.is_high():
+		return
+	var stage := _stage()
+	if stage == null:
+		return
+	var winners: Array[Player] = []
+	var first := int(final_ranking[0])
+	var key := Vector2i(int(Session.scores.get(first, 0)), int(Session.round_wins.get(first, 0)))
+	for s: Variant in final_ranking:
+		var slot := int(s)
+		if Vector2i(int(Session.scores.get(slot, 0)), int(Session.round_wins.get(slot, 0))) != key:
+			break
+		var p := stage.get_player(slot)
+		if p != null and is_instance_valid(p) and p.is_inside_tree():
+			winners.append(p)
+	if not winners.is_empty():
+		_spot_on(winners)
 
 
 ## The slots sharing first place: the first tied group of the round (`Session.round_groups`,
@@ -314,9 +365,29 @@ func _celebrate(winner: Player) -> void:
 	var visuals := winner.get_component(&"visuals") as VisualsComponent
 	if visuals and visuals.get_emote() != &"cheer":
 		visuals.play_emote(&"cheer", true)
+	_posed.append(weakref(winner))
 	if Look.is_high():
 		Fx.play(&"respawn_sparkle", winner.global_position, Look.GOLD)
 	winner_celebrated.emit(winner.slot)
+
+
+func _sulk(loser: Player) -> void:
+	var visuals := loser.get_component(&"visuals") as VisualsComponent
+	if visuals and visuals.get_emote() != &"sulk":
+		visuals.play_emote(&"sulk", true)
+	_posed.append(weakref(loser))
+
+
+## Ends the round-end cheers and sulks this node started (only those still playing them).
+func _stop_poses() -> void:
+	for ref in _posed:
+		var p := ref.get_ref() as Player
+		if p == null or not is_instance_valid(p):
+			continue
+		var visuals := p.get_component(&"visuals") as VisualsComponent
+		if visuals and (visuals.get_emote() == &"cheer" or visuals.get_emote() == &"sulk"):
+			visuals.stop_emote()
+	_posed.clear()
 
 
 func _start_knockout(winner: Player) -> void:

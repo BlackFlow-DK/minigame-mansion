@@ -26,6 +26,8 @@ func _reset_session() -> void:
 	Session.round_index = -1
 	Session.round_count = 0
 	Session.current_minigame = null
+	Session.round_wins.clear()
+	RoundUI.emote_hint_used = false
 
 
 ## Offline roster of `count` (slot 0 human, rest bots) unless one exists, then a RoundUI.
@@ -190,6 +192,89 @@ func test_name_tags_hidden_under_results_and_podium() -> void:
 	await step(3)
 	assert_eq(ui.view, RoundUI.View.PODIUM, "podium")
 	assert_true(tags.all(func(t: Node3D) -> bool: return not t.visible), "no 3D names through the podium dim")
+
+
+func test_podium_pose_places_share_ties_and_the_last_group_sulks() -> void:
+	var totals := {0: 10, 1: 10, 2: 6, 3: 2, 4: 2}
+	var wins := {0: 2, 1: 2, 2: 1, 3: 0, 4: 0}
+	var ranking := [0, 1, 2, 3, 4]
+	assert_eq(str(RoundPodiumStage.final_groups(ranking, totals, wins)), str([[0, 1], [2], [3, 4]]), "groups by total and wins")
+	assert_eq(RoundPodiumStage.pose_places(ranking, totals, wins), {0: 1, 1: 1, 2: 3, 3: 5, 4: 5} as Dictionary[int, int], "tied places; the tied last group gets last")
+	wins[1] = 1  # same total, fewer round wins: not a tie
+	assert_eq(RoundPodiumStage.pose_places(ranking, totals, wins), {0: 1, 1: 2, 2: 3, 3: 5, 4: 5} as Dictionary[int, int], "wins break the tie")
+	assert_eq(RoundPodiumStage.pose_places([0, 1], {0: 3, 1: 3}, {}), {0: 1, 1: 1} as Dictionary[int, int], "everyone tied: everyone first")
+
+
+func test_podium_puts_the_blobs_on_a_3d_podium_and_poses_them() -> void:
+	var ps := spawn_arena(4)
+	_make_ui(4)
+	Session.scores = {0: 10, 1: 10, 2: 6, 3: 2} as Dictionary[int, int]
+	Session.round_wins = {0: 2, 1: 2, 2: 1, 3: 0} as Dictionary[int, int]
+	Session.session_finished.emit([1, 0, 2, 3] as Array[int])
+	await step(2)
+	var s := ui.podium_stage
+	assert_true(s != null and s.is_inside_tree(), "3D podium up")
+	if s == null:
+		return
+	assert_true(ui.podium.staged, "the panel only adds captions")
+	assert_true(get_viewport().get_camera_3d() == s.camera, "the podium camera is current")
+	var vis := func(p: Player) -> VisualsComponent: return p.get_component(&"visuals") as VisualsComponent
+	assert_eq((vis.call(ps[1]) as VisualsComponent).get_emote(), &"victory", "1st: victory")
+	assert_eq((vis.call(ps[0]) as VisualsComponent).get_emote(), &"victory", "tied 1st: the same pose")
+	assert_eq((vis.call(ps[2]) as VisualsComponent).get_emote(), &"clap_nod", "3rd: clap and nod")
+	assert_eq((vis.call(ps[3]) as VisualsComponent).get_emote(), &"sulk", "last: sulk")
+	# The host drops everyone onto its spot; they settle there.
+	await step(_seconds(RoundPodiumStage.DROP_DELAY[0] + 1.2))
+	var order: Array[int] = [1, 0, 2, 3]
+	for i in order.size():
+		var want := s.global_transform * RoundPodiumStage.spot_for(i)
+		assert_near(ps[order[i]].global_position, want, 0.15, "place %d stands on its spot" % (i + 1))
+		assert_true(ps[order[i]].alive, "place %d alive and shown" % (i + 1))
+	assert_eq((vis.call(ps[3]) as VisualsComponent).get_emote(), &"sulk", "poses survive the respawn")
+	ui.podium.back_pressed.emit()
+	await step(2)
+	assert_true(ui.podium_stage == null, "podium gone with the panel")
+	for p in ps:
+		assert_eq((vis.call(p) as VisualsComponent).get_emote(), &"", "P%d: pose stopped" % p.slot)
+
+
+func test_podium_without_a_stage_draws_its_own() -> void:
+	_make_ui(3)
+	Session.scores = {0: 3, 1: 5, 2: 1} as Dictionary[int, int]
+	Session.session_finished.emit([1, 0, 2] as Array[int])
+	await step(2)
+	assert_true(ui.podium_stage == null, "no stage: no 3D podium")
+	assert_false(ui.podium.staged, "the panel draws its own blocks")
+
+
+func test_emote_hint_in_the_lobby_until_the_first_emote() -> void:
+	spawn_arena(2)
+	stage.follow_roster = true
+	_make_ui(2)
+	await step(2)
+	assert_true(ui.is_emote_hint_shown(), "hint shown in the lobby hall")
+	var ev := InputEventAction.new()
+	ev.action = &"emote_2"
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	await step(_seconds(1.3))
+	assert_true(RoundUI.emote_hint_used, "first emote noted")
+	assert_false(ui.is_emote_hint_shown(), "hint faded out")
+	Session.state_changed.emit(Session.State.LOBBY)
+	await step(5)
+	assert_false(ui.is_emote_hint_shown(), "and it stays gone")
+	var up := InputEventAction.new()
+	up.action = &"emote_2"
+	up.pressed = false
+	Input.parse_input_event(up)
+	stage.follow_roster = false
+
+
+func test_emote_hint_not_in_a_round() -> void:
+	spawn_arena(2)
+	_make_ui(2)
+	await step(2)
+	assert_false(ui.is_emote_hint_shown(), "no lobby hall (the Stage does not follow the roster): no hint")
 
 
 func test_state_lobby_reveals_back_button_on_podium() -> void:

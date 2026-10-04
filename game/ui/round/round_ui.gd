@@ -12,7 +12,11 @@ extends CanvasLayer
 ##                        "+N coins" this player earned (Progression.local_round_award)
 ##   session_finished  -> podium with confetti; "Back to lobby" shows for the host after
 ##                        BACK_BUTTON_HOST_DELAY s, and for everyone once state is LOBBY;
-##                        a coins card: the session bonus and the balance counting up
+##                        a coins card: the session bonus and the balance counting up.
+##                        With a Stage and its last minigame still loaded, the real blobs
+##                        stand on a 3D podium (RoundPodiumStage: the host respawns them
+##                        there, every peer poses them with play_result_pose for their final
+##                        place) and the panel only adds captions; poses stop when it closes
 ##   state_changed(LOBBY) with no podium up -> everything hidden
 ##
 ## Minigame-facing API (the only calls a minigame makes; local to this peer, so call it on
@@ -28,6 +32,13 @@ extends CanvasLayer
 ## line, the HUD strip groups the players by team, the results list a team or any tied group
 ## (Session.round_groups) on one line, and a role line also shows as a banner after GO!.
 ## All of it is per round: the next round_intro starts without.
+
+## Emote hint: in the lobby hall (Session LOBBY, this peer in a game, the Stage following the
+## roster) a small "1-4 / D-pad: emotes" pill sits bottom-left until this player's first emote
+## key press, then fades for good (this app run).
+const EMOTE_HINT_TEXT := "1-4 / D-pad: emotes"
+const EMOTE_ACTIONS: Array[StringName] = [&"emote_1", &"emote_2", &"emote_3", &"emote_4"]
+static var emote_hint_used: bool = false
 
 ## Seconds after round_started before the role banner (lets "GO!" clear first).
 const ROLE_BANNER_DELAY := 1.0
@@ -47,11 +58,15 @@ var results: RoundResults
 var podium: RoundPodium
 ## The panel on screen now.
 var view: View = View.NONE
+## The 3D podium behind the podium panel (null when none is up).
+var podium_stage: RoundPodiumStage = null
 
 var _root: Control
 var _banner: PanelContainer
 var _banner_label: Label
 var _banner_tween: Tween
+var _emote_hint: PanelContainer
+var _emote_hint_tween: Tween
 var _podium_tween: Tween
 var _role_tween: Tween
 ## The minigame whose teams_changed / role_changed this UI listens to.
@@ -136,6 +151,7 @@ func _ready() -> void:
 	_root.add_child(podium)
 	podium.back_pressed.connect(_on_back_pressed)
 	_build_banner()
+	_build_emote_hint()
 	RoundStyle.ignore_mouse(_root)
 
 	_connect_session(true)
@@ -298,7 +314,8 @@ func _on_session_finished(final_ranking: Array) -> void:
 	var totals: Dictionary = {}
 	for slot: int in Session.scores:
 		totals[slot] = Session.scores[slot]
-	podium.play(final_ranking, totals, Progression.local_session_award(final_ranking))
+	var staged := _build_podium_stage(final_ranking, totals)
+	podium.play(final_ranking, totals, Progression.local_session_award(final_ranking), staged)
 	_show(View.PODIUM)
 	if _podium_tween and _podium_tween.is_valid():
 		_podium_tween.kill()
@@ -312,6 +329,42 @@ func _on_session_finished(final_ranking: Array) -> void:
 func _on_back_pressed() -> void:
 	_show(View.NONE)
 	back_to_lobby_pressed.emit()
+
+
+## Puts up the 3D podium on the Stage's last minigame (every peer; the host places the
+## players). False when there is no stage or minigame to put it on (the panel then draws
+## its own podium).
+func _build_podium_stage(ranking: Array, totals: Dictionary) -> bool:
+	_clear_podium_stage()
+	var stage := _find_stage() if is_inside_tree() else null
+	if stage == null or not is_instance_valid(stage.minigame) or not stage.minigame.is_inside_tree():
+		return false
+	var s := RoundPodiumStage.new()
+	s.name = "PodiumStage"
+	s.position = RoundPodiumStage.OFFSET
+	stage.minigame.add_child(s)
+	s.setup(stage)
+	s.pose_players(ranking, totals, Session.round_wins)
+	s.place_players(ranking)
+	s.tree_exiting.connect(_on_podium_stage_gone.bind(s), CONNECT_ONE_SHOT)
+	podium_stage = s
+	return true
+
+
+func _clear_podium_stage() -> void:
+	if is_instance_valid(podium_stage):
+		podium_stage.stop_poses()
+		if podium_stage.tree_exiting.is_connected(_on_podium_stage_gone):
+			podium_stage.tree_exiting.disconnect(_on_podium_stage_gone)
+		podium_stage.queue_free()
+	podium_stage = null
+
+
+## The stage was cleared under the podium (e.g. back in the lobby): the panel dims again.
+func _on_podium_stage_gone(s: RoundPodiumStage) -> void:
+	if s == podium_stage:
+		podium_stage = null
+		podium.set_staged(false)
 
 
 # --- Internals -----------------------------------------------------------------------
@@ -328,6 +381,7 @@ func _show(v: View) -> void:
 		results.stop()
 	if v != View.PODIUM:
 		podium.stop()
+		_clear_podium_stage()
 		if _podium_tween and _podium_tween.is_valid():
 			_podium_tween.kill()
 	if v != View.HUD:
@@ -388,6 +442,63 @@ func _on_player_respawned(_xform: Transform3D, slot: int) -> void:
 func _on_players_spawned(spawned: Array) -> void:
 	for p: Variant in spawned:
 		bind_player(p as Player)
+
+
+## True while the emote hint should be up (see EMOTE_HINT_TEXT).
+func emote_hint_wanted() -> bool:
+	if emote_hint_used or view != View.NONE or Net.local_slot() < 0 or Session.state != Session.State.LOBBY:
+		return false
+	var stage := _find_stage() if is_inside_tree() else null
+	return stage != null and stage.follow_roster and stage.minigame != null
+
+
+func is_emote_hint_shown() -> bool:
+	return _emote_hint != null and _emote_hint.visible
+
+
+func _process(_delta: float) -> void:
+	if _emote_hint == null or (_emote_hint_tween and _emote_hint_tween.is_valid()):
+		return
+	var want := emote_hint_wanted()
+	if want != _emote_hint.visible:
+		_emote_hint.visible = want
+		if want:
+			_emote_hint.modulate.a = 0.0
+			_emote_hint_tween = create_tween()
+			_emote_hint_tween.tween_property(_emote_hint, ^"modulate:a", 1.0, 0.4)
+
+
+func _input(event: InputEvent) -> void:
+	if emote_hint_used or not is_emote_hint_shown():
+		return
+	for action in EMOTE_ACTIONS:
+		if event.is_action_pressed(action):
+			emote_hint_used = true
+			if _emote_hint_tween and _emote_hint_tween.is_valid():
+				_emote_hint_tween.kill()
+			_emote_hint_tween = create_tween()
+			_emote_hint_tween.tween_interval(0.6)
+			_emote_hint_tween.tween_property(_emote_hint, ^"modulate:a", 0.0, 0.5)
+			_emote_hint_tween.tween_callback(_emote_hint.hide)
+			return
+
+
+func _build_emote_hint() -> void:
+	var style := RoundStyle.box(Color(RoundStyle.CHARCOAL, 0.85), RoundStyle.CREAM.darkened(0.3), 2, 14, false)
+	style.content_margin_left = 14.0
+	style.content_margin_right = 14.0
+	style.content_margin_top = 4.0
+	style.content_margin_bottom = 6.0
+	_emote_hint = RoundStyle.panel(style)
+	_emote_hint.name = "EmoteHint"
+	_emote_hint.anchor_top = 1.0
+	_emote_hint.anchor_bottom = 1.0
+	_emote_hint.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_emote_hint.offset_left = 24.0
+	_emote_hint.offset_bottom = -24.0
+	_root.add_child(_emote_hint)
+	_emote_hint.add_child(RoundStyle.label(EMOTE_HINT_TEXT, 20, RoundStyle.CREAM, 5))
+	_emote_hint.visible = false
 
 
 func _build_banner() -> void:
