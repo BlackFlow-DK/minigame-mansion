@@ -795,6 +795,7 @@ func _rpc_intro(index: int, count: int, id: String, duration: float, is_practice
 		info["rule_text"] = current_minigame.rule_text
 		if Net.is_host():
 			current_minigame.finished.connect(_on_minigame_finished.bind(current_minigame))
+		current_minigame.active_mutator = StringName(mutator) if Mutators.has(StringName(mutator)) else &""
 		current_minigame._setup(current_minigame.players)
 	_watch_stage(stage)
 	_set_mutator(StringName(mutator))
@@ -1005,7 +1006,7 @@ func _set_mutator(id: StringName) -> void:
 		Mutators.apply_to(p, id)
 	var m := Mutators.get_mutator(id)
 	Mutators.set_mirror(m != null and m.mirror)
-	if is_instance_valid(current_minigame) and current_minigame.active_mutator != id:
+	if changed and is_instance_valid(current_minigame):
 		current_minigame.active_mutator = id
 		current_minigame._mutator_changed(id)
 	if changed:

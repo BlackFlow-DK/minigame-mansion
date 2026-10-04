@@ -56,8 +56,8 @@ var teams: Dictionary[int, int] = {}
 var team_count: int = 0
 ## slot -> role line shown to that player ("You are the SEEKER"), every peer (set_role_text).
 var roles: Dictionary[int, String] = {}
-## Every peer: this round's mutator id (&"" = none), set by Session with the INTRO (before
-## `_setup` returns to the flow) and cleared at RESULTS.
+## Every peer: this round's mutator id (&"" = none), set by Session with the INTRO before
+## `_setup` (so `_setup` may read it) and cleared at RESULTS.
 var active_mutator: StringName = &""
 
 var _finished: bool = false
