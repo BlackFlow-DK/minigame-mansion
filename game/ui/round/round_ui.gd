@@ -495,7 +495,7 @@ func _build_emote_hint() -> void:
 	_emote_hint.anchor_bottom = 1.0
 	_emote_hint.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_emote_hint.offset_left = 24.0
-	_emote_hint.offset_bottom = -24.0
+	_emote_hint.offset_bottom = -84.0  # clear of the lobby's bottom bar
 	_root.add_child(_emote_hint)
 	_emote_hint.add_child(RoundStyle.label(EMOTE_HINT_TEXT, 20, RoundStyle.CREAM, 5))
 	_emote_hint.visible = false
