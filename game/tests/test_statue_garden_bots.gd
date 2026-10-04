@@ -15,7 +15,6 @@ func _bot_round(count: int, seed_value: int, scale: float, quiet: bool = false) 
 	mg.rng.seed = seed_value
 	mg.bot_rng.seed = seed_value * 31 + 7
 	mg.time_scale = scale
-	mg.extra_bot_slots = [0]
 	mg.shuffle_lanes()
 	# _start rolled the reflexes from the unseeded rng: roll them again from the seed.
 	for p in ps:

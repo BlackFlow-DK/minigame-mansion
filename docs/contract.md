@@ -103,7 +103,7 @@ Visuals, effects and sound never get called by mechanics. They listen to these s
 
 Controller (human): reads the input actions; `intent.move` is camera-relative (forward = away from the active camera, projected on XZ), expressed in world X,Z. `*_pressed` are edges of the held state. `scripted: bool` (tests): when true the controller leaves `intent` alone. The human controller in `controller.gd` belongs to the skeleton; the bot agent does not edit it.
 
-Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Player` (set before it enters the tree), `func fill_intent(intent: PlayerIntent, delta: float) -> void`. When that file exists, the controller of every bot instances it as its child `BotBrain` and calls `fill_intent` each tick on the authority (the host). Without it bots stand still. The brain reads the world through the Player API and `Minigame.get_bot_goal` / `is_safe`.
+Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Player` (set before it enters the tree), `func fill_intent(intent: PlayerIntent, delta: float) -> void`. When that file exists, the controller of every bot instances it as its child `BotBrain` and calls `fill_intent` each tick on the authority (the host). Without it bots stand still. The brain reads the world through the Player API and `Minigame.get_bot_goal` / `is_safe`, plus the optional minigame hint `bot_aggression_scale` and hook `bot_should_hold(player)` (see "Minigame hooks").
 
 ## Character model and cosmetics
 
@@ -124,6 +124,7 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 - Modifiers (game modes): `set_modifier(source, stats: Dictionary, body_scale := 1.0)` / `clear_modifier(source)` / `has_modifier(source)` add multipliers that compose with the size factor through the same base bookkeeping (`stats` keys `"<component>:<property>"`, any float property, e.g. `"jump:time_to_apex"`); like size factors they are 1 while `frozen`, the body scale is not; clearing restores the base exactly. Mutators use the source `&"mutator"`.
 - Tuning: multiplies `movement.max_speed`, `jump.jump_height`, `shove.force`, `shove.reach`, `shove.width`, `status.knockback_multiplier` (the catalog gives shove/knockback as felt slide distance; the impulse gets the square root). It remembers the value it wrote; any other value (a minigame's write) becomes the new base, then `base * factor` is written back. Factors are 1 while `frozen`, so `_setup`/`_start` read and write base values. `SizeComponent.base_of(component, property)` gives the base.
 - Minigames: set tuning to absolute values (from what you read in `_setup`/`_start`), per frame if you like; never `*=` mid-round (the factor would compound).
+- Override: `set_size_override(id: String, snap := false)` / `clear_size_override(snap := false)`, `size_override` ("" = none): the blob is that size for looks, capsule AND tuning factors until cleared (`player.loadout` untouched; set it on every peer). Order: loadout size -> override (replaces the loadout size while set) -> modifiers (multiply on top, also under an override: Masquerade under `giant` = everyone identical and giant); body scale = size scale x modifier scales, a stat = base x size factor x modifier factors; any set / clear order restores exactly. See "Minigame hooks".
 - Art scripts: `art/scripts/character/`, `art/scripts/cosmetics/`, `art/scripts/env/`, `art/scripts/props/`, all through `artlib` (multi-part: `finalize`, `empty`, `set_parent`, `from_godot`, `export_glb(name, family="character")`).
 
 ## Autoloads
@@ -135,7 +136,7 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 | `Cosmetics` | cosmetics system | `catalog(slot: StringName) -> Array`, `default_loadout(slot_index: int) -> Dictionary`, `load_profile() -> Dictionary` (`{name, loadout}`), `save_profile(player_name, loadout)`, `apply(model_root: Node3D, loadout: Dictionary)` (items and colours; not the size), `sizes() -> Array`, `size_info(id) -> Dictionary`, `sanitize(loadout, fallback_slot)` |
 | `Fx` | look and effects | `play(effect: StringName, at: Vector3, color := Color.WHITE)` |
 | `Sfx` | audio | `play(sound: StringName, at := Vector3.INF)` |
-| `Music` | audio | `play(track: StringName, fade := 1.0)` (cross-fade; same track = no-op), `stop(fade := 1.0)`, `play_sting(track)` (one-shot over the music), `duck(amount: float, seconds: float)`, `set_volume(linear)` / `get_volume()` (bus `Music`), `current`; *`track_changed(track)`*. Tracks `Music.TRACKS` (`res://audio/music/*.ogg`). `game/audio/music_director.gd` (instanced in the main scene) picks them: title, lobby, round by the minigame's StageLook preset, results sting, podium. A minigame may declare `var music_track: StringName` (`&"none"` = silence) or call `Music.stop()` / `play()` from `_start()` on; the director only acts again at the next phase (RESULTS) |
+| `Music` | audio | `play(track: StringName, fade := 1.0)` (cross-fade; same track = no-op), `stop(fade := 1.0)`, `play_sting(track)` (one-shot over the music), `duck(amount: float, seconds: float)`, `set_volume(linear)` / `get_volume()` (bus `Music`), `current`; *`track_changed(track)`*. Tracks `Music.TRACKS` (`res://audio/music/*.ogg`). `game/audio/music_director.gd` (instanced in the main scene) picks them: title, lobby, round by the minigame's StageLook preset, results sting, podium. Any minigame may declare `var music_track: StringName` (`&"none"` = silence through intro and play) or call `Music.stop()` / `play()` from `_start()` on; the director only acts again at the next phase (RESULTS) |
 | `Progression` | progression | Mansion Coins of the local player, saved in its own profile; every peer pays itself from the Session signals (nothing networked; bots never earn; half rate offline and with fewer than 2 humans: `is_half_rate()`). `coins`, `stats`, `award(reason: StringName, amount: int, once := true) -> int` (one-time per reason by default, e.g. the tutorial's `award(&"tutorial", 20)`), `is_unlocked(slot, id)` (wardrobe gate only), `unlock(slot, id) -> bool`, `price(slot, id)`, `dev_unlock_all()` / `--unlock-all` (testing); *`coins_changed(total)`*, *`awarded(reason, amount, total)`*, *`unlocks_changed(slot, id)`* |
 | `Settings` | UI polish (`game/ui/settings/settings.gd`; screen `settings.tscn`) | The player's options, `user://settings.json`, applied at startup: `master_volume`, `music_volume`, `sfx_volume`, `ui_volume` (0..1 -> buses Master / Music / Sfx / Ui), `fullscreen`, `window_size`, `quality` ("low"/"medium"/"high" -> `Look.set_quality`; auto-detected from the GPU on first run, `--quality=` overrides), `show_fps`, and the comfort flags **`screen_shake: bool`** (false: no camera shake) and **`reduced_motion: bool`** (calmer animations); `set_value(key, value)`, *`changed(key)`*. Other systems read the flags without a hard dependency: `get_tree().root.get_node_or_null(^"Settings")` then `.screen_shake` / `.reduced_motion` |
 
@@ -247,10 +248,12 @@ Bot-driven blobs that are not players, for crowds and dummies. Full `Player` sce
 # Stage
 const EXTRA_SLOT_BASE := 100
 const MAX_EXTRAS := 256
-signal extras_spawned(extras: Array[Player])   # every peer (host: spawn_extras; clients: manifest)
+signal extras_spawned(extras: Array[Player])   # every peer (host: spawn_extras, once per call / batched run; clients: manifest, once its new extras are built)
 var extras: Array[Player]                      # slot order
 @export var extra_name_tags := false           # extras get a NameTag too (set before spawning)
-func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Array[Transform3D] = []) -> Array[Player]
+func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Array[Transform3D] = [], batch := 0) -> Array[Player]
+func flush_extras() -> Array[Player]           # host: builds what a batched run still has queued, now
+func is_spawning_extras() -> bool              # a batched run (host) or manifest extras (client) still building
 func despawn_extras() -> void
 func get_extra(slot: int) -> Player            # null if none
 func get_body(slot: int) -> Player             # player or extra by slot (use it for slots from events)
@@ -259,7 +262,8 @@ static func default_extra_loadout(slot: int) -> Dictionary
 func default_extra_xform(index: int, total: int) -> Transform3D
 ```
 
-- `spawn_extras` / `despawn_extras`: host (or offline) only; on a client they do nothing (`[]`). Call `spawn_extras` from `_setup` (it runs on every peer; clients get the extras from the host's manifest a moment later, `extras_spawned` tells them). Missing `loadouts[i]` = a muted crowd colour, missing `spawn_xforms[i]` = a sunflower spiral 2.5-8 m around the minigame origin. Slots continue after the existing extras. Extras are freed with the stage (`clear()`, the next load).
+- `spawn_extras` / `despawn_extras`: host (or offline) only; on a client they do nothing (`[]`). Call `spawn_extras` from `_setup` (it runs on every peer; clients get the extras from the host's manifest a moment later, `extras_spawned` tells them). Missing `loadouts[i]` = a muted crowd colour, missing `spawn_xforms[i]` = a sunflower spiral 2.5-8 m around the minigame origin. Slots continue after the existing (and queued) extras. Extras are freed with the stage (`clear()`, the next load).
+- Batches: building ~20 blobs in one frame stalls a peer ~0.7 s (enough to drop ENet clients while a round loads). `batch > 0` builds that many per frame (the first batch at once), returns `[]`, emits `extras_spawned` once with all of them and only then sends the manifest; configure brains in `extras_spawned`. `batch` 0 (default) builds all now and returns them. If play must start before a run is done (very short intro, tests), call `flush_extras()` in `_start`. Clients build manifest extras that arrive over the network `Stage.CLIENT_EXTRA_BATCH` (4) per frame. `despawn_extras` / `clear` drop a queued run.
 - Extras spawn **unfrozen** and Session never freezes or unfreezes them (they mill about through the countdown and the end grace). A minigame that wants them still sets `frozen` on the host. A frozen blob ignores impulses.
 - Brains: `BotBrain.of(x).configure_extra(mode, seed, center := Vector3.INF)`, `mode` `&"wander"` (default: walk between random safe points within `wander_radius` (4 m) of where it stood, pausing 0.8-3 s), `&"dance"` (loose circles around `center`; give a group one centre) or `&"idle"`. Deterministic per seed (default seed `slot * 7919 + load id`); extras never shove or jump, keep a little personal space, avoid `is_safe() == false` ground, pause after a knock. Host only (it simulates them).
 - Hits: extras are normal shove targets (knockback, stun, `got_hit`, `shove_hit(victim_slot >= 100)`). What a hit on an extra means is the minigame's business: check `victim.is_extra` / `Stage.is_extra_slot(slot)`. The host may `eliminate()` / `respawn_at()` an extra; `knock_out(extra)` only eliminates it (never recorded in `knocked_out`, never ends the round). Hit effects (`FxComponent.slot_color`) use the extra's own colour; RoundUI hides opted-in extra tags with the players' during results.
@@ -279,6 +283,40 @@ Bots and teams: `Minigame.is_ally(a: Player, b: Player) -> bool` (override it fo
 - Look: instance `res://look/stage_look.tscn` and set its `preset`; `Look.apply_toon(model)`; materials in `res://look/materials/` (`lava`, `water`, `void_fade`).
 - Camera: instance `res://camera/arena_camera.tscn` (`ArenaCamera`), set bounds; `add_shake(amount)`; `include_extras` to frame NPC extras too.
 - Player visuals: `VisualsComponent.play_emote(&"cheer" | &"wave" | &"sad")`, `set_expression`.
+
+## Minigame hooks (disguises, stuns, crowds, holds, silence)
+
+Use these instead of reaching for node names, rewriting other components' output every frame or swapping tuning. Presentation hooks act on the peer they are called on: call them on every peer (`_setup`, `_start`, a `call_local` RPC). Every one is undone by its clear call, and each minigame clears what it set on every exit path (round over, stage clear: a child node's `_exit_tree` is a safe place).
+
+```gdscript
+# CosmeticsComponent (cosmetics): show another look; player.loadout and the roster stay untouched
+func set_look_override(look: Dictionary) -> void   # a loadout dict (colours, items; `size` ignored); {} clears
+func clear_look_override() -> void                 # the real loadout comes back
+func has_look_override() -> bool
+func shown_look() -> Dictionary                    # override if set, else player.loadout
+# SizeComponent (size): force a size for looks, capsule and tuning factors
+func set_size_override(id: String, snap := false) -> void   # "small" | "normal" | "big"; "" clears; snap: no scale ease
+func clear_size_override(snap := false) -> void
+# NameTag (round UI)
+var suppressed: bool                               # hidden on purpose; shows again (if alive) when cleared
+static func of(p: Player) -> NameTag               # the tag over p, found by class (null if none)
+# FxComponent (look and effects)
+var shadow_hidden: bool                            # blob shadow hidden on purpose
+static func set_presentation_hidden(p: Player, hidden: bool, tag := true, shadow := true) -> void
+static func shown_look(p: Player) -> Dictionary
+# StatusComponent (knockback): authority only, no-op elsewhere
+func stun(seconds: float, source: Player = null) -> void
+func stun_source() -> Player
+# BotBrain (bot brain)
+func is_held() -> bool
+func reaction_time() -> float                      # this bot's skill-based reaction delay (s)
+```
+
+- Disguise colours: the fx component tints whooshes, poofs, rings and the hit stars a blob causes with its shown look (`FxComponent.primary_color()`, `slot_color(slot)`), so a disguised player's shove looks exactly like an NPC extra's whose loadout is the same look (an NPC fakes a shove with a plain `emit_event(&"shove_started")`).
+- Stun: locks control for exactly `seconds` (extends a running stun, never shortens it, not capped by `stun_chain_max`), raises `stunned(seconds)` through `emit_event`, so every peer sees it. Ignored while invulnerable, frozen or dead. To knock and stun: `stun()` first, then `apply_impulse()`: the impulse's own shorter stun is absorbed and `stunned` comes once.
+- Bot hold: a minigame may define `func bot_should_hold(player: Player) -> bool`; every brain (bots, extras, test brains) polls it each tick and, while it answers true, fills an empty intent (no move, jump or action: no wandering, personal-space nudges, hops or shoves; knockback still moves the blob). Release it and call `request_bot_rethink(slot)` for a fresh plan. The minigame decides when: a bot can be late to stop by the minigame's own reflex delay, or by `BotBrain.of(p).reaction_time()`.
+- Silence: any minigame may declare `var music_track := &"none"` (the director then plays nothing from INTRO through PLAYING); do not take the music over in `_start` just to silence it.
+- Not hooks: driving a bot from minigame code (Masquerade's suspicion hunts) still sets `ControllerComponent.scripted` and calls the brain itself; `bot_should_hold` only stops a bot.
 
 ## Tests
 

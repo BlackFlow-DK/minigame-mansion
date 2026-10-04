@@ -8,6 +8,8 @@ extends Node3D
 ## Crowds: once per frame all tags are laid out together on screen; a tag whose name would
 ## overlap one already placed (the local player's first, then nearest to the camera) steps up
 ## by a line, at most MAX_STEPS times, and if it still overlaps it dims to CROWD_ALPHA.
+## Minigames hide a player's tag with `suppressed` (disguises, prop hunts); find the tag with
+## `NameTag.of(player)` rather than by node name.
 
 ## Metres above the player's origin (the blob is 1.0 m tall).
 @export var height: float = 1.55
@@ -31,6 +33,14 @@ var alpha: float = 1.0
 var lift: float = 0.0
 ## 1, or CROWD_ALPHA while it overlaps another name even after stepping up.
 var crowd_alpha: float = 1.0
+## Hidden on purpose by a minigame (this peer only; set it on every peer). Shows again when cleared.
+var suppressed: bool = false:
+	set(value):
+		suppressed = value
+		if value:
+			visible = false
+		elif is_instance_valid(player):
+			visible = player.alive and (show_extras or not player.is_extra)
 
 static var _tags: Array[WeakRef] = []
 static var _layout_frame: int = -1
@@ -67,8 +77,18 @@ func setup(p: Player) -> void:
 		_apply()
 
 
+## The NameTag shown over `p` (a child of it), or null.
+static func of(p: Player) -> NameTag:
+	if p == null or not is_instance_valid(p):
+		return null
+	for child in p.get_children():
+		if child is NameTag:
+			return child as NameTag
+	return null
+
+
 func _process(delta: float) -> void:
-	if not is_instance_valid(player) or (player.is_extra and not show_extras):
+	if not is_instance_valid(player) or (player.is_extra and not show_extras) or suppressed:
 		visible = false
 		return
 	visible = player.alive

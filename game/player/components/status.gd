@@ -23,6 +23,7 @@ extends PlayerComponent
 var _stun_left: float = 0.0
 var _chain_time: float = 0.0
 var _immune_left: float = 0.0
+var _stun_source: Player = null
 
 
 func _ready() -> void:
@@ -53,8 +54,34 @@ func receive_impulse(impulse: Vector3, source: Player) -> void:
 	if duration <= 0.0:
 		return
 	_stun_left = duration
+	_stun_source = null
 	player.control_locked = true
 	player.emit_event(&"stunned", [duration])
+
+
+## Authority only (no-op elsewhere): locks control for `seconds`, a stun of the minigame's own
+## length (no hit needed, no tuning swap). Extends a running stun to `seconds` if that is longer,
+## never shortens one, and is not limited by `stun_chain_max`. Raises `stunned(seconds)` through
+## `emit_event`, so every peer sees it. Ignored while invulnerable, frozen or dead, like an
+## impulse. `source`: who caused it, for symmetry with impulses (the event carries no source).
+## Knock AND stun: call stun() first, then `apply_impulse()`: the hit's own shorter stun is
+## absorbed, so `stunned` is raised once, with `seconds`.
+func stun(seconds: float, source: Player = null) -> void:
+	if player == null or not player.is_authority() or invulnerable or player.frozen or not player.alive:
+		return
+	if seconds <= _stun_left or seconds <= 0.0:
+		return
+	if _stun_left <= 0.0:
+		_chain_time = 0.0
+	_stun_left = seconds
+	_stun_source = source
+	player.control_locked = true
+	player.emit_event(&"stunned", [seconds])
+
+
+## The player behind the current stun() (null for hits and when none).
+func stun_source() -> Player:
+	return _stun_source if is_instance_valid(_stun_source) and _stun_left > 0.0 else null
 
 
 ## True while this component holds `control_locked`.

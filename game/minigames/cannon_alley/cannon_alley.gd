@@ -345,23 +345,13 @@ func _local_hit(p: Player, s: CannonSchedule.Shot, ball: Vector3) -> void:
 		_rpc_report_hit.rpc_id(1, p.slot, s.id, feet)
 
 
-## Applies a ball hit's impulse with the ball's own stun (hit_stun): the status tuning is
-## swapped for this one impulse only, so shoves keep their normal stun.
+## Applies a ball hit's impulse with the ball's own stun (hit_stun; shoves keep their normal
+## stun). Stun first: the impulse's own shorter stun is absorbed, so `stunned` comes once.
 func _push(p: Player, impulse: Vector3) -> void:
 	var status := p.get_component(&"status") as StatusComponent
-	if status == null:
-		p.apply_impulse(impulse)
-		return
-	var saved_max := status.stun_max
-	var saved_full := status.stun_full_impulse
-	var saved_chain := status.stun_chain_max
-	status.stun_max = hit_stun
-	status.stun_full_impulse = impulse.length()
-	status.stun_chain_max = maxf(saved_chain, hit_stun * 2.5)
+	if status:
+		status.stun(hit_stun)
 	p.apply_impulse(impulse)
-	status.stun_max = saved_max
-	status.stun_full_impulse = saved_full
-	status.stun_chain_max = saved_chain
 
 
 # --- Host: hits ----------------------------------------------------------------------------------

@@ -44,9 +44,11 @@ const FRONT_Z := 8.0
 ## Blob centres stay inside this floor rectangle (bots and NPCs treat it as safe).
 const SAFE_MIN := Vector2(-8.4, -5.8)
 const SAFE_MAX := Vector2(8.4, 6.8)
-## Dance circles of the NPCs (and dancing bots).
-const DANCE_CENTERS: Array[Vector3] = [Vector3(-4.6, 0.0, 0.2), Vector3(4.6, 0.0, 0.2), Vector3(0.0, 0.0, -2.6),
-	Vector3(0.0, 0.0, 3.6)]
+## Dance circles of the NPCs (and dancing bots): one in each quarter of the floor and one in
+## the middle, so the crowd fills the room (a circle reaches ~3 m out, still on the floor).
+## NPC dancers are dealt round-robin over them.
+const DANCE_CENTERS: Array[Vector3] = [Vector3(-5.2, 0.0, -2.6), Vector3(5.2, 0.0, -2.6), Vector3(-5.2, 0.0, 3.6),
+	Vector3(5.2, 0.0, 3.6), Vector3(0.0, 0.0, 0.5)]
 const FALL_Y := -5.0
 
 # --- Rules (host) ----------------------------------------------------------------------------
@@ -65,7 +67,7 @@ const FALL_Y := -5.0
 ## Seconds after GO the local player's "that's you" ring lasts.
 @export var you_ring_time: float = 2.0
 @export var end_grace: float = 2.0
-## Extras spawned per frame during the intro (host).
+## Extras built per frame during the intro (host; Stage.spawn_extras batch).
 @export var extras_per_frame: int = 4
 ## NPC fake shoves: chance per NPC per second while someone stands in front of it.
 @export var fake_shove_rate: float = 0.06
@@ -101,7 +103,8 @@ var disguise: MasqDisguise = null
 ## Host: the bot driver.
 var bots: MasqBots = null
 
-var _extra_queue: Array[Transform3D] = []   # host: spots of extras still to spawn
+var _dancers: int = 0                      # host: NPC dancers dealt to circles so far
+var _dance_offset: int = 0                 # host: the circle the first dancer got
 var _out_order: Array[int] = []            # host: unmasked slots in order
 var _pending_out: Dictionary[int, float] = {}  # host: slot -> seconds until knock_out
 var _running: bool = false
@@ -162,10 +165,14 @@ func _setup(setup_players: Array[Player]) -> void:
 func _host_setup(stage: Stage, setup_players: Array[Player]) -> void:
 	var count := extras_count_small if setup_players.size() <= 3 else extras_count
 	var spots := scatter(setup_players.size() + count)
-	_extra_queue.clear()
+	# Built a few per frame through the intro (Stage batches: 20 at once stall a peer long
+	# enough to trip the network timeout while the round loads); brains in _on_extras_spawned.
+	var loadouts: Array[Dictionary] = []
+	var xforms: Array[Transform3D] = []
 	for i in count:
-		_extra_queue.append(spots[setup_players.size() + i])
-	_spawn_extra_batch(stage)
+		loadouts.append(MasqDisguise.LOOK.duplicate())
+		xforms.append(spots[setup_players.size() + i])
+	stage.spawn_extras(count, loadouts, xforms, extras_per_frame)
 	# Players stand among the crowd, not on the (well-known) spawn markers.
 	var slots: Array = []
 	var places: Array = []
@@ -175,34 +182,32 @@ func _host_setup(stage: Stage, setup_players: Array[Player]) -> void:
 	_rpc_places.rpc(slots, places)
 
 
-## Host: spawns the next `extras_per_frame` queued extras (in the masquerade look) and gives
-## them NPC brains. Spread over the intro's first frames: 20 extras at once stall a peer long
-## enough (~0.7 s, plus the room) to trip the network timeout while every peer loads the round.
-func _spawn_extra_batch(stage: Stage, all: bool = false) -> void:
-	var n := _extra_queue.size() if all else mini(extras_per_frame, _extra_queue.size())
-	if n <= 0 or stage == null:
-		return
-	var loadouts: Array[Dictionary] = []
-	var xforms: Array[Transform3D] = []
-	for i in n:
-		loadouts.append(MasqDisguise.LOOK.duplicate())
-		xforms.append(_extra_queue[i])
-	_extra_queue = _extra_queue.slice(n)
-	for x in stage.spawn_extras(n, loadouts, xforms):
+## Host: NPC brains for new extras: a share dance (dealt round-robin over the circles, so the
+## crowd spreads over the floor), the rest wander from where they stand.
+func _configure_crowd(spawned: Array[Player]) -> void:
+	for x in spawned:
 		var brain := BotBrain.of(x)
-		if brain:
-			var dance := bot_rng.randf() < dance_share
-			brain.configure_extra(&"dance" if dance else &"wander", bot_rng.randi(),
-				DANCE_CENTERS[bot_rng.randi() % DANCE_CENTERS.size()] if dance else Vector3.INF)
+		if brain == null:
+			continue
+		var dance := bot_rng.randf() < dance_share
+		var seed_value := bot_rng.randi()
+		var center := Vector3.INF
+		if dance:
+			var r := bot_rng.randi()
+			if _dancers == 0:
+				_dance_offset = r % DANCE_CENTERS.size()
+			center = DANCE_CENTERS[(_dance_offset + _dancers) % DANCE_CENTERS.size()]
+			_dancers += 1
+		brain.configure_extra(&"dance" if dance else &"wander", seed_value, center)
 
 
 func _start() -> void:
-	if _is_host() and not _extra_queue.is_empty():
-		_spawn_extra_batch(_stage(), true)  # a very short intro (tests, sandbox): all now
+	var stage := _stage()
+	if _is_host() and stage and stage.is_spawning_extras():
+		stage.flush_extras()  # a very short intro (tests, sandbox): all now
 	elapsed = 0.0
 	_running = true
 	for p in players:
-		_neutralise_size(p)
 		RoundUI.push_counter(p.slot, points.get(p.slot, 0))
 	if _ring:
 		_ring_left = you_ring_time
@@ -545,47 +550,24 @@ func _rpc_round_over(survivors: Array) -> void:
 
 # --- Every peer: helpers ------------------------------------------------------------------------
 
-## The wrong-shove penalty on the shover's own peer: a small recoil whose stun is `wrong_stun`
-## (status tuning swapped for this one impulse, as Cannon Alley does), so the usual got_hit /
-## stunned events and visuals run.
+## The wrong-shove penalty on the shover's own peer: a `wrong_stun` stun plus a small recoil, so
+## the usual stunned / got_hit events and visuals run.
 func _stun(p: Player) -> void:
 	var back := -p.facing
 	back.y = 0.0
 	back = back.normalized() if back.length_squared() > 0.0001 else Vector3.BACK
-	var impulse := back * 2.5 + Vector3.UP * 1.5
 	var status := p.get_component(&"status") as StatusComponent
-	if status == null:
-		p.apply_impulse(impulse)
-		return
-	var saved_max := status.stun_max
-	var saved_full := status.stun_full_impulse
-	var saved_chain := status.stun_chain_max
-	status.stun_max = wrong_stun
-	status.stun_full_impulse = impulse.length()
-	status.stun_chain_max = maxf(saved_chain, wrong_stun * 2.0)
-	p.apply_impulse(impulse)
-	status.stun_max = saved_max
-	status.stun_full_impulse = saved_full
-	status.stun_chain_max = saved_chain
+	if status:
+		status.stun(wrong_stun)
+	p.apply_impulse(back * 2.5 + Vector3.UP * 1.5)
 
 
-## Gameplay size factors (speed, jump, shove, knockback) neutralised: a big or small blob moves
-## and shoves like a normal one, so only steering gives you away. Writes base / factor once;
-## the size component takes that as its new base and writes the base back (docs: "Body size").
-func _neutralise_size(p: Player) -> void:
-	var size := p.get_component(&"size") as SizeComponent
-	if size == null or size.size_id == "normal":
-		return
-	for stat: Array in SizeComponent.STATS:
-		var c := p.get_component(stat[0])
-		var f := size.factor(stat[2])
-		if c and f > 0.0 and not is_equal_approx(f, 1.0):
-			c.set(stat[1], size.base_of(stat[0], stat[1]) / f)
-
-
+## Every peer: new extras join the disguise; on the host they get their NPC brains.
 func _on_extras_spawned(spawned: Array[Player]) -> void:
 	for x in spawned:
 		disguise.hold(x)
+	if _is_host():
+		_configure_crowd(spawned)
 
 
 ## The local player's "that's you" ring (this peer only): from the intro until you_ring_time
@@ -617,8 +599,6 @@ func _make_you_ring(setup_players: Array[Player]) -> void:
 
 
 func _process(delta: float) -> void:
-	if not _extra_queue.is_empty() and _is_host():
-		_spawn_extra_batch(_stage())
 	if _ring == null:
 		return
 	if not is_instance_valid(_ring_player) or not _ring_player.alive:

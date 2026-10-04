@@ -30,6 +30,11 @@ extends Node
 ##
 ## Optional minigame hint: a minigame may declare `var bot_aggression_scale: float` (0..1,
 ## default 1). It scales how often bots chase, and at 0 they never shove (the lobby: calm).
+## Optional minigame hook: `func bot_should_hold(player: Player) -> bool`, polled every tick by
+## every brain (bots, extras, test brains). While it answers true the brain fills an EMPTY
+## intent: no move, jump or action, no wandering, personal-space nudges, hops or shoves (status
+## knockback still moves the blob). The minigame decides when; a bot's own reaction delay is
+## the minigame's to add (`reaction_time()`), so a bot can be late to stop.
 ## `Minigame.is_ally(a, b)` (teams): bots never chase an ally and never shove while one is in
 ## front of them.
 ## Bots ignore NPC extras (not in `Minigame.players`); a shove may still hit one in passing.
@@ -193,6 +198,9 @@ var _jump_hold: float = 0.0
 var _jump_cooldown: float = 0.0
 var _gap_jump: bool = false
 var _hooked: Minigame = null
+var _hold_game: Minigame = null    # minigame whose bot_should_hold was looked up
+var _hold_hook: bool = false       # it has one
+var _held: bool = false
 # Extras.
 var _home: Vector3 = Vector3.INF
 var _dance_center: Vector3 = Vector3.INF
@@ -264,6 +272,10 @@ func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector
 func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	if not _configured:
 		configure(randi())
+	_held = _should_hold(_game())
+	if _held:
+		intent.clear()
+		return
 	if extra_mode != &"":
 		_fill_extra(intent, delta)
 		return
@@ -337,6 +349,27 @@ func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	_fill_jump(intent, delta, hvel, game, pos)
 	intent.action_pressed = _want_shove(delta, pos, game)
 	_prev_pos = pos
+
+
+## True while the minigame's `bot_should_hold` held this brain at its last tick.
+func is_held() -> bool:
+	return _held
+
+
+## This bot's own reaction delay (s), from its skill and personality: how late it acts on a
+## change it has to notice (unsafe ground, a rethink). Minigames may add it to a hold.
+func reaction_time() -> float:
+	return _danger_reaction
+
+
+## The minigame's optional `bot_should_hold(player)` answer (looked up once per minigame).
+func _should_hold(game: Minigame) -> bool:
+	if game != _hold_game:
+		_hold_game = game
+		_hold_hook = game != null and game.has_method(&"bot_should_hold")
+	if not _hold_hook or player == null or not is_instance_valid(game):
+		return false
+	return game.call(&"bot_should_hold", player) == true
 
 
 # --- Decisions ------------------------------------------------------------------------------

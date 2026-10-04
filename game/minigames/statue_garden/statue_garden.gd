@@ -123,12 +123,10 @@ const BOT_LOOKAHEAD := 5.0
 ## a little mischief in GREEN, the shove-before-RED trick in WARNING, never in RED.
 var bot_aggression_scale: float = 0.0
 const BOT_AGGRESSION := {Phase.GREEN: 0.35, Phase.WARNING: 0.6}
-## Test/dev: slots driven by a BotBrain although not bots (tests drive slot 0 with one).
-var extra_bot_slots: Array[int] = []
 
-## Music: the director plays its BRIGHT_DAY round track through the title card; `_start`
-## fades it out, and from then on the statue's own tune (below) is the round's music: its
-## stopping is the cue.
+## Music: no director track (silence from the title card on); the statue's own tune (below) is
+## the round's music: its stopping is the cue.
+var music_track := &"none"
 
 ## Test/dev only: multiplies how fast the host's phase clock runs.
 var time_scale: float = 1.0
@@ -158,7 +156,6 @@ var _caught_now: Dictionary[int, bool] = {}   # slot -> caught in the current RE
 var _bot_reflex: Dictionary[int, float] = {}
 var _bot_stop_at: Dictionary[int, float] = {}
 var _bot_stopped: Dictionary[int, bool] = {}
-var _pinned: Dictionary[int, bool] = {}
 var _bot_go_at: Dictionary[int, float] = {}
 var _hold: Phase = Phase.IDLE
 var _circles: Array[Array] = obstacle_circles()
@@ -261,7 +258,6 @@ func shuffle_lanes() -> void:
 
 func _start() -> void:
 	elapsed = 0.0
-	Music.stop(0.4)
 	for p in players:
 		catches[p.slot] = 0
 		if multiplayer.is_server():
@@ -325,12 +321,8 @@ func _begin(next: Phase) -> void:
 			_red_end = INF
 			_caught_now.clear()
 		Phase.WARNING:
-			_bot_stopped.clear()
+			_bot_stopped.clear()  # a bot still waiting to go when GREEN ended goes now
 			_bot_stop_at.clear()
-			for slot: int in _pinned:
-				var pp := _player(slot)
-				if pp and _pinned[slot]:
-					_pin(pp, false)  # a bot still waiting to go when GREEN ended
 			for p in _alive():
 				var reflex: float = _bot_reflex.get(p.slot, 0.5)
 				var delay := lerpf(BOT_STOP_DELAY.x, BOT_STOP_DELAY.y, reflex) + bot_rng.randf() * BOT_STOP_JITTER
@@ -437,9 +429,6 @@ func _tell_bots_to_stop() -> void:
 			if _bot_stopped.get(slot, false) and elapsed >= _bot_go_at[slot]:
 				_bot_stopped[slot] = false
 				request_bot_rethink(slot)
-				var pp := _player(slot)
-				if pp and _pinned.get(slot, false):
-					_pin(pp, false)
 		return
 	if phase != Phase.WARNING and phase != Phase.RED:
 		return
@@ -447,30 +436,14 @@ func _tell_bots_to_stop() -> void:
 		if not _bot_stopped.get(slot, false) and elapsed >= _bot_stop_at[slot]:
 			_bot_stopped[slot] = true
 			request_bot_rethink(slot)
-			var p := _player(slot)
-			if p and p.alive and p.is_authority() and (_brain_driven(p) or extra_bot_slots.has(slot)):
-				_pin(p, true)
 
 
-## A bot whose own brain drives it (a scripted controller, as in tests, is left alone).
-static func _brain_driven(p: Player) -> bool:
-	var c := p.get_component(&"controller") as ControllerComponent
-	return p.is_bot and (c == null or not c.scripted)
-
-
-## Host, bots only: a stopped bot is held still until GREEN. BotBrain keeps steering a little
-## when its goal is where it stands (wander rolls, personal space from neighbours, a hop when
-## it thinks it is blocked), and in RED any of that is a catch. So its walking speed goes to 0
-## and its jump off; shoves still move it (status impulses), so it can still be shoved into a
-## catch. Bots are simulated on the host only, so this tuning is set where it acts.
-func _pin(p: Player, on: bool) -> void:
-	_pinned[p.slot] = on
-	var move := p.get_component(&"movement") as MovementComponent
-	if move:
-		move.max_speed = 0.0 if on else WALK_SPEED
-	var jump := p.get_component(&"jump") as JumpComponent
-	if jump:
-		jump.jump_enabled = not on
+## BotBrain hook (host, where bots are simulated): a stopped bot stands dead still until its go
+## time in GREEN (no wandering, personal-space nudges or hops: in RED any of that is a catch).
+## Shoves still move it (status impulses), so it can still be shoved into a catch. The stop
+## comes after this bot's reflex delay (BOT_STOP_DELAY), so a slow bot is late to stop.
+func bot_should_hold(player: Player) -> bool:
+	return player != null and _bot_stopped.get(player.slot, false)
 
 
 func _check_touch() -> void:
@@ -561,7 +534,7 @@ static func obstacle_circles() -> Array[Array]:
 
 ## Up the lane toward the statue, around obstacles; from the moment this bot's reflex fires
 ## in WARNING / RED until its go delay in the next GREEN has passed (and in IDLE / OVER):
-## stand still where it is (see `_pin`).
+## stand still where it is (see `bot_should_hold`).
 func get_bot_goal(player: Player) -> Vector3:
 	if player == null or not player.alive:
 		return super.get_bot_goal(player)

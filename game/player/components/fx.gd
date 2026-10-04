@@ -7,6 +7,10 @@ extends PlayerComponent
 ## knockouts get a poof, a ring shockwave in the player's colour and an "OUT!" tag, with
 ## their own flourish for lava, cannon and bomb; respawns land with a small ring.
 ## Quality LOW skips the rings and extra bursts. Owner: look and effects.
+## Colours follow what the blob shows: a cosmetics look override (a disguise) tints its whoosh,
+## the stars it causes, its poof and rings exactly like a blob whose loadout is that look.
+## Minigames hide the blob shadow with `shadow_hidden`, or shadow and name tag together with
+## `FxComponent.set_presentation_hidden(player, hidden)`.
 
 ## Landing below this impact speed makes no effect; above `thud_speed` it is a big thud.
 @export var land_min_speed: float = 3.0
@@ -32,6 +36,16 @@ var _swirl: FxEffect = null
 var _swirl_serial: int = -1
 var _shadow: BlobShadow = null
 
+## Hides the blob shadow on purpose (this peer only; set it on every peer). Shows again when cleared.
+var shadow_hidden: bool = false:
+	set(value):
+		shadow_hidden = value
+		if _shadow:
+			# The shadow shows / hides itself each physics frame; parked, it stays hidden.
+			_shadow.process_mode = Node.PROCESS_MODE_DISABLED if value else Node.PROCESS_MODE_INHERIT
+			if value:
+				_shadow.visible = false
+
 
 func _ready() -> void:
 	if player == null:
@@ -47,6 +61,7 @@ func _ready() -> void:
 		_shadow = BlobShadow.new()
 		_shadow.name = "BlobShadow"
 		add_child(_shadow)
+		shadow_hidden = shadow_hidden  # set before _ready: apply it now
 
 
 func _process(delta: float) -> void:
@@ -72,20 +87,44 @@ func _process(delta: float) -> void:
 		_step_timer = minf(_step_timer, footstep_interval * 0.3)
 
 
-## The primary colour of this player.
+## The primary colour this player shows: its look override's (a disguise) if one is set, else
+## its loadout's.
 func primary_color() -> Color:
-	return Look.parse_color(player.loadout.get("primary", ""), Color.WHITE) if player else Color.WHITE
+	return Look.parse_color(shown_look(player).get("primary", ""), Color.WHITE) if player else Color.WHITE
 
 
-## The primary colour of the player in `slot`, gold if unknown.
+## The look `p` shows now: the cosmetics component's override if set, else `p.loadout`.
+static func shown_look(p: Player) -> Dictionary:
+	var cosmetics := p.get_component(&"cosmetics") as CosmeticsComponent
+	return cosmetics.shown_look() if cosmetics else p.loadout
+
+
+## Hides (or shows again) `p`'s name tag and / or blob shadow on this peer: disguises and prop
+## hunts call it on every peer. Only the parts asked for change.
+static func set_presentation_hidden(p: Player, hidden: bool, tag: bool = true, shadow: bool = true) -> void:
+	if p == null or not is_instance_valid(p):
+		return
+	if tag:
+		var t := NameTag.of(p)
+		if t:
+			t.suppressed = hidden
+	if shadow:
+		var fx := p.get_component(&"fx") as FxComponent
+		if fx:
+			fx.shadow_hidden = hidden
+
+
+## The primary colour the player in `slot` shows (its disguise if it wears one), gold if unknown.
 func slot_color(slot: int) -> Color:
 	if slot < 0:
 		return Look.GOLD
 	var stage := get_tree().get_first_node_in_group(&"stage") as Stage
 	if stage:
 		var p := stage.get_body(slot)  # players and NPC extras
-		if p and p.loadout.has("primary"):
-			return Look.parse_color(p.loadout["primary"], Look.GOLD)
+		if p:
+			var look := shown_look(p)
+			if look.has("primary"):
+				return Look.parse_color(look["primary"], Look.GOLD)
 	var info: Variant = Net.roster.get(slot)
 	if info != null and info is PlayerInfo and (info as PlayerInfo).loadout.has("primary"):
 		return Look.parse_color((info as PlayerInfo).loadout["primary"], Look.GOLD)

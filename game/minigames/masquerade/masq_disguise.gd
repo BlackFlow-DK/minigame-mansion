@@ -5,17 +5,14 @@ extends Node
 ## until it is released. Owner: masquerade minigame. Child of the minigame; when it leaves the
 ## tree (round over, stage cleared) it releases everyone itself, so no exit path leaks a look.
 ##
-## Only public APIs, never `player.loadout` (replicated roster data):
-## - Look: `Cosmetics.apply(model_root, LOOK)` + `BlobToon.apply` on the model root from
-##   `VisualsComponent.get_model_root()`, exactly what the cosmetics component does with the
-##   real loadout. The component only re-applies when `player.loadout` changes or the model is
-##   swapped; this node checks every frame and re-dresses if anything put the real look back.
-##   Release: `CosmeticsComponent.refresh()` re-applies the real loadout.
-## - Size: SizeComponent scales the `visuals` node from `loadout.size` every frame (no override
-##   hook exists), so this node runs after it (process_priority) and writes scale 1 back while
-##   it holds the blob. Visual only; gameplay size factors are neutralised by the minigame.
-## - Name tag: the player's `NameTag` child stops processing and hides (it re-shows itself
-##   when released: its own _process sets `visible = player.alive`).
+## Only the framework hooks, never `player.loadout` (replicated roster data):
+## - Look: `CosmeticsComponent.set_look_override(LOOK)` (kept through model swaps; the fx
+##   component tints whooshes and hit stars with it too); released with `clear_look_override()`.
+## - Size: `SizeComponent.set_size_override("normal")`: a small or big blob looks, collides
+##   (capsule) and moves / shoves like a normal one; released with `clear_size_override()`.
+## - Name tag: `FxComponent.set_presentation_hidden(p, hidden, tag only)`.
+## - Mask: a masq_mask on the model's FaceSocket, re-checked every CHECK_EVERY s (a model swap
+##   drops it).
 ## - `flash(p, seconds)`: shows `p`'s true colours (not its items) for a while, then the
 ##   disguise again.
 
@@ -28,25 +25,18 @@ const LOOK: Dictionary = {"primary": "#ece2cf", "secondary": "#b7a3d9", "hat": "
 const ITEM_SLOTS: Array[StringName] = [&"hat", &"face", &"neck", &"back"]
 const META_COLOURS := &"cosmetic_colours"  # what Cosmetics.apply stamps on the model root
 
-## Seconds between two full checks of one blob (staggered over the crowd; the scale of a
-## small or big blob is fixed every frame).
+## Seconds between two mask checks of one blob (staggered over the crowd).
 const CHECK_EVERY := 0.25
 
 ## Blobs held now (players and extras).
 var blobs: Array[Player] = []
 ## Player -> seconds of true colours left (see flash).
 var _flash: Dictionary = {}
-var _tags_hidden: Dictionary = {}  # Player -> NameTag node hidden by us
-var _check_in: Dictionary = {}     # Player -> seconds until its next full check
-var _resized: Dictionary = {}      # Player -> its visuals node, for blobs not of normal size
-var _look_key: Array = []
+var _check_in: Dictionary = {}     # Player -> seconds until its next mask check
 
 
 func _init() -> void:
 	name = "Disguise"
-	# After every SizeComponent._process (priority 0), so our scale write is the one rendered.
-	process_priority = 100
-	_look_key = colour_key(LOOK)
 
 
 ## Puts `p` in the masquerade look (idempotent).
@@ -55,7 +45,14 @@ func hold(p: Player) -> void:
 		return
 	blobs.append(p)
 	_check_in[p] = CHECK_EVERY * float(blobs.size() % 8) / 8.0
-	_dress(p)
+	var cosmetics := p.get_component(&"cosmetics") as CosmeticsComponent
+	if cosmetics:
+		cosmetics.set_look_override(LOOK)
+	var size := p.get_component(&"size") as SizeComponent
+	if size:
+		size.set_size_override(LOOK["size"], true)
+	FxComponent.set_presentation_hidden(p, true, true, false)
+	_put_mask(p)
 
 
 ## Gives `p` its own look back (idempotent).
@@ -65,9 +62,7 @@ func release(p: Player) -> void:
 	blobs.erase(p)
 	_flash.erase(p)
 	_check_in.erase(p)
-	_resized.erase(p)
-	if not is_instance_valid(p) or p.is_queued_for_deletion():
-		_tags_hidden.erase(p)
+	if p.is_queued_for_deletion():
 		return
 	var root := model_root(p)
 	if root:
@@ -75,14 +70,13 @@ func release(p: Player) -> void:
 		if mask:
 			mask.get_parent().remove_child(mask)
 			mask.queue_free()
-	var cosmetics := p.get_component(&"cosmetics")
-	if cosmetics and cosmetics.has_method(&"refresh"):
-		cosmetics.call(&"refresh")
-	var tag: Node = _tags_hidden.get(p)
-	_tags_hidden.erase(p)
-	if tag and is_instance_valid(tag):
-		tag.process_mode = Node.PROCESS_MODE_INHERIT
-		(tag as Node3D).visible = p.alive
+	var cosmetics := p.get_component(&"cosmetics") as CosmeticsComponent
+	if cosmetics:
+		cosmetics.clear_look_override()
+	var size := p.get_component(&"size") as SizeComponent
+	if size:
+		size.clear_size_override(true)
+	FxComponent.set_presentation_hidden(p, false, true, false)
 
 
 ## Releases every held blob that is not an NPC extra (extras keep their mask: their real
@@ -128,26 +122,20 @@ func _process(delta: float) -> void:
 			gone.append(v)
 			continue
 		var p := v as Player
-		var check := float(_check_in.get(p, 0.0)) - delta
 		if _flash.has(p):
 			_flash[p] = float(_flash[p]) - delta
 			if float(_flash[p]) <= 0.0:
 				_flash.erase(p)
-				check = 0.0
+				_dress(p)
+		var check := float(_check_in.get(p, 0.0)) - delta
 		if check <= 0.0:
 			check += CHECK_EVERY
-			_dress(p)
+			_put_mask(p)
 		_check_in[p] = check
-	# A small or big blob: SizeComponent writes its scale every frame; this runs after it.
-	for v: Variant in _resized.values():
-		if is_instance_valid(v) and (v as Node3D).scale != Vector3.ONE:
-			(v as Node3D).scale = Vector3.ONE
 	for v: Variant in gone:
 		blobs.erase(v)
 		_flash.erase(v)
 		_check_in.erase(v)
-		_resized.erase(v)
-		_tags_hidden.erase(v)
 
 
 ## The colours `p` should show now: the disguise, or its own while flashing.
@@ -160,38 +148,28 @@ func _wanted(p: Player) -> Dictionary:
 	return look
 
 
-func _wanted_key(p: Player) -> Array:
-	return colour_key(_wanted(p)) if _flash.has(p) else _look_key
-
-
-## Brings `p` to the wanted look; cheap when it already is.
+## Brings `p`'s look override to the wanted look.
 func _dress(p: Player) -> void:
+	var cosmetics := p.get_component(&"cosmetics") as CosmeticsComponent
+	if cosmetics:
+		cosmetics.set_look_override(_wanted(p))
+	_put_mask(p)
+
+
+## Puts the mask on `p`'s face if it is not there (cheap when it is).
+func _put_mask(p: Player) -> void:
 	var root := model_root(p)
-	if root:
-		if root.get_meta(META_COLOURS, []) != _wanted_key(p) or _wears_items(root):
-			var cosmetics := get_node_or_null(^"/root/Cosmetics")
-			if cosmetics:
-				cosmetics.call(&"apply", root, _wanted(p))
-			BlobToon.apply(root)
-		if _mask_of(root) == null:
-			var socket := root.get_node_or_null(^"FaceSocket") as Node3D
-			var mask := MASK_SCENE.instantiate() as Node3D
-			mask.name = MASK_NODE
-			if socket:
-				socket.add_child(mask)
-			else:
-				mask.position = Vector3(0.0, 0.68, 0.37)
-				root.add_child(mask)
-			BlobToon.apply(mask, false)  # thin shell: an outline hull would collapse anyway
-	var visuals := p.get_component(&"visuals") as Node3D
-	if visuals and visuals.scale != Vector3.ONE:
-		visuals.scale = Vector3.ONE
-		_resized[p] = visuals
-	var tag := p.get_node_or_null(^"NameTag") as Node3D
-	if tag and tag.process_mode != Node.PROCESS_MODE_DISABLED:
-		tag.process_mode = Node.PROCESS_MODE_DISABLED
-		tag.visible = false
-		_tags_hidden[p] = tag
+	if root == null or _mask_of(root) != null:
+		return
+	var socket := root.get_node_or_null(^"FaceSocket") as Node3D
+	var mask := MASK_SCENE.instantiate() as Node3D
+	mask.name = MASK_NODE
+	if socket:
+		socket.add_child(mask)
+	else:
+		mask.position = Vector3(0.0, 0.68, 0.37)
+		root.add_child(mask)
+	BlobToon.apply(mask, false)  # thin shell: an outline hull would collapse anyway
 
 
 ## The blob model of `p` (null before the visuals made it).
@@ -211,18 +189,6 @@ static func _hex(v: Variant) -> String:
 	if v is String and v != "" and Color.html_is_valid(v):
 		return "#" + Color.html(v).to_html(false)
 	return ""
-
-
-## Item node paths per slot (socket / item, as Cosmetics.apply names them).
-const ITEM_PATHS: Array[NodePath] = [^"HatSocket/Cosmetic_hat", ^"FaceSocket/Cosmetic_face",
-	^"NeckSocket/Cosmetic_neck", ^"BackSocket/Cosmetic_back"]
-
-
-static func _wears_items(root: Node3D) -> bool:
-	for path in ITEM_PATHS:
-		if root.get_node_or_null(path) != null:
-			return true
-	return false
 
 
 static func _mask_of(root: Node3D) -> Node3D:
@@ -259,6 +225,6 @@ static func fingerprint(p: Player) -> Dictionary:
 			var m := body.get_active_material(i) as BaseMaterial3D
 			cols.append(m.albedo_color.to_html(false) if m else "")
 	out["body"] = cols
-	var tag := p.get_node_or_null(^"NameTag") as Node3D
+	var tag := NameTag.of(p)
 	out["tag"] = tag != null and tag.is_visible_in_tree()
 	return out
