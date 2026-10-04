@@ -29,6 +29,14 @@ var _lamps: Array[OmniLight3D] = []
 func _ready() -> void:
 	add_to_group(Look.QUALITY_GROUP)
 	_build_shell()
+	# Perf: the fixed shell and decor as one mesh per material (the furniture is MultiMesh);
+	# floor tiles and the rug cast no sun shadow (nothing lies under them).
+	for c: Node in get_children():
+		if c.name.contains("floor_tile") or c.name.contains("rug_") or c.name == "Surround":
+			for g: Node in c.find_children("*", "GeometryInstance3D", true, false) + [c]:
+				if g is GeometryInstance3D:
+					(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	StaticMerge.merge(self, [], 0.0, "ShellMerged")
 	apply_quality()
 
 

@@ -184,7 +184,26 @@ func _close_tick() -> void:
 	_phys_start_us = 0
 
 
+## Diagnostics: `--perf-hide=NameA,NameB` hides every node so named (and `lights` every Omni /
+## Spot light) at the start of the measurement, to see what a part of a scene costs.
+func _apply_hide() -> void:
+	var names := str(config.get("perf-hide", ""))
+	if names == "":
+		return
+	var scene := get_tree().current_scene
+	for nm in names.split(",", false):
+		if nm == "lights":
+			for l in get_tree().root.find_children("*", "Light3D", true, false):
+				if not l is DirectionalLight3D:
+					(l as Light3D).visible = false
+			continue
+		for n in get_tree().root.find_children(nm, "Node3D", true, false):
+			(n as Node3D).visible = false
+	print("perf: hid %s in %s" % [names, scene.name if scene else "?"])
+
+
 func _begin() -> void:
+	_apply_hide()
 	_measuring = true
 	_viewports.clear()
 	var root := get_tree().root

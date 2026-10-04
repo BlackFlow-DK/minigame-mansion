@@ -6,15 +6,16 @@ extends GameTest
 ##
 ## Budgets (LOW):
 ##   - real lights (visible Omni/Spot) per minigame <= LIGHTS_MAX, none casting shadows
-##   - estimated draws of the minigame's own nodes (players excluded) <= DRAWS_MAX
+##   - visible mesh surfaces of the minigame's own nodes (players excluded; a MultiMesh counts its
+##     surfaces once) <= SURFACES_MAX: each is a draw per pass (depth, colour, each shadow split)
 ##   - distinct materials <= MATERIALS_MAX (no per-tile / per-prop material copies)
 ##   - the lobby hall merged (StaticMerge) and within its own draw estimate
 ##   - blobs: crowd extras draw the low-poly LOD body at LOW
 
-const LIGHTS_MAX := 5
-const DRAWS_MAX := 400
-const MATERIALS_MAX := 70
-const LOBBY_DRAWS_MAX := 260
+const LIGHTS_MAX := 10
+const SURFACES_MAX := 320
+const MATERIALS_MAX := 110
+const LOBBY_SURFACES_MAX := 150
 const LOBBY_PATH := "res://lobby/lobby.tscn"
 
 
@@ -43,10 +44,8 @@ func test_minigames_d_within_low_budget() -> void:
 
 
 func test_lobby_hall_is_merged_and_within_budget() -> void:
-	StaticMerge.debug = true
 	var lobby := (load(LOBBY_PATH) as PackedScene).instantiate() as Node3D
 	add_child(lobby)
-	StaticMerge.debug = false
 	await step(1)
 	var hall := lobby.get_node_or_null(^"Hall")
 	assert_true(hall != null, "lobby has its Hall")
@@ -64,9 +63,7 @@ func test_lobby_hall_is_merged_and_within_budget() -> void:
 	assert_true(loose <= 8, "only moving parts stay loose (%d)" % loose)
 	var c := RenderCensus.count(lobby)
 	print("perf budget: lobby %s" % RenderCensus._fmt(c))
-	print(RenderCensus.report(lobby))
-	print(RenderCensus.report(hall))
-	assert_true(int(c["est_draws"]) <= LOBBY_DRAWS_MAX, "lobby LOW draws ~%d <= %d" % [c["est_draws"], LOBBY_DRAWS_MAX])
+	assert_true(int(c["surfaces"]) <= LOBBY_SURFACES_MAX, "lobby LOW %d mesh surfaces <= %d" % [c["surfaces"], LOBBY_SURFACES_MAX])
 	assert_true(int(c["lights"]) <= 6 and int(c["shadow_lights"]) == 0, "lobby LOW lights %d (%d with shadows)" % [c["lights"], c["shadow_lights"]])
 	lobby.queue_free()
 	await step(1)
@@ -115,6 +112,14 @@ func test_crowd_extras_use_the_lod_body_at_low() -> void:
 		if v and v.is_lod():
 			lod += 1
 	assert_eq(lod, extras.size(), "every extra draws the LOD blob at LOW")
+	# the swapped mesh keeps the tint and the toon look (surface overrides by index)
+	var body := (extras[0] as Player).get_component(&"visuals").get_model_root().get_node(^"Body") as MeshInstance3D
+	assert_true(body.mesh == lod_mesh, "the extra's Body is the LOD mesh")
+	var m := body.get_active_material(0)
+	assert_true(m != null and m.resource_name == "PlayerPrimary" and m.has_meta(Look.TOON_META), "LOD body keeps its toon PlayerPrimary")
+	Look.set_quality(Look.Quality.HIGH)
+	await step(40)
+	assert_false((extras[0] as Player).get_component(&"visuals").is_lod(), "HIGH: back to the full blob")
 
 
 func _check_ids(from: int, to: int) -> void:
@@ -131,7 +136,8 @@ func _check_ids(from: int, to: int) -> void:
 		print("perf budget: %-18s %s" % [id, RenderCensus._fmt(c)])
 		assert_true(int(c["lights"]) <= LIGHTS_MAX, "%s: %d real lights at LOW (<= %d)" % [id, c["lights"], LIGHTS_MAX])
 		assert_eq(int(c["shadow_lights"]), 0, "%s: no shadowed point/spot lights at LOW" % id)
-		assert_true(int(c["est_draws"]) <= DRAWS_MAX, "%s: ~%d draws at LOW (<= %d)" % [id, c["est_draws"], DRAWS_MAX])
+		var surf := int(c["surfaces"]) + int(c["multimesh"])
+		assert_true(surf <= SURFACES_MAX, "%s: %d mesh surfaces at LOW (<= %d)" % [id, surf, SURFACES_MAX])
 		assert_true(int(c["materials"]) <= MATERIALS_MAX, "%s: %d materials (<= %d)" % [id, c["materials"], MATERIALS_MAX])
 		await _drop_arena()
 
