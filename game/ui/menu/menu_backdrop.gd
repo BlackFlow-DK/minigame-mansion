@@ -95,8 +95,11 @@ func _build_later() -> void:
 	_building = true
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
+	_building = false
 	if not is_inside_tree() or not pending_3d:
 		return
+	if not is_visible_in_tree():
+		return  # left the title within two frames (straight into a game): build when shown again
 	_build_3d()
 	pending_3d = false
 	queue_redraw()
