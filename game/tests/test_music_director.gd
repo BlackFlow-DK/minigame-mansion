@@ -101,21 +101,21 @@ func test_music_track_override_and_none() -> void:
 	assert_eq(Music.current, &"", "music stopped for the round")
 
 
-func test_spotlight_chairs_round_is_silent() -> void:
-	var scene := load(MinigameRegistry.scene_path(&"spotlight_chairs")) as PackedScene
-	var mg := scene.instantiate() as Minigame
-	_minigames.append(mg)
-	assert_eq(MusicDirector.track_for_minigame(mg), &"", "no director track under the waltz")
+## Any minigame may declare `music_track = &"none"`: its round is silent through intro and play.
+func test_a_declared_silent_round_is_silent() -> void:
+	var mg := _minigame(StageLook.Preset.NIGHT_PARTY, "none")
 	Net.start_offline()
 	_spawn_director()
 	assert_eq(Music.current, &"lobby_waltz", "lobby music first")
 	_enter_round(0, mg)
 	assert_eq(_picked().back(), &"", "director asks for silence")
-	assert_eq(Music.current, &"", "no night_party under the chairs waltz")
+	assert_eq(Music.current, &"", "no night_party under a silent round")
 	Session.state_changed.emit(Session.State.PLAYING)
 	assert_eq(Music.current, &"", "still silent while playing")
 
 
+## The rule, for every registry minigame: silent exactly when it declares `music_track = &"none"`,
+## else a track that exists (its own or the preset's).
 func test_every_registry_minigame_gets_a_round_track() -> void:
 	for id: StringName in MinigameRegistry.IDS:
 		var scene := load(MinigameRegistry.scene_path(id)) as PackedScene
@@ -124,10 +124,11 @@ func test_every_registry_minigame_gets_a_round_track() -> void:
 		var mg := scene.instantiate()
 		_minigames.append(mg)
 		var track := MusicDirector.track_for_minigame(mg)
-		if id == &"spotlight_chairs":
-			assert_eq(track, &"", "spotlight_chairs plays its own waltz: director silent")
-			continue
-		assert_true(Music.has_track(track), "%s -> %s exists" % [id, track])
+		var declared: Variant = mg.get(&"music_track")
+		if declared != null and StringName(str(declared)) == &"none":
+			assert_eq(track, &"", "%s declares none: director silent" % id)
+		else:
+			assert_true(Music.has_track(track), "%s -> %s exists" % [id, track])
 
 
 func test_full_session_flow() -> void:

@@ -28,9 +28,15 @@ extends Node3D
 ## `Minigame.players` or the roster, so nothing that counts players (Session, HUD, camera,
 ## Progression) sees them. Authority is the host; clients get them through the manifest and the
 ## SyncHub syncs them like bots (compact packets). Freed with the stage (`clear`, next load).
+## Batched spawning (`spawn_extras(..., batch)`): building ~20 blobs in one frame stalls a peer
+## for most of a second (long enough to drop ENet clients while a round loads), so the host
+## builds `batch` per frame and sends the manifest once all are in; clients that get a manifest
+## over the network build new extras CLIENT_EXTRA_BATCH per frame. `extras_spawned` comes once
+## when a batch run is complete.
 
 signal players_spawned(players: Array[Player])
-## Extras spawned on this peer (host: by spawn_extras; clients: from the host manifest).
+## Extras spawned on this peer (host: by spawn_extras, once all of a batched call are in;
+## clients: from the host manifest, once its new extras are built).
 signal extras_spawned(extras: Array[Player])
 
 const PLAYER_SCENE: PackedScene = preload("res://player/player.tscn")
@@ -41,6 +47,8 @@ const EXTRA_SLOT_BASE := 100
 const MAX_EXTRAS := 256
 ## Default extra colours (muted, so they read as a crowd next to the players).
 const EXTRA_PRIMARIES: Array[String] = ["#9aa5b1", "#b5a48c", "#8fa89b", "#a99bb5", "#b59a9a", "#9cb0c4", "#c2b78f", "#a3a3a3"]
+## Extras a client builds per frame from a manifest that came over the network.
+const CLIENT_EXTRA_BATCH := 4
 
 ## Lobby mode: spawn/remove players as `Net.roster` changes (host decides; clients follow the
 ## host's manifest). Set it before or after loading; the host resends the manifest.
@@ -78,6 +86,14 @@ var _spawn_index: Dictionary[int, int] = {}
 var _extra_slots: Dictionary[int, Player] = {}
 ## Spawn transform per extra slot (sent in the manifest).
 var _extra_xforms: Dictionary[int, Transform3D] = {}
+## Host, batched spawn_extras: extras still to build ([slot, name, loadout, xform]), how many
+## per frame, and the ones built so far (emitted together when the queue is empty).
+var _extra_queue: Array[Array] = []
+var _extra_batch: int = 0
+var _extra_built: Array[Player] = []
+## Client: manifest extras still to build (entry dicts, slot order), and the ones built so far.
+var _client_extra_queue: Array[Dictionary] = []
+var _client_extra_built: Array[Player] = []
 
 @onready var _players_root: Node3D = $Players
 @onready var _extras_root: Node3D = $Extras
@@ -156,7 +172,10 @@ func get_player(slot: int) -> Player:
 ## minigame's origin, facing it). Each brain starts in `wander` mode, seeded by slot and load
 ## (re-configure with `BotBrain.of(x).configure_extra(mode, seed)`). Clients get the same nodes
 ## from the host manifest. On a client this does nothing and returns [].
-func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Array[Transform3D] = []) -> Array[Player]:
+## `batch` 0 (default): all are built now and returned. `batch` > 0: `batch` per frame (the
+## first batch now), returns []: listen to `extras_spawned` (once, with all of them, then the
+## manifest goes out). Slots are fixed at the call; `flush_extras()` finishes a run at once.
+func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Array[Transform3D] = [], batch: int = 0) -> Array[Player]:
 	var out: Array[Player] = []
 	if _is_client():
 		return out
@@ -166,28 +185,49 @@ func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Ar
 	var first := EXTRA_SLOT_BASE
 	for p in extras:
 		first = maxi(first, p.slot + 1)
+	for q in _extra_queue:
+		first = maxi(first, int(q[0]) + 1)
 	count = mini(count, EXTRA_SLOT_BASE + MAX_EXTRAS - first)
 	for i in count:
 		var slot := first + i
 		var loadout: Dictionary = loadouts[i] if i < loadouts.size() else default_extra_loadout(slot)
 		var xform: Transform3D = spawn_xforms[i] if i < spawn_xforms.size() \
 				else default_extra_xform(slot - EXTRA_SLOT_BASE, first - EXTRA_SLOT_BASE + count)
-		var p := _spawn_extra(slot, "Extra %d" % (slot - EXTRA_SLOT_BASE + 1), loadout, xform)
-		var brain := BotBrain.of(p)
-		if brain:
-			brain.configure_extra(&"wander", slot * 7919 + maxi(net_load_id, 0))
-		out.append(p)
+		var extra_name := "Extra %d" % (slot - EXTRA_SLOT_BASE + 1)
+		if batch > 0:
+			_extra_queue.append([slot, extra_name, loadout, xform])
+		else:
+			out.append(_host_spawn_extra(slot, extra_name, loadout, xform))
+	if batch > 0:
+		_extra_batch = batch
+		_pump_extras()
+		return []
 	if not out.is_empty():
 		extras_spawned.emit(out)
 		_send_manifest()
 	return out
 
 
+## Host: builds every extra a batched spawn_extras still has queued, now (emits
+## `extras_spawned` for the run, sends the manifest). Returns the run's extras ([] if none).
+func flush_extras() -> Array[Player]:
+	if _extra_queue.is_empty():
+		return []
+	_extra_batch = _extra_queue.size()
+	return _pump_extras()
+
+
+## True while a batched spawn_extras is still building (host) or manifest extras are still
+## being built (client).
+func is_spawning_extras() -> bool:
+	return not _extra_queue.is_empty() or not _client_extra_queue.is_empty()
+
+
 ## Host (or offline) only: removes every extra, on every peer.
 func despawn_extras() -> void:
 	if _is_client():
 		return
-	var had := not extras.is_empty()
+	var had := not extras.is_empty() or not _extra_queue.is_empty()
 	_clear_extras()
 	if had:
 		_send_manifest()
@@ -301,6 +341,64 @@ func _spawn_extra(slot: int, extra_name: String, loadout: Dictionary, xform: Tra
 	return p
 
 
+## Host: one extra with its default wander brain.
+func _host_spawn_extra(slot: int, extra_name: String, loadout: Dictionary, xform: Transform3D) -> Player:
+	var p := _spawn_extra(slot, extra_name, loadout, xform)
+	var brain := BotBrain.of(p)
+	if brain:
+		brain.configure_extra(&"wander", slot * 7919 + maxi(net_load_id, 0))
+	return p
+
+
+func _process(_delta: float) -> void:
+	if not _extra_queue.is_empty():
+		_pump_extras()
+	if not _client_extra_queue.is_empty():
+		_pump_client_extras(CLIENT_EXTRA_BATCH)
+
+
+## Host: builds the next `_extra_batch` queued extras. When the queue is empty: emits the
+## run's extras, sends the manifest and returns them (else []).
+func _pump_extras() -> Array[Player]:
+	var n := mini(maxi(_extra_batch, 1), _extra_queue.size())
+	for i in n:
+		var q: Array = _extra_queue[i]
+		_extra_built.append(_host_spawn_extra(q[0], q[1], q[2], q[3]))
+	_extra_queue = _extra_queue.slice(n)
+	if not _extra_queue.is_empty():
+		return []
+	var run := _extra_built
+	_extra_built = []
+	if not run.is_empty():
+		extras_spawned.emit(run)
+		_send_manifest()
+	return run
+
+
+## Client: builds the next `n` extras of the manifest queue; emits them all when it is empty.
+func _pump_client_extras(n: int) -> void:
+	n = mini(n, _client_extra_queue.size())
+	for i in n:
+		var e := _client_extra_queue[i]
+		var slot: int = e["slot"]
+		if get_extra(slot) == null:
+			_client_extra_built.append(_spawn_extra_from_entry(slot, e))
+	_client_extra_queue = _client_extra_queue.slice(n)
+	if not _client_extra_queue.is_empty():
+		return
+	var run := _client_extra_built
+	_client_extra_built = []
+	if not run.is_empty():
+		extras.sort_custom(func(a: Player, b: Player) -> bool: return a.slot < b.slot)
+		extras_spawned.emit(run)
+
+
+func _spawn_extra_from_entry(slot: int, e: Dictionary) -> Player:
+	var loadout: Dictionary = e.get("loadout") if typeof(e.get("loadout")) == TYPE_DICTIONARY else {}
+	var xform: Transform3D = e.get("xform") if typeof(e.get("xform")) == TYPE_TRANSFORM3D else Transform3D.IDENTITY
+	return _spawn_extra(slot, str(e.get("name", "")), loadout, xform)
+
+
 func _remove_extra(slot: int) -> void:
 	var p: Player = _extra_slots.get(slot)
 	_extra_slots.erase(slot)
@@ -313,6 +411,10 @@ func _remove_extra(slot: int) -> void:
 
 
 func _clear_extras() -> void:
+	_extra_queue.clear()
+	_extra_built = []
+	_client_extra_queue.clear()
+	_client_extra_built = []
 	for slot: int in _extra_slots.keys():
 		_remove_extra(slot)
 	extras.clear()
@@ -432,7 +534,7 @@ func _extra_entries() -> Array:
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant, extra_entries: Variant) -> void:
-	apply_manifest(load_id, scene_path, follow, entries, extra_entries)
+	apply_manifest(load_id, scene_path, follow, entries, extra_entries, CLIENT_EXTRA_BATCH)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -443,7 +545,9 @@ func _rpc_clear() -> void:
 ## Client side of the manifest (public for tests): adopt the host's load `load_id` of
 ## `scene_path` with exactly the players in `entries` (PlayerInfo dicts plus "spawn") and,
 ## when `extra_entries` is an Array, exactly those extras (null: extras left as they are).
-func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant, extra_entries: Variant = null) -> void:
+## `extra_batch` > 0: new extras are built that many per frame (removals and updates at once);
+## the network path uses CLIENT_EXTRA_BATCH, 0 builds them all now.
+func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant, extra_entries: Variant = null, extra_batch: int = 0) -> void:
 	if typeof(load_id) != TYPE_INT or typeof(scene_path) != TYPE_STRING or typeof(entries) != TYPE_ARRAY:
 		return
 	follow_roster = follow == true
@@ -485,10 +589,10 @@ func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entr
 	if not added.is_empty():
 		players_spawned.emit(added)
 	if typeof(extra_entries) == TYPE_ARRAY:
-		_apply_extra_entries(extra_entries)
+		_apply_extra_entries(extra_entries, extra_batch)
 
 
-func _apply_extra_entries(extra_entries: Array) -> void:
+func _apply_extra_entries(extra_entries: Array, batch: int = 0) -> void:
 	var wanted: Dictionary[int, Dictionary] = {}
 	for d: Variant in extra_entries:
 		if typeof(d) != TYPE_DICTIONARY:
@@ -504,21 +608,23 @@ func _apply_extra_entries(extra_entries: Array) -> void:
 	var slots: Array[int] = []
 	slots.assign(wanted.keys())
 	slots.sort()
-	var added: Array[Player] = []
+	# The newest manifest decides what is still to build: queued entries are replaced.
+	_client_extra_queue.clear()
+	var still_built: Array[Player] = []
+	for v: Variant in _client_extra_built:
+		if is_instance_valid(v) and not (v as Node).is_queued_for_deletion():
+			still_built.append(v as Player)
+	_client_extra_built = still_built
 	for slot in slots:
 		var e := wanted[slot]
-		var loadout: Dictionary = e.get("loadout") if typeof(e.get("loadout")) == TYPE_DICTIONARY else {}
-		var extra_name := str(e.get("name", ""))
 		var p := get_extra(slot)
 		if p == null:
-			var xform: Transform3D = e.get("xform") if typeof(e.get("xform")) == TYPE_TRANSFORM3D else Transform3D.IDENTITY
-			added.append(_spawn_extra(slot, extra_name, loadout, xform))
+			_client_extra_queue.append(e)
 		else:
-			p.display_name = extra_name
-			p.loadout = loadout
-	if not added.is_empty():
-		extras.sort_custom(func(a: Player, b: Player) -> bool: return a.slot < b.slot)
-		extras_spawned.emit(added)
+			p.display_name = str(e.get("name", ""))
+			p.loadout = e.get("loadout") if typeof(e.get("loadout")) == TYPE_DICTIONARY else {}
+	# batch 0: all now; else the first batch now, the rest in _process.
+	_pump_client_extras(_client_extra_queue.size() if batch <= 0 else batch)
 
 
 # --- Helpers ---------------------------------------------------------------------------------

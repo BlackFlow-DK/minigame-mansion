@@ -18,6 +18,12 @@ extends PlayerComponent
 ## scaled before movement/shove use it); remote copies do it in `_process`.
 ## Rule for minigames: set tuning to absolute values (from what you read in `_setup`/`_start`),
 ## never `*=` mid-round, or the size factor compounds.
+##
+## Size override (minigame hook): `set_size_override(id)` makes this blob that size for looks,
+## capsule AND tuning factors, whatever its loadout says (`player.loadout` stays untouched);
+## `clear_size_override()` goes back to the loadout size. Per peer: set it on every peer.
+## Order: loadout size -> override -> anything else that scales on top of what this writes
+## (it treats values it did not write as new bases).
 
 const CatalogData := preload("res://cosmetics/catalog.gd")
 
@@ -42,6 +48,8 @@ var size_id: String = CatalogData.DEFAULT_SIZE
 var body_scale: float = 1.0
 ## The scale the model shows now (eases toward `body_scale`).
 var shown_scale: float = 1.0
+## Size id forced on this blob ("" = none, the loadout decides). Set it through set_size_override.
+var size_override: String = ""
 
 var _entry: Dictionary = CatalogData.size_entry(CatalogData.DEFAULT_SIZE)
 var _base: Dictionary = {}     # "<node>:<property>" -> base value
@@ -91,6 +99,24 @@ func base_of(component_name: StringName, property: StringName) -> float:
 	return float(c.get(property)) if c else 0.0
 
 
+## Forces size `id` ("small" / "normal" / "big"; "" clears) for looks, capsule and tuning.
+## `snap`: the model jumps to the new scale instead of easing there.
+func set_size_override(id: String, snap: bool = false) -> void:
+	size_override = id
+	if player == null or not is_node_ready():
+		return  # _ready reads it
+	_read_loadout()
+	_sync_stats()
+	if snap:
+		shown_scale = body_scale
+	_apply_looks()
+
+
+## Back to the loadout size (`snap` as in set_size_override).
+func clear_size_override(snap: bool = false) -> void:
+	set_size_override("", snap)
+
+
 func physics_tick(_delta: float) -> void:
 	_read_loadout()
 	_sync_stats()
@@ -109,7 +135,7 @@ func _process(delta: float) -> void:
 
 
 func _read_loadout() -> void:
-	var id: Variant = player.loadout.get("size", CatalogData.DEFAULT_SIZE)
+	var id: Variant = size_override if size_override != "" else player.loadout.get("size", CatalogData.DEFAULT_SIZE)
 	var entry := CatalogData.size_entry(id)
 	if entry["id"] == size_id and _capsule_scale == body_scale:
 		return
