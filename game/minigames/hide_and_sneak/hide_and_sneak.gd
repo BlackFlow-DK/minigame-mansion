@@ -799,16 +799,7 @@ func _disguise_node(p: Player) -> HideDisguise:
 
 ## Name tag and blob shadow of `p` on/off (a disguised hider has neither).
 func _set_tags(p: Player, on: bool) -> void:
-	var nodes: Array[Node] = [p.get_node_or_null(^"NameTag")]
-	var fx := p.get_component(&"fx")
-	if fx:
-		nodes.append(fx.get_node_or_null(^"BlobShadow"))
-	for n in nodes:
-		if n == null:
-			continue
-		n.process_mode = Node.PROCESS_MODE_INHERIT if on else Node.PROCESS_MODE_DISABLED
-		if not on and n is Node3D:
-			(n as Node3D).visible = false
+	FxComponent.set_presentation_hidden(p, not on)
 
 
 ## Every peer, every frame: role tuning (absolute values from the bases read in _setup).

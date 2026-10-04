@@ -86,9 +86,13 @@ func test_everyone_and_every_extra_looks_the_same() -> void:
 		assert_eq(p.get_component(&"team").get(&"team"), -1, "no team ring")
 	# The big player: shown at normal size, and moves / shoves like a normal one.
 	var big := players[2]
-	assert_eq((big.get_component(&"size") as SizeComponent).size_id, "big", "slot 2 really is big")
+	assert_eq(big.loadout["size"], "big", "slot 2 really is big")
+	assert_eq((big.get_component(&"size") as SizeComponent).size_id, "normal", "but normal under the disguise")
 	await step(5)
 	assert_near((big.get_component(&"visuals") as Node3D).scale.x, 1.0, 0.001, "big blob shown at normal size")
+	var capsule := (big.get_node(^"CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
+	assert_near(capsule.radius, 0.4, 0.001, "big blob has the normal capsule radius")
+	assert_near(capsule.height, 1.0, 0.001, "big blob has the normal capsule height")
 	var normal := players[1]
 	for stat: Array in SizeComponent.STATS:
 		assert_near(float(big.get_component(stat[0]).get(stat[1])), float(normal.get_component(stat[0]).get(stat[1])), 0.001,
@@ -109,6 +113,24 @@ func test_extras_count_and_never_players() -> void:
 		assert_eq(x.loadout, MasqDisguise.LOOK, "extra spawned in the masquerade look")
 	for slot: int in mg.points:
 		assert_true(slot < Stage.EXTRA_SLOT_BASE, "points only for players")
+
+
+## The NPC dancers are dealt over the dance circles (spread over the floor), not piled into one.
+func test_dancers_spread_over_the_circles() -> void:
+	await _arena(4, {"park": false})
+	var per_circle: Dictionary = {}
+	var dancers := 0
+	for x in stage.extras:
+		var brain := BotBrain.of(x)
+		if brain.extra_mode != &"dance":
+			continue
+		dancers += 1
+		per_circle[brain._dance_center] = int(per_circle.get(brain._dance_center, 0)) + 1
+	assert_true(dancers >= 3, "some dancers (%d)" % dancers)
+	assert_eq(per_circle.size(), mini(dancers, Masquerade.DANCE_CENTERS.size()), "every circle used before one doubles up")
+	for c: Vector3 in per_circle:
+		assert_true(Masquerade.DANCE_CENTERS.has(c), "a known circle")
+		assert_true(int(per_circle[c]) - dancers / Masquerade.DANCE_CENTERS.size() <= 1, "even deal")
 
 
 func test_players_are_placed_among_the_crowd() -> void:
