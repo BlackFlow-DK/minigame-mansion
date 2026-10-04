@@ -22,11 +22,25 @@ extends Node3D
 ##   so rankings stay right, then removed on every peer. `follow_roster` (lobby): players
 ##   are added and removed as the roster changes, no knock-outs.
 ## Offline everything is local, exactly as before.
+##
+## NPC extras (`spawn_extras`, host only): bot-driven blobs that are not players. They live in
+## `extras` and under `Extras/X<slot>` (slots EXTRA_SLOT_BASE..), never in `players`,
+## `Minigame.players` or the roster, so nothing that counts players (Session, HUD, camera,
+## Progression) sees them. Authority is the host; clients get them through the manifest and the
+## SyncHub syncs them like bots (compact packets). Freed with the stage (`clear`, next load).
 
 signal players_spawned(players: Array[Player])
+## Extras spawned on this peer (host: by spawn_extras; clients: from the host manifest).
+signal extras_spawned(extras: Array[Player])
 
 const PLAYER_SCENE: PackedScene = preload("res://player/player.tscn")
 const NAME_TAG_PATH := "res://ui/round/name_tag.tscn"
+## First slot of NPC extras (players are 0..7).
+const EXTRA_SLOT_BASE := 100
+## Most extras one stage holds (slots 100..355; the sync packs slot - 100 in one byte).
+const MAX_EXTRAS := 256
+## Default extra colours (muted, so they read as a crowd next to the players).
+const EXTRA_PRIMARIES: Array[String] = ["#9aa5b1", "#b5a48c", "#8fa89b", "#a99bb5", "#b59a9a", "#9cb0c4", "#c2b78f", "#a3a3a3"]
 
 ## Lobby mode: spawn/remove players as `Net.roster` changes (host decides; clients follow the
 ## host's manifest). Set it before or after loading; the host resends the manifest.
@@ -41,6 +55,8 @@ const NAME_TAG_PATH := "res://ui/round/name_tag.tscn"
 			_send_manifest()
 ## Give each spawned player a floating NameTag (never when headless).
 @export var name_tags: bool = true
+## Give extras a NameTag too (off by default; needs `name_tags`). Set it before spawn_extras.
+@export var extra_name_tags: bool = false
 
 ## The loaded minigame, or null.
 var minigame: Minigame = null
@@ -51,13 +67,20 @@ var players: Dictionary[int, Player] = {}
 var net_load_id: int = -1
 ## Player sync transport (child `SyncHub`).
 var sync_hub: SyncHub = null
+## NPC extras of the current load, in slot order (see spawn_extras).
+var extras: Array[Player] = []
 
 var _load_counter: int = 0
 var _scene_path: String = ""
 ## slot -> spawn point index used for that player.
 var _spawn_index: Dictionary[int, int] = {}
 
+var _extra_slots: Dictionary[int, Player] = {}
+## Spawn transform per extra slot (sent in the manifest).
+var _extra_xforms: Dictionary[int, Transform3D] = {}
+
 @onready var _players_root: Node3D = $Players
+@onready var _extras_root: Node3D = $Extras
 
 
 func _enter_tree() -> void:
@@ -126,6 +149,84 @@ func get_player(slot: int) -> Player:
 	return players.get(slot) as Player
 
 
+## Host (or offline) only: spawns `count` NPC extras, bot-driven `Player`s with `is_extra` and
+## `is_bot` true, slots EXTRA_SLOT_BASE + n (continuing after the ones already there), nodes
+## `Extras/X<slot>`, authority the host, NOT frozen. `loadouts[i]` / `spawn_xforms[i]` dress and
+## place extra i (missing: a muted crowd colour / a spot on a sunflower spiral around the
+## minigame's origin, facing it). Each brain starts in `wander` mode, seeded by slot and load
+## (re-configure with `BotBrain.of(x).configure_extra(mode, seed)`). Clients get the same nodes
+## from the host manifest. On a client this does nothing and returns [].
+func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Array[Transform3D] = []) -> Array[Player]:
+	var out: Array[Player] = []
+	if _is_client():
+		return out
+	if minigame == null:
+		push_warning("Stage.spawn_extras: no minigame loaded")
+		return out
+	var first := EXTRA_SLOT_BASE
+	for p in extras:
+		first = maxi(first, p.slot + 1)
+	count = mini(count, EXTRA_SLOT_BASE + MAX_EXTRAS - first)
+	for i in count:
+		var slot := first + i
+		var loadout: Dictionary = loadouts[i] if i < loadouts.size() else default_extra_loadout(slot)
+		var xform: Transform3D = spawn_xforms[i] if i < spawn_xforms.size() \
+				else default_extra_xform(slot - EXTRA_SLOT_BASE, first - EXTRA_SLOT_BASE + count)
+		var p := _spawn_extra(slot, "Extra %d" % (slot - EXTRA_SLOT_BASE + 1), loadout, xform)
+		var brain := BotBrain.of(p)
+		if brain:
+			brain.configure_extra(&"wander", slot * 7919 + maxi(net_load_id, 0))
+		out.append(p)
+	if not out.is_empty():
+		extras_spawned.emit(out)
+		_send_manifest()
+	return out
+
+
+## Host (or offline) only: removes every extra, on every peer.
+func despawn_extras() -> void:
+	if _is_client():
+		return
+	var had := not extras.is_empty()
+	_clear_extras()
+	if had:
+		_send_manifest()
+
+
+## The extra in `slot`, or null.
+func get_extra(slot: int) -> Player:
+	return _extra_slots.get(slot) as Player
+
+
+## The player or extra in `slot`, or null (sync, and anything handed a slot by an event).
+func get_body(slot: int) -> Player:
+	return get_extra(slot) if slot >= EXTRA_SLOT_BASE else get_player(slot)
+
+
+## True for slots that belong to extras.
+static func is_extra_slot(slot: int) -> bool:
+	return slot >= EXTRA_SLOT_BASE
+
+
+## Default look of extra `slot`: a muted colour, cream secondary, no items, normal size.
+static func default_extra_loadout(slot: int) -> Dictionary:
+	return {"primary": EXTRA_PRIMARIES[posmod(slot, EXTRA_PRIMARIES.size())], "secondary": "#efe6d2",
+		"hat": "", "face": "", "neck": "", "back": "", "size": "normal"}
+
+
+## Default spot of the `index`-th of `total` extras: a sunflower spiral 2.5..8 m around the
+## minigame's origin, facing it.
+func default_extra_xform(index: int, total: int) -> Transform3D:
+	var center := minigame.global_position if minigame and minigame.is_inside_tree() else Vector3.ZERO
+	var r := 2.5 + 5.5 * sqrt((index + 0.5) / maxf(total, 1.0))
+	var a := index * 2.39996323  # golden angle
+	var pos := center + Vector3(cos(a) * r, 0.0, sin(a) * r)
+	var face := center - pos
+	face.y = 0.0
+	var basis := Basis.looking_at(face.normalized(), Vector3.UP, true) if face.length_squared() > 0.01 else Basis.IDENTITY
+	return Transform3D(basis, pos)
+
+
 ## Frees the minigame and all players. On the host, every client clears too.
 func clear() -> void:
 	_clear_local()
@@ -174,9 +275,47 @@ func _attach_name_tag(p: Player) -> void:
 	if tag == null:
 		return
 	tag.name = "NameTag"
+	if p.is_extra:
+		tag.set(&"show_extras", true)  # opted in (extra_name_tags)
 	p.add_child(tag)
 	if tag.has_method(&"setup"):
 		tag.call(&"setup", p)
+
+
+func _spawn_extra(slot: int, extra_name: String, loadout: Dictionary, xform: Transform3D) -> Player:
+	var p := PLAYER_SCENE.instantiate() as Player
+	p.name = "X%d" % slot
+	p.slot = slot
+	p.display_name = extra_name
+	p.is_bot = true
+	p.is_extra = true
+	p.loadout = loadout
+	p.set_multiplayer_authority(SyncHub.HOST_PEER)
+	_extras_root.add_child(p)
+	p.place_at(xform)
+	extras.append(p)
+	_extra_slots[slot] = p
+	_extra_xforms[slot] = xform
+	if extra_name_tags:
+		_attach_name_tag(p)
+	return p
+
+
+func _remove_extra(slot: int) -> void:
+	var p: Player = _extra_slots.get(slot)
+	_extra_slots.erase(slot)
+	_extra_xforms.erase(slot)
+	extras.erase(p)
+	if is_instance_valid(p):
+		if p.get_parent() == _extras_root:
+			_extras_root.remove_child(p)
+		p.queue_free()
+
+
+func _clear_extras() -> void:
+	for slot: int in _extra_slots.keys():
+		_remove_extra(slot)
+	extras.clear()
 
 
 func _remove_player(slot: int) -> void:
@@ -193,6 +332,7 @@ func _remove_player(slot: int) -> void:
 
 
 func _clear_local() -> void:
+	_clear_extras()
 	for p: Player in players.values():
 		if is_instance_valid(p):
 			if p.get_parent() == _players_root:
@@ -251,7 +391,7 @@ func _on_roster_changed() -> void:
 
 func _on_peer_connected(peer_id: int) -> void:
 	if _is_host_net() and minigame and SyncHub.live_peers(multiplayer).has(peer_id):
-		_rpc_manifest.rpc_id(peer_id, net_load_id, _scene_path, follow_roster, _manifest_entries())
+		_rpc_manifest.rpc_id(peer_id, net_load_id, _scene_path, follow_roster, _manifest_entries(), _extra_entries())
 
 
 func _send_manifest() -> void:
@@ -261,8 +401,9 @@ func _send_manifest() -> void:
 	if peers.is_empty():
 		return
 	var entries := _manifest_entries()
+	var extra_entries := _extra_entries()
 	for id in peers:
-		_rpc_manifest.rpc_id(id, net_load_id, _scene_path, follow_roster, entries)
+		_rpc_manifest.rpc_id(id, net_load_id, _scene_path, follow_roster, entries, extra_entries)
 
 
 func _manifest_entries() -> Array:
@@ -278,9 +419,20 @@ func _manifest_entries() -> Array:
 	return out
 
 
+## Extras as the manifest carries them: `{slot, name, loadout, xform}` (xform: where it spawned;
+## the sync moves it from there).
+func _extra_entries() -> Array:
+	var out: Array = []
+	for p in extras:
+		if is_instance_valid(p):
+			out.append({"slot": p.slot, "name": p.display_name, "loadout": p.loadout,
+				"xform": _extra_xforms.get(p.slot, p.global_transform)})
+	return out
+
+
 @rpc("authority", "call_remote", "reliable")
-func _rpc_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant) -> void:
-	apply_manifest(load_id, scene_path, follow, entries)
+func _rpc_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant, extra_entries: Variant) -> void:
+	apply_manifest(load_id, scene_path, follow, entries, extra_entries)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -289,8 +441,9 @@ func _rpc_clear() -> void:
 
 
 ## Client side of the manifest (public for tests): adopt the host's load `load_id` of
-## `scene_path` with exactly the players in `entries` (PlayerInfo dicts plus "spawn").
-func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant) -> void:
+## `scene_path` with exactly the players in `entries` (PlayerInfo dicts plus "spawn") and,
+## when `extra_entries` is an Array, exactly those extras (null: extras left as they are).
+func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entries: Variant, extra_entries: Variant = null) -> void:
 	if typeof(load_id) != TYPE_INT or typeof(scene_path) != TYPE_STRING or typeof(entries) != TYPE_ARRAY:
 		return
 	follow_roster = follow == true
@@ -331,6 +484,41 @@ func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entr
 			p.loadout = info.loadout
 	if not added.is_empty():
 		players_spawned.emit(added)
+	if typeof(extra_entries) == TYPE_ARRAY:
+		_apply_extra_entries(extra_entries)
+
+
+func _apply_extra_entries(extra_entries: Array) -> void:
+	var wanted: Dictionary[int, Dictionary] = {}
+	for d: Variant in extra_entries:
+		if typeof(d) != TYPE_DICTIONARY:
+			continue
+		var e: Dictionary = d
+		var slot: Variant = e.get("slot")
+		if typeof(slot) != TYPE_INT or slot < EXTRA_SLOT_BASE or slot >= EXTRA_SLOT_BASE + MAX_EXTRAS:
+			continue
+		wanted[slot] = e
+	for slot: int in _extra_slots.keys():
+		if not wanted.has(slot):
+			_remove_extra(slot)
+	var slots: Array[int] = []
+	slots.assign(wanted.keys())
+	slots.sort()
+	var added: Array[Player] = []
+	for slot in slots:
+		var e := wanted[slot]
+		var loadout: Dictionary = e.get("loadout") if typeof(e.get("loadout")) == TYPE_DICTIONARY else {}
+		var extra_name := str(e.get("name", ""))
+		var p := get_extra(slot)
+		if p == null:
+			var xform: Transform3D = e.get("xform") if typeof(e.get("xform")) == TYPE_TRANSFORM3D else Transform3D.IDENTITY
+			added.append(_spawn_extra(slot, extra_name, loadout, xform))
+		else:
+			p.display_name = extra_name
+			p.loadout = loadout
+	if not added.is_empty():
+		extras.sort_custom(func(a: Player, b: Player) -> bool: return a.slot < b.slot)
+		extras_spawned.emit(added)
 
 
 # --- Helpers ---------------------------------------------------------------------------------

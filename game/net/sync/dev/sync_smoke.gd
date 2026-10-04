@@ -8,14 +8,20 @@ extends Node
 ##   load dev|<id>          host: Stage.load_minigame* (clients follow the host manifest)
 ##   unfreeze               host: unfreeze every player on every peer
 ##   walk <x> <z> <secs>    own player walks along (x, z)
-##   shove <slot>           own player walks up to <slot> and shoves it
+##   shove <slot>           own player walks up to <slot> (a player or an extra) and shoves it
 ##   eliminate <slot>       host: Player.eliminate
 ##   session <rounds>       host: Session.start_session
 ##   knockout <slot>        host: current minigame knock_out
 ##   endround <slot>...     host: current minigame finish(ranking)
+##   extras <n> [mode]      host: Stage.spawn_extras(n), brains in `mode` (default wander)
+##   extras_mode <mode>     host: every extra's brain to `mode` (wander | dance | idle)
+##   freeze_extras 0|1      host: (un)freeze every extra
+##   despawn_extras         host: Stage.despawn_extras
 ##   quit
 ##   quit_at <unix ms>      quit at that wall-clock time (several actors leave in the same frame)
-## Every controller is scripted (intent comes from the commands only).
+## Every player controller is scripted (intent comes from the commands only); extras keep
+## their brains. The JSON also has `extras` (as `players`) and `tx_bps` (ENet bytes sent per
+## second by this peer over the last second). Extras runner: run_extras_smoke.ps1.
 
 ## Counted player events -> their argument count.
 const COUNTED: Dictionary = {&"got_hit": 2, &"eliminated": 1, &"respawned": 1, &"shove_hit": 1, &"shove_started": 0, &"stunned": 1}
@@ -44,6 +50,9 @@ var _shove_target: int = -1
 var _shoves_done: int = 0
 var _walks_done: int = 0
 var _quit_at_ms: float = -1.0
+## Bytes ENet sent per second over the last full second (to every peer).
+var _tx_bps: float = 0.0
+var _tx_accum: float = 0.0
 
 @onready var stage: Stage = $Stage
 
@@ -62,6 +71,7 @@ func _ready() -> void:
 			"order-seed": Session.order_seed = int(v)
 			"scene-override": Session.scene_override = load(v) as PackedScene
 	stage.players_spawned.connect(_on_players_spawned)
+	stage.extras_spawned.connect(_on_players_spawned)
 	Net.server_closed.connect(func() -> void: _event("server_closed"); _quit())
 	Net.join_failed.connect(func(r: String) -> void: _event("join_failed:" + r); _quit())
 	Session.round_started.connect(_on_round_started)
@@ -81,7 +91,7 @@ func _on_players_spawned(spawned: Array) -> void:
 	for v: Variant in spawned:
 		var p := v as Player
 		var c := p.get_component(&"controller") as ControllerComponent
-		if c:
+		if c and not p.is_extra:  # extras keep their brains
 			c.scripted = true
 		for sig: StringName in COUNTED:
 			var cb := _count.bind(sig, p.slot)
@@ -137,7 +147,7 @@ func _physics_process(delta: float) -> void:
 			_walks_done += 1
 		return
 	if _shove_target >= 0:
-		var target := stage.get_player(_shove_target)
+		var target := stage.get_body(_shove_target)
 		if target == null:
 			_shove_target = -1
 			return
@@ -156,6 +166,12 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_age += delta
+	_tx_accum += delta
+	if _tx_accum >= 1.0:
+		var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+		if enet and enet.host:
+			_tx_bps = enet.host.pop_statistic(ENetConnection.HOST_TOTAL_SENT_DATA) / _tx_accum
+		_tx_accum = 0.0
 	if _quit_at_ms > 0.0 and Time.get_unix_time_from_system() * 1000.0 >= _quit_at_ms and not _quitting:
 		_event("quit_at")
 		_quit()
@@ -221,6 +237,18 @@ func _run(cmd: String) -> void:
 			_quit()
 		"quit_at":
 			_quit_at_ms = float(parts[1])
+		"extras":
+			var mode := StringName(parts[2]) if parts.size() > 2 else &"wander"
+			for x in stage.spawn_extras(int(parts[1])):
+				BotBrain.of(x).configure_extra(mode, x.slot)
+		"extras_mode":
+			for x in stage.extras:
+				BotBrain.of(x).configure_extra(StringName(parts[1]), x.slot)
+		"freeze_extras":
+			for x in stage.extras:
+				x.frozen = parts[1] == "1"
+		"despawn_extras":
+			stage.despawn_extras()
 
 
 func _event(e: String) -> void:
@@ -251,12 +279,19 @@ func _write() -> void:
 			"auth": p.get_multiplayer_authority(), "local": p.is_authority(),
 			"locked": p.control_locked,
 		}
+	var xs: Dictionary = {}
+	for x in stage.extras:
+		if not is_instance_valid(x):
+			continue
+		var xp := x.global_position
+		xs[str(x.slot)] = {"x": xp.x, "y": xp.y, "z": xp.z, "alive": x.alive, "name": String(x.name),
+			"auth": x.get_multiplayer_authority(), "local": x.is_authority()}
 	var knocked: Array = stage.minigame.knocked_out if stage.minigame else []
 	var state := {
 		"name": _name, "role": _role, "peer_id": multiplayer.get_unique_id(), "local_slot": Net.local_slot(),
 		"roster_size": Net.roster.size(), "load_id": stage.net_load_id,
 		"scene": stage.minigame.scene_file_path if stage.minigame else "",
-		"players": ps, "knocked_out": knocked, "counts": _counts, "events": _events,
+		"players": ps, "extras": xs, "tx_bps": _tx_bps, "knocked_out": knocked, "counts": _counts, "events": _events,
 		"session_state": Session.state, "round_index": Session.round_index,
 		"rounds": _rounds, "final_scores": _final_scores, "final_wins": _final_wins,
 		"final_ranking": _final_ranking,

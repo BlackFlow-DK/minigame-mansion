@@ -37,6 +37,7 @@ The Player root never rotates (identity basis); `facing` says where the blob loo
 | Member | Meaning |
 |---|---|
 | `slot: int`, `display_name: String`, `is_bot: bool`, `loadout: Dictionary` | identity, set at spawn |
+| `is_extra: bool` | an NPC extra (see "NPC extras"): slot >= 100, not a player |
 | `intent: PlayerIntent` | what the controller wants this tick: `move: Vector2` (world X,Z, length 0..1), `jump_pressed`, `jump_held`, `action_pressed` (bools; `*_pressed` true only on the first tick), `clear()` |
 | `velocity` | built-in; components add to or set their axis of it |
 | `facing: Vector3` | unit vector on XZ the blob looks along |
@@ -226,13 +227,45 @@ func role_of(slot: int) -> String
 - Remote player copies are kinematic obstacles; read `velocity`, `facing`, `control_locked` and `SyncComponent.is_grounded()` on them, never `is_on_floor()`.
 - In the lobby, players spawn frozen: whoever loads the lobby unfreezes them on `Stage.players_spawned`.
 
+## NPC extras (v0.3, A2)
+
+Bot-driven blobs that are not players, for crowds and dummies. Full `Player` scenes with `is_extra = true` and `is_bot = true`, slots `Stage.EXTRA_SLOT_BASE` (100) and up, nodes `Stage/Extras/X<slot>`, authority the host. They are NOT in `Net.roster`, `Stage.players`, `Minigame.players` or `players_spawned`, so nothing that counts players sees them: Session (it also drops non-roster slots from any ranking), HUD, results, Progression, Feel, the arena camera and name tags.
+
+```gdscript
+# Stage
+const EXTRA_SLOT_BASE := 100
+const MAX_EXTRAS := 256
+signal extras_spawned(extras: Array[Player])   # every peer (host: spawn_extras; clients: manifest)
+var extras: Array[Player]                      # slot order
+@export var extra_name_tags := false           # extras get a NameTag too (set before spawning)
+func spawn_extras(count: int, loadouts: Array[Dictionary] = [], spawn_xforms: Array[Transform3D] = []) -> Array[Player]
+func despawn_extras() -> void
+func get_extra(slot: int) -> Player            # null if none
+func get_body(slot: int) -> Player             # player or extra by slot (use it for slots from events)
+static func is_extra_slot(slot: int) -> bool
+static func default_extra_loadout(slot: int) -> Dictionary
+func default_extra_xform(index: int, total: int) -> Transform3D
+```
+
+- `spawn_extras` / `despawn_extras`: host (or offline) only; on a client they do nothing (`[]`). Call `spawn_extras` from `_setup` (it runs on every peer; clients get the extras from the host's manifest a moment later, `extras_spawned` tells them). Missing `loadouts[i]` = a muted crowd colour, missing `spawn_xforms[i]` = a sunflower spiral 2.5-8 m around the minigame origin. Slots continue after the existing extras. Extras are freed with the stage (`clear()`, the next load).
+- Extras spawn **unfrozen** and Session never freezes or unfreezes them (they mill about through the countdown and the end grace). A minigame that wants them still sets `frozen` on the host. A frozen blob ignores impulses.
+- Brains: `BotBrain.of(x).configure_extra(mode, seed, center := Vector3.INF)`, `mode` `&"wander"` (default: walk between random safe points within `wander_radius` (4 m) of where it stood, pausing 0.8-3 s), `&"dance"` (loose circles around `center`; give a group one centre) or `&"idle"`. Deterministic per seed (default seed `slot * 7919 + load id`); extras never shove or jump, keep a little personal space, avoid `is_safe() == false` ground, pause after a knock. Host only (it simulates them).
+- Hits: extras are normal shove targets (knockback, stun, `got_hit`, `shove_hit(victim_slot >= 100)`). What a hit on an extra means is the minigame's business: check `victim.is_extra` / `Stage.is_extra_slot(slot)`. The host may `eliminate()` / `respawn_at()` an extra; do not `knock_out()` one (it is not a player: use `eliminate`).
+- Bots ignore extras (they are not in `Minigame.players`), though a shove may hit one in passing.
+- Camera: `ArenaCamera.include_extras` (default false) adds living extras to FRAME_ALL.
+- Name tags: none by default (`Stage.extra_name_tags` opts in; `NameTag.show_extras`).
+- Sync: one compact unreliable packet per tick from the host with every extra (26 bytes each, `SyncHub.pack_extras`; 20 extras = 520 bytes, about 14 KB/s per client measured), played back exactly like a bot. Events and impulses as for players.
+- Cost (8 players + 20 extras, dev arena, 1280x720): about 0.12 ms (Low) to 0.19 ms (High) of frame time and 5-9 draw calls per wandering extra, close to a player's ~0.17 ms. `game/stage/dev/run_extras_perf.ps1` measures it; `res://stage/dev/extras_sandbox.tscn -- --players=8 --extras=20 [--extras-mode=dance] [--minigame=<id>] [--extras-camera]` shows it.
+
+Teams hook used by bots: an optional `Minigame.is_ally(a, b) -> bool` (Players, or slots when its first parameter is typed `int`): bots never chase an ally and never shove while an ally is in front of them.
+
 ## Presentation APIs a minigame may call (all safe headless)
 
 - `RoundUI.push_counter(slot, value)`, `RoundUI.push_banner(text, seconds)` (this peer only: call on every peer, e.g. inside your `call_local` RPC).
 - `Fx.play(name, at, color)`: `dust_puff`, `land_thud`, `shove_whoosh`, `hit_stars`, `stun_swirl`, `poof`, `respawn_sparkle`, `coin_pickup`, `explosion`, `confetti`, `splash_lava`.
 - `Sfx.play(name, at)`, `Sfx.play_loop(name, at) -> id`, `Sfx.stop_loop(id)`: `coin`, `coin_big`, `bomb_tick`, `bomb_fuse_loop`, `explosion`, `platform_crack`, `platform_fall`, `lava_sizzle`, `round_win_jingle`, and the rest in `game/audio/sfx.gd`.
 - Look: instance `res://look/stage_look.tscn` and set its `preset`; `Look.apply_toon(model)`; materials in `res://look/materials/` (`lava`, `water`, `void_fade`).
-- Camera: instance `res://camera/arena_camera.tscn` (`ArenaCamera`), set bounds; `add_shake(amount)`.
+- Camera: instance `res://camera/arena_camera.tscn` (`ArenaCamera`), set bounds; `add_shake(amount)`; `include_extras` to frame NPC extras too.
 - Player visuals: `VisualsComponent.play_emote(&"cheer" | &"wave" | &"sad")`, `set_expression`.
 
 ## Tests
