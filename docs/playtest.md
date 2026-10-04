@@ -46,6 +46,13 @@ Open **Settings** from the title screen or the pause menu (Esc / B closes it). E
 ## A session
 Each round is a random minigame: Floor Is Lava, Bumper Sumo, Hot Potato or Coin Scramble. A title card explains the rule, then 3-2-1-GO. Points per round: 1st 4, 2nd 3, 3rd 2, 4th 1. After the last round, the podium shows the winner; the host presses **Back to lobby** (or it returns by itself) for a rematch.
 
+## Game modes
+The host presses **Game setup** in the lobby (Tab / Select, then the pad works too; Esc / B closes it). The choices are remembered for next time; everyone else sees them in one line under "Waiting for the host".
+- **Rounds**: 4, 8 or 12.
+- **Order**: **Shuffle** (every game, no repeats until all were played), **Playlist** (only the ticked games, shuffled) or **Vote** (before each round three game cards appear: Left / Right moves your marker, E / X locks it in, or click a card; most votes wins, ties are random, bots vote too). Tick games in the grid (All / None); Playlist and Vote use the ticks. Games that need more players than are in the lobby are skipped (the grid shows "(3+)").
+- **Mutators**: Off, Sometimes (about 1 round in 4) or Always. A mutator is a twist for one round, shown on the title card and as a badge top right: Low gravity, Giant blobs, Tiny blobs, Turbo, Slippery floor, Super shove, Heavy blobs, Mirror (left and right swapped). Some games never get some mutators.
+- **Practice...**: pick one game (and a mutator if you like) and play it once with everyone in the lobby. No points, no coins; afterwards you are back in the lobby.
+
 ## Known issues
 - If a PC drops off the network, its blob disappears for everyone after a few seconds.
 - When many blobs stand in one spot, some name tags step up or fade a little so the names stay readable.
