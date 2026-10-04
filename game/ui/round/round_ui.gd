@@ -345,7 +345,10 @@ func _hide_name_tags(hide: bool) -> void:
 	var stage := _find_stage()
 	if stage == null:
 		return
-	for p: Player in stage.players.values():
+	var bodies: Array[Player] = []
+	bodies.assign(stage.players.values())
+	bodies.append_array(stage.extras)  # NPC extras with opted-in tags (Stage.extra_name_tags)
+	for p in bodies:
 		if not is_instance_valid(p):
 			continue
 		var tag := p.get_node_or_null(^"NameTag") as Node3D

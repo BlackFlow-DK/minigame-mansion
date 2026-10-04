@@ -14,7 +14,8 @@ extends Node
 ##                  Closed longer than CURTAIN_FAILSAFE without a load: it opens anyway.
 ##   Arena intro    round_intro: ArenaCamera.intro_sweep(INTRO_SWEEP_TIME) and letterbox bars;
 ##                  round_started (GO) lifts the bars and ends any sweep still running.
-##   Round end      round_finished: the winner cheers under a spotlight with a sparkle. When the
+##   Round end      round_finished: the winner (every member of a tied winning group, e.g. a
+##                  team: Session.round_groups[0]) cheers under a spotlight with a sparkle. When the
 ##                  round ended by knockout (exactly one player left standing) there is first a
 ##                  SLOWMO_TIME slow-motion (FeelTime.scale = SLOWMO_SCALE: effects and blob
 ##                  animation only), a camera push-in on the winner, a vignette, then confetti.
@@ -45,6 +46,8 @@ const KO_FOCUS_TIME := 2.8
 const KO_SHAKE := 0.35
 const SPOT_HEIGHT := 7.0
 const SPOT_ENERGY := 6.0
+## Spotlight cone (degrees) on a single winner; wider for a winning group.
+const SPOT_ANGLE := 13.0
 
 const CURTAIN_SHADER := preload("res://feel/materials/curtain.gdshader")
 const VIGNETTE_SHADER := preload("res://feel/materials/vignette.gdshader")
@@ -96,7 +99,7 @@ var _slowmo_left: float = 0.0
 var _ko_slot: int = -1
 var _ko_target: WeakRef = null
 var _spot: SpotLight3D
-var _spot_target: WeakRef = null
+var _spot_targets: Array[WeakRef] = []
 var _main: Node = null
 ## Session phase the curtain already closed for (state * 1000 + round), so a failsafe-opened
 ## curtain does not close again in the same phase.
@@ -267,8 +270,12 @@ func _on_round_finished(ranking: Array, _points: Dictionary) -> void:
 	var stage := _stage()
 	if stage == null:
 		return
-	var winner := stage.get_player(int(ranking[0]))
-	if winner == null or not is_instance_valid(winner) or not winner.is_inside_tree() or not winner.alive:
+	var winners: Array[Player] = []
+	for slot in winning_group(ranking):
+		var w := stage.get_player(slot)
+		if w != null and is_instance_valid(w) and w.is_inside_tree() and w.alive:
+			winners.append(w)
+	if winners.is_empty():
 		return
 	var total := 0
 	var alive := 0
@@ -277,9 +284,28 @@ func _on_round_finished(ranking: Array, _points: Dictionary) -> void:
 			total += 1
 			if p.alive:
 				alive += 1
-	_celebrate(winner)
-	if total >= 2 and alive == 1:
-		_start_knockout(winner)
+	for w in winners:
+		_celebrate(w)
+	if Look.is_high():
+		_spot_on(winners)
+	if total >= 2 and alive == 1 and winners.size() == 1:
+		_start_knockout(winners[0])
+
+
+## The slots sharing first place: the first tied group of the round (`Session.round_groups`,
+## e.g. a winning team) when it holds `ranking[0]`, else just `ranking[0]`.
+func winning_group(ranking: Array) -> Array[int]:
+	var out: Array[int] = []
+	if ranking.is_empty():
+		return out
+	var first := int(ranking[0])
+	var groups: Array = Session.round_groups
+	if not groups.is_empty() and groups[0] is Array and (groups[0] as Array).has(first):
+		for s: Variant in groups[0]:
+			out.append(int(s))
+		return out
+	out.append(first)
+	return out
 
 
 # --- Moments -------------------------------------------------------------------------------
@@ -290,7 +316,6 @@ func _celebrate(winner: Player) -> void:
 		visuals.play_emote(&"cheer", true)
 	if Look.is_high():
 		Fx.play(&"respawn_sparkle", winner.global_position, Look.GOLD)
-		_spot_on(winner)
 	winner_celebrated.emit(winner.slot)
 
 
@@ -339,11 +364,14 @@ func _end_knockout() -> void:
 	knockout_finished.emit(slot)
 
 
-func _spot_on(target: Player) -> void:
-	_spot_target = weakref(target)
+## Lights `targets` (one winner, or a winning team: the cone widens to hold them all).
+func _spot_on(targets: Array[Player]) -> void:
+	_spot_targets.clear()
+	for t in targets:
+		_spot_targets.append(weakref(t))
 	_spot.visible = true
 	_spot.light_energy = 0.0
-	_place_spot(target)
+	_place_spot(targets)
 	_kill(_spot_tween)
 	_spot_tween = create_tween()
 	_spot_tween.tween_property(_spot, ^"light_energy", SPOT_ENERGY, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -351,7 +379,7 @@ func _spot_on(target: Player) -> void:
 
 func _spot_off(now: bool = false) -> void:
 	_kill(_spot_tween)
-	_spot_target = null
+	_spot_targets.clear()
 	if now or not _spot.visible:
 		_spot.visible = false
 		_spot.light_energy = 0.0
@@ -361,8 +389,15 @@ func _spot_off(now: bool = false) -> void:
 	_spot_tween.tween_callback(_spot.hide)
 
 
-func _place_spot(target: Node3D) -> void:
-	var at := target.global_position
+func _place_spot(targets: Array[Player]) -> void:
+	var at := Vector3.ZERO
+	for t in targets:
+		at += t.global_position
+	at /= maxf(targets.size(), 1)
+	var reach := 0.0
+	for t in targets:
+		reach = maxf(reach, Vector2(t.global_position.x - at.x, t.global_position.z - at.z).length())
+	_spot.spot_angle = clampf(rad_to_deg(atan((reach + 1.2) / SPOT_HEIGHT)), SPOT_ANGLE, 50.0)
 	_spot.global_position = at + Vector3(0.0, SPOT_HEIGHT, 1.5)
 	_spot.look_at(at, Vector3.FORWARD)
 
@@ -408,11 +443,15 @@ func _tick_curtain(delta: float) -> void:
 
 func _follow_targets() -> void:
 	if _spot.visible:
-		var t := _spot_target.get_ref() as Node3D if _spot_target else null
-		if t == null or not is_instance_valid(t) or not t.is_inside_tree():
+		var live: Array[Player] = []
+		for ref in _spot_targets:
+			var t := ref.get_ref() as Player
+			if t != null and is_instance_valid(t) and t.is_inside_tree():
+				live.append(t)
+		if live.is_empty():
 			_spot_off()
 		else:
-			_place_spot(t)
+			_place_spot(live)
 	if vignette > 0.0:
 		var t := _ko_target.get_ref() as Node3D if _ko_target else null
 		var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
@@ -476,7 +515,7 @@ func _build_spot() -> void:
 	_spot.name = "WinnerSpot"
 	_spot.light_color = Color(1.0, 0.92, 0.75)
 	_spot.spot_range = SPOT_HEIGHT + 4.0
-	_spot.spot_angle = 13.0
+	_spot.spot_angle = SPOT_ANGLE
 	_spot.spot_angle_attenuation = 0.6
 	_spot.shadow_enabled = false
 	_spot.light_energy = 0.0

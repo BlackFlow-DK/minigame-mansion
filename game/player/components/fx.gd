@@ -83,7 +83,7 @@ func slot_color(slot: int) -> Color:
 		return Look.GOLD
 	var stage := get_tree().get_first_node_in_group(&"stage") as Stage
 	if stage:
-		var p := stage.get_player(slot)
+		var p := stage.get_body(slot)  # players and NPC extras
 		if p and p.loadout.has("primary"):
 			return Look.parse_color(p.loadout["primary"], Look.GOLD)
 	var info: Variant = Net.roster.get(slot)
