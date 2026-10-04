@@ -1,0 +1,9 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://player/dev/bench_anim.gd" id="1_bench"]
+[ext_resource type="PackedScene" path="res://stage/stage.tscn" id="2_stage"]
+
+[node name="BenchAnim" type="Node3D"]
+script = ExtResource("1_bench")
+
+[node name="Stage" parent="." instance=ExtResource("2_stage")]

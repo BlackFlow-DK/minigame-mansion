@@ -16,7 +16,7 @@ Design spec: `docs/superpowers/specs/2026-09-30-minigame-mansion-design.md`.
 - Metres. Godot +Y up. Characters face +Z (`Vector3.MODEL_FRONT`). Origin of every model at its base centre.
 - Player blob: 1.0 m tall, about 0.8 m wide. Collision capsule radius 0.4, height 1.0.
 - Physics layers (named in project.godot): 1 `world`, 2 `players`, 3 `hazards` (kill zones, Area3D), 4 `pickups` (Area3D). Player body: layer 2, mask 1+2 (world and other players).
-- Input actions: `move_left`, `move_right`, `move_forward`, `move_back` (WASD, arrows, left stick), `jump` (Space, A), `action` (E, left mouse, X), `pause` (Esc, Start).
+- Input actions: `move_left`, `move_right`, `move_forward`, `move_back` (WASD, arrows, left stick), `jump` (Space, A), `action` (E, left mouse, X), `pause` (Esc, Start), `emote_1`..`emote_4` (keys 1-4, d-pad up / right / down / left).
 - Player slots are 0..7. A slot is the stable identity of a player for the whole session (humans and bots).
 
 ## Player
@@ -38,7 +38,7 @@ The Player root never rotates (identity basis); `facing` says where the blob loo
 |---|---|
 | `slot: int`, `display_name: String`, `is_bot: bool`, `loadout: Dictionary` | identity, set at spawn |
 | `is_extra: bool` | an NPC extra (see "NPC extras"): slot >= 100, not a player |
-| `intent: PlayerIntent` | what the controller wants this tick: `move: Vector2` (world X,Z, length 0..1), `jump_pressed`, `jump_held`, `action_pressed` (bools; `*_pressed` true only on the first tick), `clear()` |
+| `intent: PlayerIntent` | what the controller wants this tick: `move: Vector2` (world X,Z, length 0..1), `jump_pressed`, `jump_held`, `action_pressed` (bools; `*_pressed` true only on the first tick), `emote: int` (1..4 on the tick an emote key went down, else 0; consumed by the emote component, NOT reset by `clear()`), `clear()` |
 | `velocity` | built-in; components add to or set their axis of it |
 | `facing: Vector3` | unit vector on XZ the blob looks along |
 | `frozen: bool` | set by the minigame/session (countdown, round over): no movement, no actions. Player clears `intent` every tick while set |
@@ -81,6 +81,7 @@ Networking seams, so `player.gd` never needs editing: `SyncComponent.relay_event
 | `stunned` | status | `duration: float` |
 | `eliminated` | Player | `reason: StringName` |
 | `respawned` | Player | `xform: Transform3D` |
+| `emote` | emote | `id: int` (1 wave, 2 dance, 3 taunt, 4 cry; `EmoteComponent.name_of(id)`); cosmetic, relayed like any event, the host does not validate it |
 
 Visuals, effects and sound never get called by mechanics. They listen to these signals and read the shared state.
 
@@ -100,6 +101,7 @@ Visuals, effects and sound never get called by mechanics. They listen to these s
 | `sfx` | `SfxComponent` | audio | sounds on events |
 | `sync` | `SyncComponent` | player sync | replicates state and events to other peers |
 | `team` | `TeamComponent` | teams (Minigame) | team ring under the blob; `set_team(team, color)` (-1 hides), set by `Minigame.assign_teams` on every peer |
+| `emote` | `EmoteComponent` | character animator | emote keys -> `emote` event (see "Emotes") |
 
 Controller (human): reads the input actions; `intent.move` is camera-relative (forward = away from the active camera, projected on XZ), expressed in world X,Z. `*_pressed` are edges of the held state. `scripted: bool` (tests): when true the controller leaves `intent` alone. The human controller in `controller.gd` belongs to the skeleton; the bot agent does not edit it.
 
@@ -282,7 +284,33 @@ Bots and teams: `Minigame.is_ally(a: Player, b: Player) -> bool` (override it fo
 - `Sfx.play(name, at)`, `Sfx.play_loop(name, at) -> id`, `Sfx.stop_loop(id)`: `coin`, `coin_big`, `bomb_tick`, `bomb_fuse_loop`, `explosion`, `platform_crack`, `platform_fall`, `lava_sizzle`, `round_win_jingle`, and the rest in `game/audio/sfx.gd`.
 - Look: instance `res://look/stage_look.tscn` and set its `preset`; `Look.apply_toon(model)`; materials in `res://look/materials/` (`lava`, `water`, `void_fade`).
 - Camera: instance `res://camera/arena_camera.tscn` (`ArenaCamera`), set bounds; `add_shake(amount)`; `include_extras` to frame NPC extras too.
-- Player visuals: `VisualsComponent.play_emote(&"cheer" | &"wave" | &"sad")`, `set_expression`.
+- Player visuals: see "Player visuals API" below.
+
+### Player visuals API (`VisualsComponent`, `player.get_component(&"visuals")`; local to the peer that calls it, safe headless)
+
+```gdscript
+func play_emote(emote: StringName, loop := false) -> bool  # VisualsComponent.EMOTES: cheer, wave, sad, dance, taunt, cry, victory, clap_nod, clap, sulk
+func stop_emote() -> void
+func get_emote() -> StringName
+func play_result_pose(place: int, total: int) -> StringName  # 1st victory (jumps, spins), last of 2+ sulk, 2nd/3rd clap_nod, others clap; loops; place < 1 stops
+func set_carry_pose(kind: StringName) -> bool               # &"overhead", &"front", &"none"; stays until changed
+func get_carry_pose() -> StringName
+func play_throw() -> void                                    # wind up, fling, follow through; ends the carry pose
+func get_carry_point() -> Vector3                            # world point where the carried thing sits (follows the animation and the hat)
+func set_interest_point(point: Vector3, strength := 1.0) -> void  # eyes and body turn to it; feed it every frame or so, fades ~0.6 s after the last call
+func set_panic(seconds: float) -> void                       # panic-run arms while running (a hazard nearby)
+func set_look_target(target: Variant) -> void                # Node3D, world Vector3 or null
+func set_expression(name: StringName, seconds := -1.0) -> bool  # BlobExpressions preset; &"" releases
+func get_reaction() -> StringName / get_expression() / get_action()  # what shows now (tests)
+```
+
+- Podium / results: the round UI or feel owner calls `play_result_pose(place, total)` on every peer for each blob shown (e.g. from `Session.session_finished(final_ranking)`: `place = index + 1`, `total = final_ranking.size()`), and `stop_emote()` when leaving.
+- Carrying: a minigame calls `set_carry_pose` / `play_throw` on every peer (inside its `call_local` RPC) and may place the item at `get_carry_point()`.
+- Automatic (nothing to call): run starts, skids (`Fx.play(&"dust_puff")`), banking, panic after a knock, backpedal, apex tuck, knockback spin, heavy landings, ledge teeter, idle fidgets, sleeping after 20 s in the lobby, flinch / gloat / wince, looking at the fastest blob nearby. `Settings.reduced_motion` calms them; at LOW quality blobs further than 14 m from the camera skip fidgets and the face; NPC extras run a reduced set.
+
+### Emotes
+
+`EmoteComponent` (`game/player/components/emote.*`), in its post_tick on the authority: `intent.emote` (1..4, consumed) -> `player.emit_event(&"emote", [id])` -> every peer's visuals play it. Rules on the authority: one emote per 0.8 s (`cooldown`); none while stunned (`control_locked`) or dead; none while `frozen`, except in the lobby and on the podium (`Session.State.LOBBY` / `PODIUM`). The visuals cancel a player emote on movement, a jump, a shove or a knockback (an emote started with `play_emote` is not cancelled by movement, and a looping one resumes after a player emote). `request(id) -> bool` asks from code. Bots (not extras) emote now and then while standing still in the lobby hall (`EmoteComponent.is_lobby(player)`: Session LOBBY and the Stage `follow_roster`) and sometimes after winning a round.
 
 ## Minigame hooks (disguises, stuns, crowds, holds, silence)
 

@@ -14,6 +14,8 @@ extends PlayerComponent
 const BOT_BRAIN_PATH := "res://bots/bot_brain.gd"
 ## Visible CanvasItems in this group take the human's input away from the blob.
 const INPUT_BLOCKER_GROUP := &"blocks_player_input"
+## Emote keys (1-4 / d-pad), in emote id order 1..4.
+const EMOTE_ACTIONS: Array[StringName] = [&"emote_1", &"emote_2", &"emote_3", &"emote_4"]
 
 ## Tests: when true the controller leaves `player.intent` alone so a test can write it.
 var scripted: bool = false
@@ -22,6 +24,7 @@ var brain: Node = null
 
 var _jump_was_held: bool = false
 var _action_was_held: bool = false
+var _emotes_held: int = 0  # bit i: EMOTE_ACTIONS[i] held last tick
 
 
 func _ready() -> void:
@@ -54,6 +57,7 @@ func _read_human_input() -> void:
 		intent.clear()
 		_jump_was_held = jump
 		_action_was_held = action
+		_emotes_held = _read_emotes()
 		return
 	var raw := Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back")
 	intent.move = _camera_relative(raw)
@@ -62,6 +66,22 @@ func _read_human_input() -> void:
 	intent.action_pressed = action and not _action_was_held
 	_jump_was_held = jump
 	_action_was_held = action
+	var emotes := _read_emotes()
+	intent.emote = 0
+	for i in EMOTE_ACTIONS.size():
+		if (emotes & (1 << i)) != 0 and (_emotes_held & (1 << i)) == 0:
+			intent.emote = i + 1
+			break
+	_emotes_held = emotes
+
+
+## Bit i set while EMOTE_ACTIONS[i] is held (actions missing from the input map count as up).
+func _read_emotes() -> int:
+	var bits := 0
+	for i in EMOTE_ACTIONS.size():
+		if InputMap.has_action(EMOTE_ACTIONS[i]) and Input.is_action_pressed(EMOTE_ACTIONS[i]):
+			bits |= 1 << i
+	return bits
 
 
 ## True while the UI owns the human's input: a visible control has focus, or a node of

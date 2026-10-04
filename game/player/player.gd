@@ -13,6 +13,8 @@ signal got_hit(impulse: Vector3, source_slot: int)
 signal stunned(duration: float)
 signal eliminated(reason: StringName)
 signal respawned(xform: Transform3D)
+## A player emote (EmoteComponent.NAMES: 1 wave, 2 dance, 3 taunt, 4 cry); cosmetic only.
+signal emote(id: int)
 
 ## Components that get physics_tick(), in this order, before move_and_slide().
 ## `size` goes first: it scales the others' tuning before they use it this tick.
