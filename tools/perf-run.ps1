@@ -4,7 +4,9 @@
 # Usage: tools/perf-run.ps1 [-Scenes title,lobby,dev_arena,bumper_sumo,...] [-Qualities low,medium,high]
 #          [-Seconds 10] [-Warmup 3] [-Players 8] [-Resolution 1280x720] [-Label after]
 #          [-Out build\perf\after.csv] [-Throttle] [-Exe build\windows\perf.exe] [-Shots]
-#   -Scenes     title | lobby | dev_arena | any MinigameRegistry id (default: all of them)
+#   -Scenes     title | lobby | dev_arena | any MinigameRegistry id (default: all of them, the ids
+#               read from game/minigames/registry.gd)
+#   -ListScenes print the default scene list, one per line, and exit (nothing runs)
 #   -Throttle   weak-PC CPU proxy: the process is pinned to 2 logical cores at below-normal priority
 #   -Exe        run an exported DEBUG build (export-windows.ps1 -DebugBuild) instead of the editor binary;
 #               release templates refuse a scene path on the command line
@@ -23,12 +25,21 @@ param(
     [switch]$Throttle,
     [string]$Exe = '',
     [switch]$Shots,
-    [string[]]$ExtraArgs = @()
+    [string[]]$ExtraArgs = @(),
+    [switch]$ListScenes
 )
 . "$PSScriptRoot\_common.ps1"
 
-$AllScenes = @('title', 'lobby', 'dev_arena', 'floor_is_lava', 'bumper_sumo', 'hot_potato', 'coin_scramble',
-    'paint_splat', 'cannon_alley', 'spotlight_chairs')
+# Default: title, lobby, dev_arena, then every MinigameRegistry.IDS entry (parsed from
+# game/minigames/registry.gd), so a new minigame is measured without editing this script.
+function Get-RegistryIds {
+    $registry = Join-Path $GameDir 'minigames\registry.gd'
+    $line = Get-Content -LiteralPath $registry | Where-Object { $_ -match '^\s*const\s+IDS\b' } | Select-Object -First 1
+    if (-not $line) { throw "perf-run: no 'const IDS' in $registry" }
+    return @([regex]::Matches($line, '&"([a-z0-9_]+)"') | ForEach-Object { $_.Groups[1].Value })
+}
+$AllScenes = @('title', 'lobby', 'dev_arena') + (Get-RegistryIds)
+if ($ListScenes) { $AllScenes | ForEach-Object { Write-Output $_ }; exit 0 }
 if ($Scenes.Count -eq 0) { $Scenes = $AllScenes }
 # PowerShell -File passes "a,b" as one string: split it.
 $Scenes = @($Scenes | ForEach-Object { $_ -split ',' } | Where-Object { $_ -ne '' })
