@@ -24,6 +24,12 @@ func after_each() -> void:
 	_minigames.clear()
 	Session.current_minigame = null
 	Session.round_index = -1
+	Session.state = Session.State.LOBBY
+	Session.vote_index = -1
+	Session.vote_winner = -1
+	Session.phase_duration = 0.0
+	Session.phase_time_left = 0.0
+	Session.set_physics_process(true)
 	Music.stop(0.0)
 	Music.cancel_duck()
 
@@ -94,24 +100,70 @@ func test_round_track_follows_the_look_preset() -> void:
 func test_music_track_override_and_none() -> void:
 	assert_eq(MusicDirector.track_for_minigame(_minigame(StageLook.Preset.LAVA_CAVE, "night_party")), &"night_party", "override wins")
 	assert_eq(MusicDirector.track_for_minigame(_minigame(StageLook.Preset.LAVA_CAVE, "none")), &"", "none = silence")
+	assert_eq(MusicDirector.intro_track_for_minigame(_minigame(StageLook.Preset.LAVA_CAVE, "none")), &"lava_drums", "none: the preset under the title card")
+	assert_eq(MusicDirector.intro_track_for_minigame(_minigame(StageLook.Preset.LAVA_CAVE, "night_party")), &"night_party", "an override plays from the intro")
 	Net.start_offline()
 	_spawn_director()
 	_enter_round(0, _minigame(StageLook.Preset.BRIGHT_DAY, "none"))
-	assert_eq(_picked().back(), &"", "director asks for silence")
+	assert_eq(_picked().back(), &"sky_sumo", "intro: the look's track")
+	Session.state_changed.emit(Session.State.PLAYING)
+	assert_eq(_picked().back(), &"", "GO: director asks for silence")
 	assert_eq(Music.current, &"", "music stopped for the round")
 
 
-## Any minigame may declare `music_track = &"none"`: its round is silent through intro and play.
-func test_a_declared_silent_round_is_silent() -> void:
+## Any minigame may declare `music_track = &"none"`: the title card still has music (the look's
+## track, so the intro is never silent), and the round is silent from GO.
+func test_a_declared_silent_round_is_silent_from_go() -> void:
 	var mg := _minigame(StageLook.Preset.NIGHT_PARTY, "none")
 	Net.start_offline()
 	_spawn_director()
 	assert_eq(Music.current, &"lobby_waltz", "lobby music first")
 	_enter_round(0, mg)
-	assert_eq(_picked().back(), &"", "director asks for silence")
-	assert_eq(Music.current, &"", "no night_party under a silent round")
+	assert_eq(Music.current, &"night_party", "the intro card is not silent")
+	assert_eq(_director.context, "round:0", "intro context")
 	Session.state_changed.emit(Session.State.PLAYING)
-	assert_eq(Music.current, &"", "still silent while playing")
+	assert_eq(_director.context, "round:0:quiet", "silent from GO")
+	assert_eq(Music.current, &"", "silent while playing")
+	var picks := _picks.size()
+	Session.state_changed.emit(Session.State.PLAYING)
+	assert_eq(_picks.size(), picks, "no new pick while it stays PLAYING")
+	Session.state_changed.emit(Session.State.RESULTS)
+	assert_eq(_director.context, "results:0", "results as usual")
+
+
+## VOTE (game modes): the lobby waltz ducked under the cards and a beep on each of the last
+## three seconds, until the tally; then the round's own music.
+func test_vote_ducks_the_waltz_and_beeps_the_last_seconds() -> void:
+	Net.start_offline()
+	Session.set_physics_process(false)  # this test drives the vote clock itself
+	_spawn_director()
+	var beeps := watch(_director, &"vote_beep")
+	Music.play(&"lava_drums", 0.0)  # what the results left playing
+	Session.vote_index = 1
+	Session.vote_winner = -1
+	Session.phase_duration = 8.0
+	Session.phase_time_left = 8.0
+	Session.state = Session.State.VOTE
+	Session.state_changed.emit(Session.State.VOTE)
+	assert_eq(_director.context, "vote:1", "vote context")
+	assert_eq(Music.current, &"lobby_waltz", "the waltz, not the round's music")
+	await step(30)
+	assert_true(Music.duck_gain < 0.8, "ducked under the cards (%.2f)" % Music.duck_gain)
+	assert_eq(beeps.size(), 0, "no beeps with 8 s left")
+	for left: float in [3.5, 2.9, 2.2, 1.5, 0.6, 0.2]:
+		Session.phase_time_left = left
+		await step(1)
+	var secs: Array = []
+	for b in beeps:
+		secs.append(b[0])
+	assert_eq(secs, [3, 2, 1], "one beep on each of the last three seconds")
+	Session.vote_winner = 0  # tallied: the reveal does not beep
+	Session.phase_time_left = 1.5
+	await step(2)
+	assert_eq(beeps.size(), 3, "no beeps after the tally")
+	_enter_round(1, _minigame(StageLook.Preset.LAVA_CAVE))
+	assert_eq(Music.current, &"lava_drums", "the next round's music")
+	assert_eq(Music.duck_gain, 1.0, "the vote's duck ends with it")
 
 
 ## The rule, for every registry minigame: silent exactly when it declares `music_track = &"none"`,

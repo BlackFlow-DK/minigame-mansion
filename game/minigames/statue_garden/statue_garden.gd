@@ -124,8 +124,9 @@ const BOT_LOOKAHEAD := 5.0
 var bot_aggression_scale: float = 0.0
 const BOT_AGGRESSION := {Phase.GREEN: 0.35, Phase.WARNING: 0.6}
 
-## Music: no director track (silence from the title card on); the statue's own tune (below) is
-## the round's music: its stopping is the cue.
+## Music: no director track once play starts (the director plays the look's track under the
+## title card and goes silent at GO); the statue's own tune (below) is the round's music: its
+## stopping is the cue.
 var music_track := &"none"
 
 ## Test/dev only: multiplies how fast the host's phase clock runs.
