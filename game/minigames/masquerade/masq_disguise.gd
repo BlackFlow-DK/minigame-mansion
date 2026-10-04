@@ -10,7 +10,7 @@ extends Node
 ##   component tints whooshes and hit stars with it too); released with `clear_look_override()`.
 ## - Size: `SizeComponent.set_size_override("normal")`: a small or big blob looks, collides
 ##   (capsule) and moves / shoves like a normal one; released with `clear_size_override()`.
-## - Name tag: `FxComponent.set_presentation_hidden(p, hidden, tag only)`.
+## - Name tag: `p.set_presentation_hidden(hidden, tag only)`.
 ## - Mask: a masq_mask on the model's FaceSocket, re-checked every CHECK_EVERY s (a model swap
 ##   drops it).
 ## - `flash(p, seconds)`: shows `p`'s true colours (not its items) for a while, then the
@@ -51,7 +51,7 @@ func hold(p: Player) -> void:
 	var size := p.get_component(&"size") as SizeComponent
 	if size:
 		size.set_size_override(LOOK["size"], true)
-	FxComponent.set_presentation_hidden(p, true, true, false)
+	p.set_presentation_hidden(true, true, false)
 	_put_mask(p)
 
 
@@ -76,7 +76,7 @@ func release(p: Player) -> void:
 	var size := p.get_component(&"size") as SizeComponent
 	if size:
 		size.clear_size_override(true)
-	FxComponent.set_presentation_hidden(p, false, true, false)
+	p.set_presentation_hidden(false, true, false)
 
 
 ## Releases every held blob that is not an NPC extra (extras keep their mask: their real

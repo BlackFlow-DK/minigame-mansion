@@ -799,7 +799,7 @@ func _disguise_node(p: Player) -> HideDisguise:
 
 ## Name tag and blob shadow of `p` on/off (a disguised hider has neither).
 func _set_tags(p: Player, on: bool) -> void:
-	FxComponent.set_presentation_hidden(p, not on)
+	p.set_presentation_hidden(not on)
 
 
 ## Every peer, every frame: role tuning (absolute values from the bases read in _setup).

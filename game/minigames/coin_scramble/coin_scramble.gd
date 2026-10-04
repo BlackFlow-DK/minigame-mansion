@@ -66,6 +66,12 @@ const GOLD := Color(1.0, 0.8, 0.25)
 ## Seconds (host, Session-scaled) between batched request_bot_rethink calls.
 const RETHINK_INTERVAL := 0.25
 const BUMPER_NOTES: Array[StringName] = [&"piano_c", &"piano_e", &"piano_g", &"piano_b"]
+## Presentation (every peer): a coin burst (a blob's coins flying out, a big coin falling) is
+## worth watching this long (s); blobs within INTEREST_RANGE (m) turn to the nearest one,
+## updated every INTEREST_EVERY s.
+const BURST_LIFE := 1.4
+const INTEREST_RANGE := 9.0
+const INTEREST_EVERY := 0.2
 
 # --- Tuning -----------------------------------------------------------------------------------
 
@@ -158,6 +164,9 @@ var _bumper_nodes: Array[Node3D] = []
 var _bumper_mats: Array[BaseMaterial3D] = []
 var _flash_cd: Array[float] = []
 var _chest_pos: Array[Vector3] = []
+## Every peer: live coin bursts, xyz = where the coins land, w = seconds left (presentation).
+var bursts: Array[Vector4] = []
+var _interest_cd: float = 0.0
 
 @onready var _bar: Node3D = $Spinner/Bar
 @onready var _coins_root: Node3D = $Coins
@@ -375,6 +384,8 @@ func _rpc_rain(id: int, value: int, from: Vector3) -> void:
 	var c := CoinPiece.new()
 	c.setup_fall(id, value, from)
 	_add_coin(c)
+	if value > 1:
+		_add_burst(Vector3(from.x, 0.3, from.z))
 
 
 @rpc("authority", "call_local", "reliable")
@@ -412,6 +423,11 @@ func _rpc_drop(slot: int, new_count: int, from: Vector3, ids: PackedInt32Array, 
 		_add_coin(c)
 	_float_text("-%d" % ids.size(), from + Vector3.UP * 0.9, Color(1.0, 0.35, 0.3))
 	Sfx.play(&"coin", from, -2.0, 0.75)
+	if not targets.is_empty():
+		var mid := Vector3.ZERO
+		for t in targets:
+			mid += t
+		_add_burst(mid / float(targets.size()) + Vector3.UP * 0.3)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -438,6 +454,40 @@ func _rpc_end(ranking: PackedInt32Array, counts: PackedInt32Array) -> void:
 				vis.play_emote(&"cheer")
 			Fx.play(&"confetti", winner.global_position + Vector3.UP * 1.2)
 	round_over.emit(final_ranking.duplicate())
+
+
+# --- Every peer: interest (presentation) ------------------------------------------------------
+
+func _add_burst(at: Vector3) -> void:
+	bursts.append(Vector4(at.x, at.y, at.z, BURST_LIFE))
+
+
+## A few times a second: every living blob within INTEREST_RANGE of a live burst turns to the
+## nearest one (nearer = stronger). Local only; nothing networked.
+func _process(delta: float) -> void:
+	for i in range(bursts.size() - 1, -1, -1):
+		bursts[i].w -= delta
+		if bursts[i].w <= 0.0:
+			bursts.remove_at(i)
+	_interest_cd -= delta
+	if _interest_cd > 0.0 or bursts.is_empty():
+		return
+	_interest_cd = INTEREST_EVERY
+	for p in players:
+		if not _live(p):
+			continue
+		var best := Vector3.INF
+		var best_d := INTEREST_RANGE
+		for b in bursts:
+			var at := Vector3(b.x, b.y, b.z)
+			var d := Vector2(at.x - p.global_position.x, at.z - p.global_position.z).length()
+			if d < best_d:
+				best_d = d
+				best = at
+		if best.is_finite():
+			var v := p.get_component(&"visuals") as VisualsComponent
+			if v:
+				v.set_interest_point(best, clampf(1.2 - best_d / INTEREST_RANGE, 0.35, 1.0))
 
 
 # --- Every peer: hazards ----------------------------------------------------------------------

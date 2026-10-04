@@ -33,6 +33,7 @@ func _reset_session() -> void:
 	Session.phase_time_left = 0.0
 	Session.time_scale = 1.0
 	Session.current_minigame = null
+	Session.round_groups = []
 
 
 func _seconds(s: float) -> int:
@@ -199,6 +200,44 @@ func test_round_end_without_knockout_only_celebrates() -> void:
 	assert_eq(celebrated[0][0], 2, "the ranking's first")
 	assert_eq(_vis(ps[2]).get_emote(), &"cheer", "winner cheers")
 	_assert_clocks_normal("no knockout")
+
+
+func test_round_end_last_place_sulks_and_poses_stop_when_the_phase_moves_on() -> void:
+	var ps := _arena_with_camera(4)
+	Session.round_groups = [[1] as Array[int], [3] as Array[int], [0, 2] as Array[int]]
+	Session.round_finished.emit([1, 3, 0, 2] as Array[int], {})
+	assert_eq(_vis(ps[1]).get_emote(), &"cheer", "winner cheers")
+	assert_eq(_vis(ps[0]).get_emote(), &"sulk", "tied last place sulks")
+	assert_eq(_vis(ps[2]).get_emote(), &"sulk", "the whole tied last group sulks")
+	assert_eq(_vis(ps[3]).get_emote(), &"", "the middle does nothing")
+	Session.state_changed.emit(Session.State.VOTE)
+	for p in ps:
+		assert_eq(_vis(p).get_emote(), &"", "P%d: poses stop when the phase moves on" % p.slot)
+
+
+func test_round_end_everyone_tied_nobody_sulks() -> void:
+	var ps := _arena_with_camera(3)
+	Session.round_groups = [[0, 1, 2] as Array[int]]
+	Session.round_finished.emit([0, 1, 2] as Array[int], {})
+	for p in ps:
+		assert_eq(_vis(p).get_emote(), &"cheer", "P%d shares first: cheers" % p.slot)
+
+
+func test_podium_moves_the_spotlight_to_the_session_winners() -> void:
+	var ps := _arena_with_camera(3)
+	Session.round_groups = [[0] as Array[int], [1] as Array[int], [2] as Array[int]]
+	Session.round_finished.emit([0, 1, 2] as Array[int], {})
+	Session.scores = {0: 5, 1: 9, 2: 9} as Dictionary[int, int]
+	Session.round_wins = {0: 1, 1: 1, 2: 1} as Dictionary[int, int]
+	Session.state_changed.emit(Session.State.PODIUM)
+	assert_eq(_vis(ps[0]).get_emote(), &"", "the round's cheer ends at the podium")
+	Session.session_finished.emit([1, 2, 0] as Array[int])
+	if Look.is_high():
+		assert_true(_feel.call(&"is_spotlight_on"), "spotlight on the session winners")
+		var targets: Array = _feel.get(&"_spot_targets")
+		assert_eq(targets.size(), 2, "both tied winners share it")
+	Session.scores.clear()
+	Session.round_wins.clear()
 
 
 func test_next_round_mid_slow_motion_leaks_nothing() -> void:

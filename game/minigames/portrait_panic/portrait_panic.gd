@@ -11,7 +11,8 @@ extends Minigame
 ## shorter (4.5 s -> 2.0 s). From loop `twist_from_loop` + 1 each loop draws a twist:
 ##   MEMORY  1 s into SHOW the tiles flip face down: remember where the target was;
 ##   DECOY   the portrait shows a first symbol, then flips to the second: only that counts;
-##   SWAP    during SHOW two rows of tiles slide past each other and trade places.
+##   SWAP    during SHOW two rows of tiles dive under the floor, slide past each other and
+##           come up in each other's places (tiles never rise through a blob, nor do flips).
 ## Last blob standing wins. Everyone who falls in the same DROP ties for that place (a tied
 ## group, ordered by nothing); at `time_limit` the survivors tie for first.
 ##
@@ -79,6 +80,10 @@ const GAP := 0.12
 const PITCH := TILE + GAP
 const HALF := GRID * PITCH * 0.5
 const THICK := 0.24
+## SWAP: seconds a row takes to slide home, and how deep (m) the upper of the two rows dives
+## (the other goes a tile deeper), below every tile in between.
+const SLIDE_TIME := 0.9
+const SLIDE_DEPTH := THICK + 0.12
 const SYMBOL_COUNT := 8
 const SYMBOL_NAMES: Array[String] = [
 	"RED CIRCLE", "BLUE SQUARE", "YELLOW TRIANGLE", "GREEN STAR",
@@ -1009,6 +1014,23 @@ func _is_face_up(i: int) -> bool:
 	return cos(_flip_to[i]) > 0.0
 
 
+## How far (m) a tile turned `angle` about X sinks, so its top stays at or below the floor
+## (y = 0): its half height grows from THICK / 2 flat to TILE / 2 on edge.
+static func flip_sink(angle: float) -> float:
+	return TILE * 0.5 * absf(sin(angle)) + THICK * 0.5 * absf(cos(angle)) - THICK * 0.5
+
+
+## SWAP slide offset at progress `k` (0..1) of a tile that starts `dz` from home: it dives
+## below the floor (row `arc` +1 to SLIDE_DEPTH, -1 deeper, so the two rows pass each other
+## and under every row in between), slides home down there, and rises into place. Its top
+## never comes above the floor, so it never passes through a blob.
+static func slide_offset(k: float, dz: float, arc: float) -> Vector3:
+	var depth := SLIDE_DEPTH if arc >= 0.0 else SLIDE_DEPTH + THICK + 0.1
+	var dive := smoothstep(0.0, 0.22, k) * (1.0 - smoothstep(0.78, 1.0, k))
+	var travel := smoothstep(0.2, 0.8, k)
+	return Vector3(0.0, -depth * dive, dz * (1.0 - travel))
+
+
 func _set_collider(i: int, on: bool) -> void:
 	if i >= 0 and i < _shapes.size():
 		_shapes[i].disabled = not on
@@ -1045,12 +1067,13 @@ func _update_tiles() -> void:
 			if rt >= 1.0:
 				_rise_t0[i] = -1.0
 		if _slide_t0[i] >= 0.0:
-			var sk := clampf((_t - _slide_t0[i]) / 0.9, 0.0, 1.0)
-			var e := sk * sk * (3.0 - 2.0 * sk)
-			off.z += _slide_dz[i] * (1.0 - e)
-			off.y += _slide_arc[i] * 0.42 * sin(sk * PI)
+			var sk := clampf((_t - _slide_t0[i]) / SLIDE_TIME, 0.0, 1.0)
+			off += slide_offset(sk, _slide_dz[i], _slide_arc[i])
 			if sk >= 1.0:
 				_slide_t0[i] = -1.0
+		# A flip turns about the tile's middle; it sinks as it turns so no edge ever rises
+		# above the floor (through a blob standing on it).
+		off.y -= flip_sink(a)
 		var centre := cell_center(i) + Vector3(0.0, -THICK * 0.5, 0.0) + off
 		var xform := Transform3D(tumble * Basis(Vector3.RIGHT, a), centre) * Transform3D(Basis.IDENTITY, Vector3(0.0, THICK * 0.5, 0.0))
 		_multimesh.set_instance_transform(i, xform)

@@ -65,6 +65,8 @@ const OBSTACLES: Array = [
 ## The new holder is slowed for this long after a pass, to this fraction of its speed.
 @export var gotcha_slow_time: float = 0.3
 @export var gotcha_slow_factor: float = 0.4
+## The holder's name tag rises this much (m) to clear the bomb held overhead.
+const HOLDER_TAG_RAISE := 1.05
 ## The holder runs this much faster than everyone else.
 @export var holder_speed_bonus: float = 1.12
 ## Explosion push on nearby blobs (harmless, just fun).
@@ -384,11 +386,17 @@ func _physics_process(delta: float) -> void:
 		move.max_speed = s
 
 
+## Face, carry pose and name tag of the old and new holder (every peer): the holder holds the
+## bomb up overhead (`set_carry_pose(&"overhead")`; the rig puts the bomb at its carry point)
+## and its name tag rises over the bomb; the old holder lets go.
 func _set_holder_face(old: Player, new: Player) -> void:
 	if old and is_instance_valid(old) and old != new:
 		var v := old.get_component(&"visuals") as VisualsComponent
 		if v:
 			v.set_expression(&"")
+		_set_carrying(old, false)
+	if new and is_instance_valid(new):
+		_set_carrying(new, true)
 	for p in players:
 		if not is_instance_valid(p):
 			continue
@@ -402,6 +410,22 @@ func _set_holder_face(old: Player, new: Player) -> void:
 			v.set_look_target(new)
 		else:
 			v.set_look_target(null)
+
+
+func _set_carrying(p: Player, on: bool) -> void:
+	var v := p.get_component(&"visuals") as VisualsComponent
+	if v:
+		v.set_carry_pose(&"overhead" if on else &"none")
+	var tag := NameTag.of(p)
+	if tag:
+		tag.raise = HOLDER_TAG_RAISE if on else 0.0
+
+
+## Whoever still carries the bomb lets go when the round leaves (stage cleared, next load).
+func _exit_tree() -> void:
+	for p in players:
+		if is_instance_valid(p) and p.is_inside_tree() and not p.is_queued_for_deletion():
+			_set_carrying(p, false)
 
 
 # --- Bots ----------------------------------------------------------------------------------------

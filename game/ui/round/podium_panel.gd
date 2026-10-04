@@ -3,6 +3,9 @@ extends Control
 ## End-of-session podium: final standings on three blocks (2nd, 1st, 3rd), everyone else
 ## in a row below, the winner celebrated with a bouncing blob and confetti, and a
 ## "Back to lobby" button that RoundUI reveals. Owner: round UI.
+## Staged (`play(..., staged = true)`): the real blobs stand on a 3D podium behind this panel
+## (RoundPodiumStage, lined up with COLUMN_X), so there is no dim, no 2D blocks and no 2D blobs;
+## each column is just a name / points caption under its 3D block.
 
 signal back_pressed
 
@@ -24,6 +27,13 @@ const WINNER_MAX_W := 660.0
 const WINNER_FONT_SIZE := 72
 ## Seconds the balance takes to count up on the coins card.
 const COINS_COUNT_SECONDS := 1.3
+## Dim over the world: full when the panel draws its own podium, none over the 3D one.
+const DIM_ALPHA := 0.95
+## Staged: top of the caption under each 3D block.
+const CAPTION_Y := 548.0
+
+## True while a 3D podium stands behind the panel (see the header).
+var staged: bool = false
 
 var _dim: ColorRect
 var _stage: Control
@@ -61,7 +71,7 @@ var _coins_to: int = 0
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_dim = RoundStyle.dim(0.95)
+	_dim = RoundStyle.dim(DIM_ALPHA)
 	add_child(_dim)
 
 	_stage = Control.new()
@@ -146,8 +156,10 @@ func _ready() -> void:
 ## Shows the final standings for `ranking` (slots, best first) with `totals` (slot -> points).
 ## `coins_bonus`: this player's Mansion Coin session bonus; once the winner is celebrated a card
 ## pops in with "+N coins" and the balance counting up to `Progression.coins` (0: no card).
-func play(ranking: Array, totals: Dictionary, p_coins_bonus: int = 0) -> void:
+## `p_staged`: a 3D podium stands behind (captions only, no dim).
+func play(ranking: Array, totals: Dictionary, p_coins_bonus: int = 0, p_staged: bool = false) -> void:
 	stop()
+	set_staged(p_staged)
 	final_ranking.assign(ranking)
 	coins_bonus = maxi(0, p_coins_bonus)
 	_coins_card.visible = false
@@ -209,6 +221,12 @@ func _thump(piece: Control, winner: bool) -> void:
 	var t := piece.create_tween()
 	t.tween_property(piece, ^"scale", Vector2(1.0 - 0.03 * k, 1.0 + 0.05 * k), 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	t.tween_property(piece, ^"scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Staged or not; unstaging (the 3D podium went away) brings the dim back.
+func set_staged(on: bool) -> void:
+	staged = on
+	_dim.color.a = 0.0 if on else DIM_ALPHA
 
 
 func is_coins_card_shown() -> bool:
@@ -331,6 +349,8 @@ func _celebrate() -> void:
 
 ## One podium column: blob, name and score standing on a numbered block.
 func _build_column(place_i: int, slot: int, total: int) -> Control:
+	if staged:
+		return _build_caption(place_i, slot, total)
 	var col := Control.new()
 	col.set_meta(&"podium_piece", true)
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -370,6 +390,36 @@ func _build_column(place_i: int, slot: int, total: int) -> Control:
 	var num_color := RoundStyle.CHARCOAL if place_i != 2 else RoundStyle.CREAM
 	inner.add_child(RoundStyle.label(str(place_i + 1), 64 if place_i == 0 else 52, num_color, 0))
 	inner.add_child(RoundStyle.label("%d pts" % total, 26, RoundStyle.CREAM, 7))
+	return col
+
+
+## Staged column: name and points in a pill under the 3D block of `place_i`.
+func _build_caption(place_i: int, slot: int, total: int) -> Control:
+	var col := Control.new()
+	col.set_meta(&"podium_piece", true)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.size = Vector2(BLOCK_W, 60.0)
+	col.position = Vector2(COLUMN_X[place_i] - BLOCK_W * 0.5, CAPTION_Y)
+	_stage.add_child(col)
+	var style := RoundStyle.box(Color(RoundStyle.CHARCOAL, 0.92), RoundStyle.player_color(slot), 3, 14, false)
+	style.content_margin_left = 12.0
+	style.content_margin_right = 12.0
+	style.content_margin_top = 2.0
+	style.content_margin_bottom = 4.0
+	var pill := RoundStyle.panel(style)
+	col.add_child(pill)
+	var inner := VBoxContainer.new()
+	inner.add_theme_constant_override(&"separation", -8)
+	inner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pill.add_child(inner)
+	var name_label := RoundStyle.label(RoundStyle.player_name(slot), 28 if place_i == 0 else 24, RoundStyle.CREAM, 7)
+	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	name_label.clip_text = true
+	name_label.custom_minimum_size = Vector2(BLOCK_W - 40.0, 0)
+	inner.add_child(name_label)
+	inner.add_child(RoundStyle.label("%d pts" % total, 22, RoundStyle.GOLD, 6))
+	pill.reset_size()
+	pill.position = Vector2((BLOCK_W - pill.size.x) * 0.5, 0.0)
 	return col
 
 

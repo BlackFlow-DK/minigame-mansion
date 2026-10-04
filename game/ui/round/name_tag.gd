@@ -33,6 +33,9 @@ var alpha: float = 1.0
 var lift: float = 0.0
 ## 1, or CROWD_ALPHA while it overlaps another name even after stepping up.
 var crowd_alpha: float = 1.0
+## Extra metres above `height` for something carried over the head (a bomb, a royal crown),
+## set by a minigame on every peer; 0 = none. Unlike `height` the size component leaves it alone.
+var raise: float = 0.0
 ## Hidden on purpose by a minigame (this peer only; set it on every peer). Shows again when cleared.
 var suppressed: bool = false:
 	set(value):
@@ -99,7 +102,7 @@ func _process(delta: float) -> void:
 		_layout_frame = Engine.get_process_frames()
 		_layout_crowd(cam)
 	lift = lerpf(lift, _lift_target, 1.0 - exp(-14.0 * delta))
-	global_position = player.global_position + Vector3.UP * (height + lift)
+	global_position = player.global_position + Vector3.UP * (height + raise + lift)
 	var a := 1.0
 	if cam:
 		a = 1.0 - smoothstep(fade_start, fade_end, cam.global_position.distance_to(global_position))
@@ -111,7 +114,7 @@ func _process(delta: float) -> void:
 func screen_rect(cam: Camera3D, extra_lift: float = 0.0) -> Rect2:
 	if cam == null or not is_instance_valid(player) or not _name:
 		return Rect2()
-	var anchor := player.global_position + Vector3.UP * (height + extra_lift) + _name.position
+	var anchor := player.global_position + Vector3.UP * (height + raise + extra_lift) + _name.position
 	if cam.is_position_behind(anchor):
 		return Rect2()
 	var c := cam.unproject_position(anchor)
@@ -185,7 +188,7 @@ func _apply() -> void:
 	_name.modulate = RoundStyle.CREAM
 	_dot_material.albedo_color = color
 	_set_alpha(alpha)
-	global_position = player.global_position + Vector3.UP * height
+	global_position = player.global_position + Vector3.UP * (height + raise)
 
 
 func _player_color() -> Color:

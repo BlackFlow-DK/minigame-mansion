@@ -122,6 +122,12 @@ func place_at(xform: Transform3D) -> void:
 	velocity = Vector3.ZERO
 
 
+## Presentation hook (this peer only): hides or shows this blob's name tag and/or shadow.
+## Forwards to `FxComponent.set_presentation_hidden` (see contract "Minigame hooks").
+func set_presentation_hidden(hidden: bool, tags: bool = true, shadow: bool = true) -> void:
+	FxComponent.set_presentation_hidden(self, hidden, tags, shadow)
+
+
 ## Raises the player signal `event` with `args` here, then hands it to the `sync`
 ## component so every other peer raises it too. Always raise player events this way.
 func emit_event(event: StringName, args: Array = []) -> void:
