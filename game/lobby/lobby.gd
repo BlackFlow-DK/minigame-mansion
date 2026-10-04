@@ -9,14 +9,27 @@ extends Minigame
 ## camera), the grand staircase with the glowing portal arch on its landing, a fireplace
 ## corner, a piano corner, decor, and simple box collision on the world layer.
 ##
-## Toys. All of them are derived locally from the (synced) player positions, so nothing
-## here needs its own RPCs:
+## Furniture toys, derived locally from the (synced) player positions (no RPCs):
 ##   - sofa and armchair cushions throw a blob that lands on them back up; the bounce is
 ##     applied by that blob's own authority (`landed` signal + its slide collisions)
 ##   - a floor keyboard in front of the piano lights the key a blob stands on
 ##     (`piano_key_pressed` fires for the audio system to pick up later)
 ##   - the portal glows brighter and pulses faster the more blobs gather before it
-## Host only: a player that falls below KILL_Y is respawned at its spawn point.
+## Lobby toys (game/lobby/toys/, one script each, built here; their RPCs live on this root):
+##   - `football`: a 0.8 m ball (shared BallSim, host-simulated, clients predict, client kicks
+##     validated), a goal against each side wall, a scoreboard of tonight's goals
+##   - `trampoline` (front left): launches ~3 m, chained bounces gain height up to a cap
+##   - `seesaw` (front right): host-simulated angle from the riders' weights; landing on the high
+##     end catapults the blobs on the low end
+##   - `bell` (back right): shove it or run into it, host-validated with a cooldown
+##   - `photo` (back left): a button starts 3-2-1, everyone in the marked area strikes a pose
+##   - `portal_preview`: the portal cycles through the minigames that may come next
+## Nobody is ever eliminated in the lobby. Host only: a player that falls below KILL_Y is
+## respawned at its spawn point.
+##
+## Toy networking: host -> client RPCs go peer by peer, only to clients that said hello
+## (`_rpc_toy_hello`, sent when their lobby is built; they get `_rpc_toy_snapshot` back), so a
+## client still loading never receives a call for a node it does not have yet.
 ##
 ## Look: when the shared rig res://look/stage_look.tscn exists it is instanced with preset
 ## WARM_HALL and the fallback $Look (WorldEnvironment + moon) is removed. The practical
@@ -59,8 +72,9 @@ const KEY_HUES: Array[float] = [0.0, 0.08, 0.15, 0.33, 0.5, 0.6, 0.75, 0.88]
 
 ## Hung off to the sides: from the gameplay camera a chandelier hides the floor ~3 m behind
 ## it and reads as a wheel, so none hangs over the centre, the stairs or the keyboard.
+## The back two stand clear of the photo frame and the bell (back left / back right).
 const CHANDELIERS: Array[Vector3] = [
-	Vector3(-9.3, 5.0, 6.0), Vector3(9.3, 5.0, 6.0), Vector3(-7.0, 5.0, -5.0), Vector3(6.5, 5.0, -5.5),
+	Vector3(-9.3, 5.0, 6.0), Vector3(9.3, 5.0, 6.0), Vector3(-7.6, 5.0, -1.9), Vector3(8.8, 5.0, -4.2),
 ]
 ## Emission energy per kit emissive material (the imports come in at 1.0).
 const EMIT_ENERGY: Dictionary[String, float] = {
@@ -103,14 +117,42 @@ const POINTS_OF_INTEREST: Array[Vector3] = [
 	Vector3(-8.3, 0.0, -3.0),    # fireside rug
 	Vector3(-5.9, 0.56, -3.0),   # on the fireside sofa (bots hop up when blocked)
 	Vector3(8.8, 0.0, -3.4),     # floor keyboard
-	Vector3(10.9, 0.56, 1.0),    # window sofa
+	Vector3(10.9, 0.56, -1.0),   # window sofa
 	Vector3(-5.0, 0.0, -7.6),    # grandfather clock
 	Vector3(0.0, 0.0, 4.5),      # centre rug
-	Vector3(-8.0, 0.0, 5.5),     # front left
-	Vector3(8.0, 0.0, 5.5),      # front right
+	Vector3(-4.4, 0.0, 6.9),     # front left, by the trampoline
+	Vector3(4.4, 0.0, 6.9),      # front right, by the see-saw
 	Vector3(-4.5, 0.0, 2.0),
 	Vector3(4.5, 0.0, 2.0),
 ]
+
+# --- Lobby toys (game/lobby/toys/) ---------------------------------------------------------------
+const Football := preload("res://lobby/toys/football.gd")
+const Trampoline := preload("res://lobby/toys/trampoline.gd")
+const Bell := preload("res://lobby/toys/bell.gd")
+const Seesaw := preload("res://lobby/toys/seesaw.gd")
+const Photo := preload("res://lobby/toys/photo.gd")
+const PortalPreview := preload("res://lobby/toys/portal_preview.gd")
+const TRAMPOLINE_POS := Vector3(-7.0, 0.0, 5.6)
+const SEESAW_POS := Vector3(7.0, 0.0, 5.6)
+const BELL_POS := Vector3(5.6, 0.0, -6.7)
+const PHOTO_POS := Vector3(-8.3, 0.0, -8.6)
+const PORTAL_PREVIEW_POS := Vector3(0.0, 3.45, -8.1)
+## Toy sounds (game/audio/sfx/toy_*.wav, art/scripts/audio/gen_toys.py), added to the Sfx table.
+const TOY_SOUNDS := {
+	&"toy_bell": {"vol": -3.0, "pitch": 0.02, "max": 2, "gap": 200},
+	&"toy_boing": {"vol": -5.0, "pitch": 0.08, "max": 4, "gap": 40},
+	&"toy_kick": {"vol": -4.0, "pitch": 0.08, "max": 3, "gap": 50},
+	&"toy_cheer": {"vol": -3.0, "pitch": 0.03, "max": 2, "gap": 300},
+	&"toy_shutter": {"vol": -3.0, "pitch": 0.02, "max": 1, "gap": 200},
+	&"toy_tick": {"vol": -5.0, "pitch": 0.0, "max": 2, "gap": 100},
+	&"toy_thunk": {"vol": -6.0, "pitch": 0.1, "max": 3, "gap": 120},
+	&"toy_sproing": {"vol": -4.0, "pitch": 0.06, "max": 2, "gap": 120},
+}
+## Chance that a bot's new plan is a toy (trampoline, see-saw, bell, photo spot), and that it
+## goes after the football instead (it then follows the ball for a while).
+const BOT_TOY_CHANCE := 0.35
+const BOT_BALL_CHANCE := 0.2
 
 ## Upward speed (m/s) a cushion gives a blob that lands on it (a normal jump is ~7.4).
 @export var cushion_bounce_speed: float = 9.5
@@ -121,6 +163,19 @@ const POINTS_OF_INTEREST: Array[Vector3] = [
 
 ## The shared look rig when it was found, else null (the fallback $Look is used).
 var shared_look: Node = null
+
+## The toys (built in _ready on every peer, same node paths everywhere).
+var football: Football = null
+var trampoline: Trampoline = null
+var bell: Bell = null
+var seesaw: Seesaw = null
+var photo: Photo = null
+var portal_preview: PortalPreview = null
+## Solids the football bounces off: [&"box", xform, size, bounce] or
+## [&"cylinder", base, radius, height, bounce] (the hall's collision plus the toys').
+var ball_solids: Array = []
+## Host: clients whose lobby is built (they said hello) -> true. Toy RPCs go only to them.
+var toy_peers: Dictionary[int, bool] = {}
 
 var _cache: Dictionary[String, PackedScene] = {}
 var _hall: Node3D = null
@@ -133,6 +188,9 @@ var _fire_lights: Array[OmniLight3D] = []
 var _candle_lights: Array[OmniLight3D] = []
 var _candle_energy: PackedFloat32Array = []
 var _portal_light: OmniLight3D = null
+var _portal_light_color: Color = Color(0.35, 1.0, 0.88)
+var _portal_flare: float = 0.0
+var _toys_root: Node3D = null
 ## Candelabra lights (off on LOW quality) and the moonlight spots (off on LOW).
 var _small_lights: Array[OmniLight3D] = []
 var _moon_spots: Array[SpotLight3D] = []
@@ -147,6 +205,8 @@ var _portal_crowd: int = 0
 var _time: float = 0.0
 var _tracked: Dictionary[int, bool] = {}
 var _bot_plans: Dictionary[int, Vector3] = {}
+## slot -> goal index the bot is pushing the football toward.
+var _bot_ball: Dictionary[int, int] = {}
 var _rng := RandomNumberGenerator.new()
 
 
@@ -163,8 +223,13 @@ func _ready() -> void:
 	_collect_emissives()
 	_build_lights()
 	_apply_look()
+	_build_toys()
 	add_to_group(Look.QUALITY_GROUP)
 	apply_quality()
+	if not Session.state_changed.is_connected(_on_session_state_changed):
+		Session.state_changed.connect(_on_session_state_changed)
+	if SyncHub.is_networked(multiplayer) and not multiplayer.is_server():
+		send_host(&"_rpc_toy_hello", [])
 
 
 ## Look quality switch (also live): LOW keeps the fire (unshadowed), the chandeliers and the
@@ -192,8 +257,18 @@ func get_bot_goal(player: Player) -> Vector3:
 	if player == null:
 		return STAIR_FOOT
 	var pos := player.global_position
+	# Chasing the ball: follow it for a while, then do something else.
+	if _bot_ball.has(player.slot) and football:
+		if _rng.randf() < 0.12 or pos.y > 1.0:
+			_bot_ball.erase(player.slot)
+		else:
+			return _clamp_safe(football_bot_point(pos, _bot_ball[player.slot]))
 	var plan: Vector3 = _bot_plans.get(player.slot, Vector3.INF)
 	if plan == Vector3.INF or _flat(plan - pos).length() < 1.3 or _rng.randf() < 0.25:
+		if football and pos.y < 1.0 and _rng.randf() < BOT_BALL_CHANCE:
+			_bot_ball[player.slot] = _rng.randi() % 2
+			_bot_plans.erase(player.slot)
+			return _clamp_safe(football_bot_point(pos, _bot_ball[player.slot]))
 		plan = _new_plan(pos)
 		_bot_plans[player.slot] = plan
 	if plan.y > 1.0 and pos.y < 1.0 and _flat(pos - STAIR_FOOT).length() > 1.5:
@@ -236,12 +311,13 @@ func get_cushion_tops() -> Array[Vector3]:
 
 # --- Per frame ---------------------------------------------------------------------------------
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	for p in _live_players():
 		_track(p)
-	if not multiplayer.is_server():
+	if not is_host():
 		return
-	for p in _live_players():
+	var live := _live_players()
+	for p in live:
 		if p.global_position.y < KILL_Y:
 			var points := get_spawn_points()
 			if points.is_empty():
@@ -249,6 +325,17 @@ func _physics_process(_delta: float) -> void:
 			var xform := points[maxi(p.slot, 0) % points.size()]
 			xform.origin += Vector3.UP * 0.3
 			p.respawn_at(xform)
+	if bell:
+		bell.host_tick(delta, live)
+	if photo:
+		photo.host_tick(delta, live)
+	if seesaw:
+		seesaw.host_tick(delta, live)
+	if not toy_peers.is_empty():
+		var alive := SyncHub.live_peers(multiplayer)
+		for id: int in toy_peers.keys():
+			if not alive.has(id):
+				toy_peers.erase(id)
 
 
 func _process(delta: float) -> void:
@@ -277,14 +364,16 @@ func _update_portal(delta: float, live: Array[Player]) -> void:
 			crowd += 1
 	_portal_crowd = crowd
 	_portal_heat = move_toward(_portal_heat, clampf(crowd / 3.0, 0.0, 1.0), delta * 1.5)
-	_portal_phase += delta * (1.8 + 6.0 * _portal_heat)
+	_portal_phase += delta * (1.8 + 6.0 * _portal_heat + 8.0 * _portal_flare)
 	var pulse := 0.5 + 0.5 * sin(_portal_phase)
+	var flare := 6.0 * _portal_flare
 	if _emit.has("EmitPortal"):
-		_emit["EmitPortal"].emission_energy_multiplier = 1.6 + 1.4 * pulse + 4.0 * _portal_heat
+		_emit["EmitPortal"].emission_energy_multiplier = 1.6 + 1.4 * pulse + 4.0 * _portal_heat + flare
 	if _emit.has("EmitPortalDeep"):
-		_emit["EmitPortalDeep"].emission_energy_multiplier = 0.9 + 1.2 * (1.0 - pulse) + 3.0 * _portal_heat
+		_emit["EmitPortalDeep"].emission_energy_multiplier = 0.9 + 1.2 * (1.0 - pulse) + 3.0 * _portal_heat + flare
 	if _portal_light:
-		_portal_light.light_energy = 1.4 + 1.2 * pulse + 4.0 * _portal_heat
+		_portal_light.light_energy = 1.4 + 1.2 * pulse + 4.0 * _portal_heat + flare
+		_portal_light.light_color = _portal_light_color
 
 
 func _update_keys(delta: float, live: Array[Player]) -> void:
@@ -310,10 +399,20 @@ func _track(p: Player) -> void:
 		return
 	_tracked[p.get_instance_id()] = true
 	p.landed.connect(_on_player_landed.bind(p))
+	p.shove_started.connect(_on_player_shove_started.bind(p))
 
 
+## Every peer, for every blob (the `landed` event is synced): the trampoline squashes (and the
+## blob's authority launches it), the host checks the see-saw catapult, the authority checks
+## the cushions.
 func _on_player_landed(impact_speed: float, p: Player) -> void:
-	if not is_instance_valid(p) or not p.alive or not p.is_authority():
+	if not is_instance_valid(p) or not p.alive:
+		return
+	if trampoline and trampoline.on_landed(p, impact_speed):
+		return
+	if seesaw and is_host():
+		seesaw.host_landed(p, impact_speed, _live_players())
+	if not p.is_authority():
 		return
 	for i in p.get_slide_collision_count():
 		var hit := p.get_slide_collision(i)
@@ -321,6 +420,314 @@ func _on_player_landed(impact_speed: float, p: Player) -> void:
 			p.velocity.y = clampf(maxf(cushion_bounce_speed, impact_speed * 0.8), 0.0, cushion_bounce_max)
 			cushion_bounced.emit(p.slot)
 			return
+
+
+# --- Toys: shoves, launches ------------------------------------------------------------------------
+
+## The shover's authority: the ball may come into reach; the bell or the photo button may be hit
+## (the host decides; a client asks it).
+func _on_player_shove_started(p: Player) -> void:
+	if not is_instance_valid(p) or not p.alive or not p.is_authority() or p.frozen:
+		return
+	if football:
+		football.on_shove_started(p)
+	var toy := _toy_in_reach(p.global_position, p.facing, 0.0)
+	if toy == &"":
+		return
+	if is_host():
+		host_toy_shove(p, toy, p.global_position, p.facing)
+	else:
+		send_host(&"_rpc_toy_shove", [p.slot, String(toy), p.global_position, p.facing])
+
+
+func _toy_in_reach(pos: Vector3, facing: Vector3, extra: float) -> StringName:
+	if bell and bell.in_reach(pos, facing, extra):
+		return &"bell"
+	if photo and photo.in_reach(pos, facing, extra):
+		return &"photo"
+	return &""
+
+
+## Host: a shove by `p` (at `pos`, looking along `facing`) on `toy`. Checked again here (with a
+## tolerance for what a client reported). True if the toy reacted.
+func host_toy_shove(p: Player, toy: StringName, pos: Vector3, facing: Vector3) -> bool:
+	match toy:
+		&"bell":
+			if bell and bell.in_reach(pos, facing, 0.6):
+				return bell.host_ring(1.0, facing)
+		&"photo":
+			if photo and photo.in_reach(pos, facing, 0.6):
+				return photo.host_press()
+	return false
+
+
+## Host: throws `p` up so it peaks `height` m higher, plus `horizontal` speed; applied by p's
+## own authority (here for the host's blobs and the bots, else by an RPC to its peer).
+func launch_player(p: Player, height: float, horizontal: Vector3 = Vector3.ZERO) -> void:
+	if p.is_authority():
+		_apply_launch(p, height, horizontal)
+		return
+	var peer := p.get_multiplayer_authority()
+	if toy_peers.has(peer) and SyncHub.live_peers(multiplayer).has(peer):
+		rpc_id(peer, &"_rpc_launch", p.slot, height, horizontal)
+
+
+static func _apply_launch(p: Player, height: float, horizontal: Vector3) -> void:
+	Trampoline.launch(p, height)
+	p.velocity.x += horizontal.x
+	p.velocity.z += horizontal.z
+
+
+## True when a blob at `p_pos` facing `facing` can shove something at `target` (radius
+## `target_radius`): its surface within `reach` of the blob's (0.4 m), within `cone_deg` of the
+## facing, and `target` between `y_lo` and `y_hi` above the blob's feet.
+static func reach_check(p_pos: Vector3, facing: Vector3, target: Vector3, target_radius: float, reach: float,
+		cone_deg: float, y_lo: float, y_hi: float) -> bool:
+	if not p_pos.is_finite() or not facing.is_finite():
+		return false
+	var dy := target.y - p_pos.y
+	if dy < y_lo or dy > y_hi:
+		return false
+	var to := Vector2(target.x - p_pos.x, target.z - p_pos.z)
+	var dist := to.length()
+	if dist - target_radius - 0.4 > reach:
+		return false
+	var f := Vector2(facing.x, facing.z)
+	if f.length_squared() < 0.0001 or dist < 0.0001:
+		return true
+	return f.normalized().dot(to / dist) >= cos(deg_to_rad(minf(cone_deg, 179.0)))
+
+
+# --- Toys: networking ------------------------------------------------------------------------------
+
+## True on the peer that decides (the host, or offline).
+func is_host() -> bool:
+	return not SyncHub.is_networked(multiplayer) or multiplayer.is_server()
+
+
+## Host: calls RPC `method` on every client whose lobby is ready (not locally).
+func send_toys(method: StringName, args: Array) -> void:
+	if toy_peers.is_empty() or not SyncHub.is_networked(multiplayer) or not multiplayer.is_server():
+		return
+	for id in SyncHub.live_peers(multiplayer):
+		if toy_peers.has(id):
+			callv(&"rpc_id", [id, method] + args)
+
+
+## Client: calls RPC `method` on the host.
+func send_host(method: StringName, args: Array) -> void:
+	if not SyncHub.is_networked(multiplayer) or multiplayer.is_server():
+		return
+	if SyncHub.live_peers(multiplayer).has(1):
+		callv(&"rpc_id", [1, method] + args)
+
+
+func _toy_snapshot() -> Array:
+	var b := football.ball if football else BallSim.State.new()
+	return [Football.tonight[0], Football.tonight[1], b.pos, b.vel, b.spin,
+		seesaw.angle if seesaw else 0.0, seesaw.ang_vel if seesaw else 0.0]
+
+
+## A client's lobby is built: from now on it gets the toys' traffic, starting with a snapshot.
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_toy_hello() -> void:
+	if not is_host():
+		return
+	var id := multiplayer.get_remote_sender_id()
+	toy_peers[id] = true
+	rpc_id(id, &"_rpc_toy_snapshot", _toy_snapshot())
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_toy_snapshot(data: Variant) -> void:
+	if typeof(data) != TYPE_ARRAY or (data as Array).size() < 7:
+		return
+	var d: Array = data
+	if football and typeof(d[2]) == TYPE_VECTOR3 and typeof(d[3]) == TYPE_VECTOR3 and typeof(d[4]) == TYPE_VECTOR3:
+		football.apply_snapshot(int(d[0]), int(d[1]), d[2], d[3], d[4])
+	if seesaw:
+		seesaw.apply_state(float(d[5]), float(d[6]))
+
+
+@rpc("authority", "call_remote", "unreliable")
+func _rpc_ball_state(seq: Variant, pos: Variant, vel: Variant, spin: Variant) -> void:
+	if football and typeof(seq) == TYPE_INT and typeof(pos) == TYPE_VECTOR3 and typeof(vel) == TYPE_VECTOR3 \
+			and typeof(spin) == TYPE_VECTOR3:
+		football.apply_state(seq, pos, vel, spin)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_ball_kicked(slot: Variant, pos: Variant, vel: Variant, spin: Variant) -> void:
+	if football and typeof(slot) == TYPE_INT and typeof(pos) == TYPE_VECTOR3 and typeof(vel) == TYPE_VECTOR3 \
+			and typeof(spin) == TYPE_VECTOR3:
+		football.apply_kicked(slot, pos, vel, spin)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_ball_goal(goal: Variant, c0: Variant, c1: Variant) -> void:
+	if football and typeof(goal) == TYPE_INT and goal >= 0 and goal <= 1:
+		football.apply_goal(goal, int(c0), int(c1))
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_ball_reset() -> void:
+	if football:
+		football.reset_ball()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_ball_touch(slot: Variant, ppos: Variant, pvel: Variant) -> void:
+	var p := _reported_player(slot, ppos)
+	if p and football and typeof(pvel) == TYPE_VECTOR3:
+		football.host_touch(p, ppos, pvel)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_ball_kick_request(slot: Variant, ppos: Variant, facing: Variant) -> void:
+	var p := _reported_player(slot, ppos)
+	if p and football and typeof(facing) == TYPE_VECTOR3:
+		football.host_kick_request(p, ppos, facing)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_toy_shove(slot: Variant, toy: Variant, ppos: Variant, facing: Variant) -> void:
+	var p := _reported_player(slot, ppos)
+	if p == null or typeof(toy) != TYPE_STRING or typeof(facing) != TYPE_VECTOR3 or p.frozen:
+		return
+	if (ppos as Vector3).distance_to(p.global_position) > 3.0:
+		return
+	host_toy_shove(p, StringName(toy), ppos, facing)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_bell_ring(strength: Variant, dir: Variant) -> void:
+	if bell and typeof(strength) == TYPE_FLOAT and typeof(dir) == TYPE_FLOAT:
+		bell.apply_ring(clampf(strength, 0.0, 1.0), signf(dir) if dir != 0.0 else 1.0)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_photo_start() -> void:
+	if photo:
+		photo.apply_start()
+
+
+@rpc("authority", "call_remote", "unreliable")
+func _rpc_seesaw_state(a: Variant, w: Variant) -> void:
+	if seesaw and typeof(a) == TYPE_FLOAT and typeof(w) == TYPE_FLOAT and is_finite(a) and is_finite(w):
+		seesaw.apply_state(a, w)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_seesaw_fling(jumper: Variant, launched: Variant) -> void:
+	if seesaw and typeof(jumper) == TYPE_INT and typeof(launched) == TYPE_ARRAY:
+		seesaw.apply_fling(jumper, launched)
+
+
+## Host -> the peer that simulates `slot`: throw it up (see launch_player).
+@rpc("authority", "call_remote", "reliable")
+func _rpc_launch(slot: Variant, height: Variant, horizontal: Variant) -> void:
+	if typeof(slot) != TYPE_INT or typeof(height) != TYPE_FLOAT or typeof(horizontal) != TYPE_VECTOR3:
+		return
+	var p := player_by_slot(slot)
+	if p == null or not p.is_authority() or p.frozen:
+		return
+	_apply_launch(p, clampf(height, 0.0, 6.0), (horizontal as Vector3).limit_length(4.0))
+
+
+## Host: the player `slot` if the sender simulates it and `ppos` is a finite position.
+func _reported_player(slot: Variant, ppos: Variant) -> Player:
+	if not is_host() or typeof(slot) != TYPE_INT or typeof(ppos) != TYPE_VECTOR3 or not (ppos as Vector3).is_finite():
+		return null
+	var p := player_by_slot(slot)
+	if p == null or p.get_multiplayer_authority() != multiplayer.get_remote_sender_id():
+		return null
+	return p
+
+
+func _on_session_state_changed(state: int) -> void:
+	if state != Session.State.LOBBY and portal_preview:
+		portal_preview.flare()
+
+
+# --- Toys: public helpers --------------------------------------------------------------------------
+
+## Living players in the hall (every peer).
+func live_players() -> Array[Player]:
+	return _live_players()
+
+
+func player_by_slot(slot: int) -> Player:
+	for p in players:
+		if is_instance_valid(p) and p.slot == slot and p.is_inside_tree() and p.alive:
+			return p
+	return null
+
+
+## A StaticBody3D on the world layer under the toys root.
+func make_static_body(body_name: String) -> StaticBody3D:
+	var b := StaticBody3D.new()
+	b.name = body_name
+	b.collision_layer = 1
+	b.collision_mask = 0
+	_toys_root.add_child(b)
+	return b
+
+
+## A box collider on `body` that the football also bounces off (`bounce`).
+func add_solid_box(body: StaticBody3D, xform: Transform3D, size: Vector3, bounce: float = 0.55) -> void:
+	_box(body, xform, size)
+	ball_solids.append([&"box", xform, size, bounce])
+
+
+## A vertical cylinder collider on `body` standing on `base`; the football bounces off it too.
+func add_solid_cylinder(body: StaticBody3D, base: Vector3, radius: float, height: float, bounce: float = 0.55) -> void:
+	var shape := CylinderShape3D.new()
+	shape.radius = radius
+	shape.height = height
+	_shape(body, Transform3D(Basis(), base + Vector3.UP * height * 0.5), shape)
+	ball_solids.append([&"cylinder", base, radius, height, bounce])
+
+
+## The lobby's own copy of a kit emissive material (EmitPortal, EmitPortalDeep, ...), or null.
+func emit_material(mat_name: StringName) -> StandardMaterial3D:
+	return _emit.get(String(mat_name)) as StandardMaterial3D
+
+
+## The portal preview tints the portal light and flares it.
+func set_portal_tint(color: Color, flare: float) -> void:
+	_portal_light_color = Color(0.35, 1.0, 0.88).lerp(color, 0.5)
+	_portal_flare = flare
+
+
+func _register_toy_sounds() -> void:
+	for sound: StringName in TOY_SOUNDS:
+		if not Sfx.sounds.has(sound):
+			Sfx.sounds[sound] = (TOY_SOUNDS[sound] as Dictionary).duplicate()
+
+
+func _build_toys() -> void:
+	_register_toy_sounds()
+	_toys_root = _group("Toys", self)
+	trampoline = _toy(Trampoline.new(), "Trampoline") as Trampoline
+	trampoline.setup(self, TRAMPOLINE_POS)
+	seesaw = _toy(Seesaw.new(), "Seesaw") as Seesaw
+	seesaw.setup(self, SEESAW_POS)
+	bell = _toy(Bell.new(), "Bell") as Bell
+	bell.setup(self, BELL_POS)
+	photo = _toy(Photo.new(), "Photo") as Photo
+	photo.setup(self, PHOTO_POS)
+	portal_preview = _toy(PortalPreview.new(), "PortalPreview") as PortalPreview
+	portal_preview.setup(self, PORTAL_PREVIEW_POS)
+	# The football last: its sim takes every solid built so far as an obstacle.
+	football = _toy(Football.new(), "Football") as Football
+	football.setup(self)
+	football.track_moving(seesaw.plank_box_xform(), Seesaw.PLANK_SIZE, 0.5, seesaw.plank_box_xform)
+
+
+func _toy(node: Node3D, toy_name: String) -> Node3D:
+	node.name = toy_name
+	_toys_root.add_child(node)
+	return node
 
 
 # --- Building: shell -------------------------------------------------------------------------
@@ -393,6 +800,14 @@ func _build_stairs() -> void:
 		pts.append_array([Vector3(x, -0.2, 3.675), Vector3(x, LANDING_Y, -1.275), Vector3(x, LANDING_Y, -3.0), Vector3(x, -0.2, -3.0)])
 	prism.points = pts
 	_shape(_body, xf, prism)
+	# For the football: the ramp as a slab tilted under its surface, and the landing block.
+	var ramp_slope := atan2(2.2, 4.95)
+	var ramp_normal := Vector3(0.0, cos(ramp_slope), sin(ramp_slope))
+	var ramp_top := Vector3(0.0, 0.9, 1.2)
+	var ramp_len := sqrt(4.95 * 4.95 + 2.2 * 2.2)
+	ball_solids.append([&"box", xf * Transform3D(Basis(Vector3.RIGHT, ramp_slope), ramp_top - ramp_normal * 0.5),
+		Vector3(6.0, 1.0, ramp_len), 0.4])
+	ball_solids.append([&"box", xf * Transform3D(Basis(), Vector3(0.0, 0.9, -2.1375)), Vector3(6.0, 2.2, 1.725), 0.4])
 	# Banisters: a slab along each side of the ramp, and one along each side of the landing.
 	var slope := atan2(2.0, 4.5)
 	var normal := Vector3(0.0, cos(slope), sin(slope))
@@ -423,8 +838,7 @@ func _build_furniture() -> void:
 	_furnish("side_table", Vector3(-5.9, 0.0, -1.25), 0.0, TABLE_BOXES)
 	_furnish("candelabra", Vector3(-11.45, 0.0, -5.0), 90.0, CANDELABRA_BOXES)
 	_furnish("candelabra", Vector3(-11.45, 0.0, -1.0), 90.0, CANDELABRA_BOXES)
-	# Back left: bookshelf, grandfather clock, plant.
-	_furnish("bookshelf", Vector3(-8.2, 0.0, -8.55), 0.0, SHELF_BOXES)
+	# Back left: grandfather clock, plant (the photo spot stands where a bookshelf was).
 	_furnish("grandfather_clock", Vector3(-5.3, 0.0, -8.55), 0.0, CLOCK_BOXES)
 	_furnish("potted_plant", Vector3(-11.1, 0.0, -8.1), 0.0, PLANT_BOXES)
 	# Piano corner (back right): grand piano with the floor keyboard in front of it.
@@ -432,9 +846,8 @@ func _build_furniture() -> void:
 	_furnish("candelabra", Vector3(4.75, 0.0, -8.5), 0.0, CANDELABRA_BOXES)
 	_furnish("candelabra", Vector3(7.3, 0.0, -8.5), 0.0, CANDELABRA_BOXES)
 	_furnish("potted_plant", Vector3(11.1, 0.0, -8.1), 0.0, PLANT_BOXES)
-	# Right wall: a sofa under the windows, a bookshelf further forward.
+	# Right wall: a sofa under the windows, a bookshelf further forward (the blue goal between).
 	_furnish("sofa", Vector3(11.1, 0.0, -1.0), -90.0, SOFA_BOXES, SOFA_CUSHION)
-	_furnish("side_table", Vector3(11.2, 0.0, 0.7), 0.0, TABLE_BOXES)
 	_furnish("bookshelf", Vector3(11.6, 0.0, 4.6), -90.0, SHELF_BOXES)
 	# Left front: bookshelf and a reading armchair.
 	_furnish("bookshelf", Vector3(-11.6, 0.0, 4.6), 90.0, SHELF_BOXES)
@@ -445,7 +858,6 @@ func _build_furniture() -> void:
 
 func _build_decor() -> void:
 	_place("rug_long", Vector3(0.0, 0.005, 3.4))
-	_place("portrait_frame_c", Vector3(-6.0, 2.9, -8.83))
 	_place("portrait_frame_c", Vector3(11.83, 2.4, -6.6), -90.0)
 	_place("portrait_frame_b", Vector3(-11.83, 2.3, 4.6 + 2.2), 90.0)
 	_place("portrait_frame_a", Vector3(11.83, 2.3, 4.6 - 2.2), -90.0)
@@ -619,6 +1031,9 @@ func _box(body: StaticBody3D, xform: Transform3D, size: Vector3) -> void:
 	var shape := BoxShape3D.new()
 	shape.size = size
 	_shape(body, xform, shape)
+	# The hall's solids are the football's obstacles too (not the floor slab: the ball has its own).
+	if (body == _body or body == _cushions) and xform.origin.y + size.y * 0.5 > 0.01:
+		ball_solids.append([&"box", xform, size, 0.9 if body == _cushions else 0.55])
 
 
 func _shape(body: StaticBody3D, xform: Transform3D, shape: Shape3D) -> void:
@@ -667,7 +1082,9 @@ func _flat_material(color: Color, roughness: float) -> StandardMaterial3D:
 
 func _new_plan(pos: Vector3) -> Vector3:
 	var goal: Vector3
-	if _rng.randf() < 0.3 and pos.y < 1.0:
+	if _rng.randf() < BOT_TOY_CHANCE and pos.y < 1.0 and trampoline:
+		goal = toy_bot_goal(pos, _rng.randf())
+	elif _rng.randf() < 0.3 and pos.y < 1.0:
 		goal = pos + Vector3(_rng.randf_range(-2.5, 2.5), 0.0, _rng.randf_range(-2.5, 2.5))
 		goal.y = 0.0
 	else:
@@ -677,6 +1094,38 @@ func _new_plan(pos: Vector3) -> Vector3:
 	goal.x = clampf(goal.x, SAFE_MIN.x + 0.3, SAFE_MAX.x - 0.3)
 	goal.z = clampf(goal.z, SAFE_MIN.y + 0.3, SAFE_MAX.y - 0.3)
 	return goal
+
+
+## A toy for a bot to play with, picked by `roll` (0..1): the football (behind the ball, toward
+## a goal), the trampoline, a see-saw end, the bell (walking into it rings it), the photo area or
+## its button (walking into it presses it).
+func toy_bot_goal(_pos: Vector3, roll: float) -> Vector3:
+	if roll < 0.3:
+		var a := _rng.randf() * TAU
+		return TRAMPOLINE_POS + Vector3(cos(a) * 0.5, Trampoline.TOP, sin(a) * 0.5)
+	if roll < 0.55:
+		return SEESAW_POS + Vector3((1.0 if _rng.randf() < 0.5 else -1.0) * 1.6, 0.0, 0.0)
+	if roll < 0.7:
+		return BELL_POS + Vector3(0.0, 0.0, 0.6)
+	if roll < 0.88:
+		return PHOTO_POS + Vector3(_rng.randf_range(-1.0, 1.0), 0.0, _rng.randf_range(Photo.AREA_Z0 + 0.3, Photo.AREA_Z1 - 0.3))
+	return PHOTO_POS + Photo.BUTTON_OFFSET + Vector3(0.0, 0.0, 0.35)
+
+
+## Where a bot should run to push the ball toward goal `g`: behind the ball, or through it.
+func football_bot_point(pos: Vector3, g: int) -> Vector3:
+	var b := football.ball.pos
+	var aim := Football.goal_xform(g).origin
+	var dir := Vector3(aim.x - b.x, 0.0, aim.z - b.z)
+	dir = dir.normalized() if dir.length_squared() > 0.01 else Vector3.RIGHT
+	var me := Vector3(pos.x - b.x, 0.0, pos.z - b.z)
+	var out: Vector3
+	if me.dot(dir) < -0.3 and me.normalized().dot(-dir) > 0.8:
+		out = b + dir * 1.6  # lined up behind it: run through
+	else:
+		out = b - dir * (Football.RADIUS + 0.7)
+	out.y = 0.0
+	return out
 
 
 func _live_players() -> Array[Player]:
@@ -689,3 +1138,7 @@ func _live_players() -> Array[Player]:
 
 static func _flat(v: Vector3) -> Vector2:
 	return Vector2(v.x, v.z)
+
+
+static func _clamp_safe(v: Vector3) -> Vector3:
+	return Vector3(clampf(v.x, SAFE_MIN.x + 0.3, SAFE_MAX.x - 0.3), maxf(v.y, 0.0), clampf(v.z, SAFE_MIN.y + 0.3, SAFE_MAX.y - 0.3))
