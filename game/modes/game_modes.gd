@@ -16,9 +16,10 @@ const VOTE_CANDIDATES := 3
 
 ## The ids a round may draw from: `ticked` (all playable when empty or in SHUFFLE) that fit
 ## `player_count`, in registry order. Falls back to every fitting playable id when that is empty,
-## then to every playable id (a session never stalls).
-static func pool(order: int, ticked: Array, player_count: int) -> Array[StringName]:
-	var all := MinigameCatalog.playable()
+## then to every playable id (a session never stalls). `from`: the playable ids (default: the
+## registry; tests pass their own).
+static func pool(order: int, ticked: Array, player_count: int, from: Array[StringName] = []) -> Array[StringName]:
+	var all := from if not from.is_empty() else MinigameCatalog.playable()
 	var src: Array[StringName] = []
 	for id in all:
 		if order == Order.SHUFFLE or ticked.is_empty() or ticked.has(id) or ticked.has(String(id)):

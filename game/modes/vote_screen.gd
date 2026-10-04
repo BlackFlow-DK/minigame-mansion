@@ -28,6 +28,7 @@ var _card_names: Array[Label] = []
 var _card_counts: Array[Label] = []
 var _card_markers: Array[HFlowContainer] = []
 var _card_you: Array[Label] = []
+var _card_tabs: Array[PanelContainer] = []
 var _row: HBoxContainer
 var _pop: Tween
 
@@ -123,9 +124,10 @@ func refresh() -> void:
 			if is_mine:
 				style.border_color = my_color
 				style.set_border_width_all(9)
-		_card_you[i].visible = is_mine and not decided
-		_card_you[i].text = "YOU (LOCKED)" if locked else "YOU"
-		_card_you[i].add_theme_color_override(&"font_color", my_color)
+		_card_tabs[i].visible = is_mine and not decided
+		_card_you[i].text = "YOU: LOCKED" if locked else "YOU"
+		(_card_tabs[i].get_theme_stylebox(&"panel") as StyleBoxFlat).bg_color = my_color
+		_card_tabs[i].reset_size()
 		_card_counts[i].text = "%d vote%s" % [counts[i], "" if counts[i] == 1 else "s"]
 		var want: Array[int] = []
 		for s: int in RoundStyle.roster_slots():
@@ -212,9 +214,11 @@ func _build_card(i: int) -> void:
 	var icon := RoundStyle.panel(icon_style)
 	icon.custom_minimum_size = Vector2(0, 112)
 	icon.name = "Icon"
-	var initials := RoundStyle.label("", 64, RoundStyle.CREAM, 12)
-	initials.name = "Initials"
-	icon.add_child(initials)
+	var glyph := KindIcon.new(&"party", 100.0)
+	glyph.name = "Glyph"
+	glyph.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon.add_child(glyph)
 	v.add_child(icon)
 	var name_l := RoundStyle.label("", 32, RoundStyle.PLUM, 0)
 	name_l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -236,8 +240,23 @@ func _build_card(i: int) -> void:
 	rule.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	rule.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	v.add_child(rule)
-	var you := RoundStyle.label("YOU", 18, RoundStyle.GOLD, 6)
-	v.add_child(you)
+	# "YOU" tab hanging on the card's top edge in the local player's colour.
+	var tab_holder := Control.new()
+	tab_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(tab_holder)
+	var tab_style := RoundStyle.box(RoundStyle.GOLD, RoundStyle.CHARCOAL, 4, 14, false)
+	tab_style.set_content_margin_all(2.0)
+	tab_style.content_margin_left = 16.0
+	tab_style.content_margin_right = 16.0
+	var tab := RoundStyle.panel(tab_style)
+	tab.name = "YouTab"
+	tab.anchor_left = 0.5
+	tab.anchor_right = 0.5
+	tab.offset_top = -38.0
+	tab.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	var you := RoundStyle.label("YOU", 20, RoundStyle.CREAM, 6)
+	tab.add_child(you)
+	tab_holder.add_child(tab)
 	var markers := HFlowContainer.new()
 	markers.alignment = FlowContainer.ALIGNMENT_CENTER
 	markers.add_theme_constant_override(&"h_separation", 3)
@@ -253,6 +272,7 @@ func _build_card(i: int) -> void:
 	_card_counts.append(count)
 	_card_markers.append(markers)
 	_card_you.append(you)
+	_card_tabs.append(tab)
 
 
 func _fill_card(i: int, info: Dictionary) -> void:
@@ -261,16 +281,7 @@ func _fill_card(i: int, info: Dictionary) -> void:
 	var icon := card.find_child("Icon", true, false) as PanelContainer
 	var icon_style := icon.get_theme_stylebox(&"panel") as StyleBoxFlat
 	icon_style.bg_color = info["color"]
-	var initials := icon.find_child("Initials", true, false) as Label
-	var words := str(info["name"]).split(" ", false)
-	var letters := ""
-	for w in words:
-		if letters.length() < 2 and w.length() > 0 and w[0] == w[0].to_upper():
-			letters += w[0]
-	initials.text = letters
-	var bright: Color = info["color"]
-	initials.add_theme_color_override(&"font_color", RoundStyle.CHARCOAL if bright.get_luminance() > 0.72 else RoundStyle.CREAM)
-	initials.add_theme_constant_override(&"outline_size", 0 if bright.get_luminance() > 0.72 else 12)
+	(icon.find_child("Glyph", true, false) as KindIcon).kind = info["kind"]
 	var kind := card.find_child("Kind", true, false) as PanelContainer
 	(kind.get_child(0) as Label).text = str(info["kind_name"]).to_upper()
 	(card.find_child("Rule", true, false) as Label).text = str(info["rule"])
