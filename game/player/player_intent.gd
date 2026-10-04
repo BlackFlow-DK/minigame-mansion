@@ -12,6 +12,8 @@ var jump_pressed: bool = false
 var jump_held: bool = false
 ## True only on the tick the action button went down.
 var action_pressed: bool = false
+## Emote key 1..4 on the tick it went down (0 = none). Read by the `emote` component.
+var emote: int = 0
 
 
 ## Resets to "no input".
@@ -20,3 +22,4 @@ func clear() -> void:
 	jump_pressed = false
 	jump_held = false
 	action_pressed = false
+	emote = 0

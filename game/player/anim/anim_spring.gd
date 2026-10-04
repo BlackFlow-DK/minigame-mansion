@@ -24,6 +24,8 @@ func _init(start: float = 0.0, spring_stiffness: float = 200.0, spring_damping: 
 
 ## Advances the spring by `delta` seconds toward `target`; returns the new value.
 func step(target: float, delta: float) -> float:
+	if value == target and velocity == 0.0:
+		return value  # at rest: nothing to integrate
 	var left := clampf(delta, 0.0, MAX_DELTA)
 	while left > 0.0:
 		var h := minf(left, MAX_SUBSTEP)
