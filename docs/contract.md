@@ -124,6 +124,8 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 
 Jumps need no hook: the brain probes ahead while running and jumps onto ledges up to its apex (minus 0.15 m) with safe ground on top and across holes `is_safe` says nothing about when the far side is in range, holds for full height, does not hop at walls it cannot clear and stops at holes it cannot jump. `is_safe`-marked gaps keep the older gap jump (with a skill-based take-off error).
 
+Budget: brains think inside physics ticks, so their work is spread over frames: one think (goal, chase target, action hook) per frame for all brains together, the full safety search at most every 0.1-0.16 s per bot and two per frame, every `is_safe(pos)` answer shared by all brains for the rest of the physics frame (keyed on the position to 2 cm, so `is_safe` must depend on the position and the minigame's state only, never on who asks), and at most ~120 samples per bot per tick. Keep `is_safe` O(1) (a grid / cell lookup, no walks over every piece): expect 30-250 calls per frame with 8 bots. `BotBrain.profile` / `budget_enabled` (tests) measure it.
+
 Skill: `BotBrain.difficulty` (static, 0.5 default; host-wide, no UI yet) maps onto the range rolled skills land in (`skill_range`: 0 -> 0.05..0.55, 0.5 -> 0.35..0.95, 1 -> 0.7..1.0); an explicit `configure(seed, skill)` keeps its skill. `BotBrain.of(p)`: `is_held()`, `reaction_time()`, `is_acting()`, `skill`.
 
 ## Character model and cosmetics

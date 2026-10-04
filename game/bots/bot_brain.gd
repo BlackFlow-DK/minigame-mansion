@@ -181,9 +181,9 @@ const HIGH_WALL_GIVE_UP := 0.6
 
 # Hold and action hooks.
 ## Seconds to notice a hold coming on (stop) / going off (go): by skill, plus random jitter.
-const HOLD_STOP := Vector2(1.04, 0.15)
+const HOLD_STOP := Vector2(1.04, 0.2)
 const HOLD_STOP_JITTER := 0.4
-const HOLD_GO := Vector2(0.8, 0.25)
+const HOLD_GO := Vector2(0.8, 0.3)
 const HOLD_GO_JITTER := 0.25
 ## Seconds from the action hook's yes (seen at a think) to the press, x 0.8..1.25.
 const ACTION_REACTION := Vector2(0.4, 0.1)
@@ -303,6 +303,7 @@ var _solo: bool = false             # driven several times per physics frame (a 
 var _plan_speed: float = 0.0       # least speed along the plan for a planned gap jump
 var _radius_cache: float = 0.0
 var _pass_samples: int = 0
+var _phase: int = 0                # this brain's budget frames (from its seed)
 var _hooked: Minigame = null
 # Hooks (looked up once per minigame).
 var _hooks_game: Minigame = null
@@ -380,6 +381,7 @@ func configure(seed_value: int, skill_value: float = -1.0, aggression_value: flo
 	_turn_sign = 1.0 if _rng.randf() < 0.5 else -1.0
 	_danger_reaction = _lerp_skill(DANGER_REACTION) * _rng.randf_range(0.8, 1.25)
 	_configured = true
+	_phase = _rng_b.randi() % BUDGET_SLOTS
 	_hold_known = false
 	_act_cd = 0.0
 	acts = 0
@@ -417,6 +419,7 @@ func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector
 	_clock = 0.0
 	state = State.NONE
 	_configured = true
+	_phase = _rng_b.randi() % BUDGET_SLOTS
 	_hold_known = false
 	_end_act()
 
@@ -983,8 +986,11 @@ func _toward_safety(game: Minigame, pos: Vector3) -> Vector2:
 # all brains for the rest of the physics frame (positions to 2 cm, heights to 10 cm). A brain driven
 # several times in one physics frame (tests) skips the shared budget and cache.
 
-const THINKS_PER_FRAME := 1
-const HEAVY_PER_FRAME := 2
+## Each brain gets one frame in BUDGET_SLOTS for a think and another for a full safety search (a
+## per-bot phase), and no frame grants more than THINKS_PER_FRAME / HEAVY_PER_FRAME of them.
+const BUDGET_SLOTS := 4
+const THINKS_PER_FRAME := 3
+const HEAVY_PER_FRAME := 3
 const SAFETY_INTERVAL := Vector2(0.16, 0.1)
 const HEAVY_WAIT_MAX := 2
 ## The widening searches of one safety pass stop after about this many is_safe samples.
@@ -1013,6 +1019,9 @@ func _frame_begin() -> void:
 func _take_budget(think: bool) -> bool:
 	if _solo or not budget_enabled:
 		return true
+	# This bot's own frames only (a phase from its seed, never its slot: no bot is always first).
+	if (_seen_frame + _phase) % BUDGET_SLOTS != (0 if think else BUDGET_SLOTS / 2):
+		return false
 	if think:
 		if _thinks_left <= 0:
 			return false
