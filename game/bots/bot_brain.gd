@@ -162,7 +162,7 @@ const HOP_AIR_TIME := 0.6
 
 # Jump probes (physics).
 ## Seconds between probes while running on the floor (low skill, high skill).
-const PROBE_INTERVAL := Vector2(0.2, 0.1)
+const PROBE_INTERVAL := Vector2(0.16, 0.08)
 ## Physics layer mask the probes see (1 = world).
 const PROBE_MASK := 1
 ## Feet must clear a ledge top by this much (m): ledges up to apex - LEDGE_CLEARANCE are jumpable.
@@ -1145,8 +1145,12 @@ func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2, game: Minigam
 		if _blocked_time > HIGH_WALL_GIVE_UP:
 			_blocked_time = 0.0
 			_wall_high = false
+			# Along the wall, on the side its target lies (a coin flip when straight behind it).
+			var side := _flat(player.facing).orthogonal()
+			var aim := _flat((_target_seen if state == State.CHASE and _target else _goal) - pos)
+			var lean := side.dot(aim)
+			_wander_dir = side * (signf(lean) if absf(lean) > 0.1 else (1.0 if _rng_b.randf() < 0.5 else -1.0))
 			state = State.WANDER
-			_wander_dir = _flat(player.facing).orthogonal() * (1.0 if _rng_b.randf() < 0.5 else -1.0)
 			_rethink = true
 			_think_timer = minf(_think_timer, 0.4)
 	var planned := on_floor and _plan_due(pos)
