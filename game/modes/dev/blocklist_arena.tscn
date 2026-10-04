@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://dev/dev_arena.tscn" id="1"]
+[ext_resource type="Script" path="res://modes/dev/blocklist_arena.gd" id="2"]
+
+[node name="DevArena" instance=ExtResource("1")]
+script = ExtResource("2")
