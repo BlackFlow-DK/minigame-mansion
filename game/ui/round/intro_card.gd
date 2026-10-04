@@ -2,6 +2,7 @@ class_name RoundIntroCard
 extends Control
 ## Title card (minigame title + one-line rule) that slides in, then parks at the top while
 ## a big 3-2-1 counts down. "GO!" belongs to the HUD (shown on Session.round_started).
+## A ribbon under the card shows this player's team ("TEAM ORANGE") and role line, if any.
 ## Owner: round UI.
 
 const CARD_SIZE := Vector2(840, 300)
@@ -24,6 +25,13 @@ var _round_label: Label
 var _title: Label
 var _rule: Label
 var _count: Label
+## Ribbon hanging under the card: this player's team ("TEAM ORANGE") and/or role line.
+var _ribbon: HBoxContainer
+var _team_pill: PanelContainer
+var _team_style: StyleBoxFlat
+var _team_label: Label
+var _role_pill: PanelContainer
+var _role_label: Label
 var _seq: Tween
 var _pop: Tween
 ## The number currently shown (3, 2, 1), 0 before the countdown. Read by tests.
@@ -74,6 +82,7 @@ func _ready() -> void:
 	_rule.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_rule.custom_minimum_size = Vector2(CARD_SIZE.x - 60.0, 0)
 	vbox.add_child(_rule)
+	_build_ribbon()
 
 	var count_center := RoundStyle.centered()
 	count_center.offset_top = 140.0
@@ -86,9 +95,12 @@ func _ready() -> void:
 
 
 ## Starts the title card and countdown for round `index` (0-based) of `count` (0 = unknown).
+## Clears the team and role ribbon (RoundUI sets them after, see set_team / set_role).
 func play(title: String, rule_text: String, index: int, count: int) -> void:
 	stop()
 	count_value = 0
+	set_team(-1)
+	set_role("")
 	_title.text = title.to_upper() if title != "" else "GET READY"
 	_rule.text = rule_text
 	_round_label.text = "ROUND %d OF %d" % [index + 1, count] if count > 0 else "ROUND %d" % (index + 1)
@@ -123,6 +135,78 @@ func get_rule() -> String:
 
 func get_round_text() -> String:
 	return _round_label.text
+
+
+## Shows this player's team under the card ("TEAM ORANGE" in its colour); -1 hides it.
+func set_team(team: int) -> void:
+	_team_pill.visible = team >= 0
+	if team >= 0:
+		_team_label.text = RoundStyle.team_title(team)
+		_team_style.bg_color = Minigame.team_color(team)
+	_update_ribbon()
+
+
+## Shows this player's role line under the card ("" hides it).
+func set_role(text: String) -> void:
+	_role_label.text = text
+	_role_pill.visible = text != ""
+	_update_ribbon()
+
+
+## "TEAM ORANGE" or "" when no team is shown. Read by tests.
+func get_team_text() -> String:
+	return _team_label.text if _team_pill.visible else ""
+
+
+## The role line shown, "" if none. Read by tests.
+func get_role_text() -> String:
+	return _role_label.text if _role_pill.visible else ""
+
+
+func _build_ribbon() -> void:
+	# A free overlay inside the card, so the ribbon moves and scales with it but does not
+	# change the card's layout; it hangs over the bottom edge.
+	var overlay := Control.new()
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_card.add_child(overlay)
+	_ribbon = HBoxContainer.new()
+	_ribbon.add_theme_constant_override(&"separation", 14)
+	_ribbon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ribbon.anchor_left = 0.5
+	_ribbon.anchor_right = 0.5
+	_ribbon.anchor_top = 1.0
+	_ribbon.anchor_bottom = 1.0
+	_ribbon.offset_top = 4.0
+	_ribbon.offset_bottom = 56.0
+	_ribbon.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	overlay.add_child(_ribbon)
+	_team_style = RoundStyle.box(RoundStyle.TEAL, RoundStyle.CHARCOAL, 5, 18)
+	_team_style.set_content_margin_all(4.0)
+	_team_style.content_margin_left = 22.0
+	_team_style.content_margin_right = 22.0
+	_team_pill = RoundStyle.panel(_team_style)
+	_team_label = RoundStyle.label("", 34, RoundStyle.CHARCOAL, 0)
+	_team_pill.add_child(_team_label)
+	_ribbon.add_child(_team_pill)
+	var role_style := RoundStyle.box(RoundStyle.CHARCOAL, RoundStyle.GOLD, 5, 18)
+	role_style.set_content_margin_all(4.0)
+	role_style.content_margin_left = 22.0
+	role_style.content_margin_right = 22.0
+	_role_pill = RoundStyle.panel(role_style)
+	_role_label = RoundStyle.label("", 34, RoundStyle.GOLD, 6)
+	_role_pill.add_child(_role_label)
+	_ribbon.add_child(_role_pill)
+	_team_pill.visible = false
+	_role_pill.visible = false
+	_ribbon.visible = false
+
+
+func _update_ribbon() -> void:
+	_ribbon.visible = _team_pill.visible or _role_pill.visible
+	# Centred under the card: half the ribbon's width either side of the anchor.
+	var w := _ribbon.get_combined_minimum_size().x
+	_ribbon.offset_left = -w * 0.5
+	_ribbon.offset_right = w * 0.5
 
 
 ## Stops every animation (the panel is being hidden).

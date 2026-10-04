@@ -84,6 +84,51 @@ static func total_score(slot: int) -> int:
 	return int(Session.scores.get(slot, 0))
 
 
+# --- Teams and ties ------------------------------------------------------------------
+
+## The minigame of the running round (Session's, else the Stage's), or null.
+static func current_minigame() -> Minigame:
+	if is_instance_valid(Session.current_minigame):
+		return Session.current_minigame
+	var tree := Engine.get_main_loop() as SceneTree
+	var stage := tree.get_first_node_in_group(&"stage") as Stage if tree else null
+	return stage.minigame if stage and is_instance_valid(stage.minigame) else null
+
+
+## slot -> team of the running round's minigame (empty without teams).
+static func current_teams() -> Dictionary:
+	var m := current_minigame()
+	var out: Dictionary = {}
+	if m and m.has_teams():
+		for s: int in m.teams:
+			out[s] = m.teams[s]
+	return out
+
+
+## The tied groups for a round `ranking`: Session.round_groups when they match it, else one
+## slot per group.
+static func groups_for(ranking: Array) -> Array:
+	var groups: Array = Session.round_groups
+	var flat := Minigame.flatten_groups(groups)
+	var same := flat.size() == ranking.size()
+	if same:
+		for i in flat.size():
+			if flat[i] != int(ranking[i]):
+				same = false
+				break
+	if same:
+		return groups
+	var out: Array = []
+	for s: Variant in ranking:
+		out.append([int(s)] as Array[int])
+	return out
+
+
+## "TEAM ORANGE" etc.
+static func team_title(team: int) -> String:
+	return "TEAM %s" % Minigame.team_name(team)
+
+
 static func ordinal(place: int) -> String:
 	match place:
 		1: return "1st"

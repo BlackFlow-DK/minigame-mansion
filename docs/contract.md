@@ -98,6 +98,7 @@ Visuals, effects and sound never get called by mechanics. They listen to these s
 | `fx` | `FxComponent` | look and effects | particles on events |
 | `sfx` | `SfxComponent` | audio | sounds on events |
 | `sync` | `SyncComponent` | player sync | replicates state and events to other peers |
+| `team` | `TeamComponent` | teams (Minigame) | team ring under the blob; `set_team(team, color)` (-1 hides), set by `Minigame.assign_teams` on every peer |
 
 Controller (human): reads the input actions; `intent.move` is camera-relative (forward = away from the active camera, projected on XZ), expressed in world X,Z. `*_pressed` are edges of the held state. `scripted: bool` (tests): when true the controller leaves `intent` alone. The human controller in `controller.gd` belongs to the skeleton; the bot agent does not edit it.
 
@@ -128,7 +129,7 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 | Name | Owner | API (signals in italics) |
 |---|---|---|
 | `Net` | net | `host_game(game_name: String) -> Error`, `join_game(address: String) -> Error`, `start_offline()`, `leave()`, `start_discovery()`, `stop_discovery()`, `is_host() -> bool`, `local_slot() -> int` (-1 if none), `roster: Dictionary[int, PlayerInfo]` (slot -> `PlayerInfo{slot, peer_id, name, is_bot, loadout}`, `game/net/player_info.gd`; `peer_id` is the simulating peer: the owner, or the host (1) for bots), `add_bot() -> int` (slot, -1 if full), `remove_bot(slot)`, `set_local_profile(player_name, loadout)`, `MAX_PLAYERS = 8`, `DEFAULT_PORT = 24565`; *`roster_changed`*, *`games_found(games: Array)`*, *`join_failed(reason: String)`*, *`server_closed`*. Offline: this peer is 1 and the local human is slot 0 |
-| `Session` | session | `start_session(rounds: int)` (host), `state: State`, `scores: Dictionary[int, int]` (slot -> points), `round_index` (0-based, -1 before the first), `round_count`, `current_minigame: Minigame`; *`state_changed(state: State)`*, *`round_intro(info: Dictionary, index: int)`* (info: `{id, title, rule_text}`), *`round_started`*, *`round_finished(ranking: Array[int], points: Dictionary)`*, *`session_finished(final_ranking: Array[int])`*. `enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM }` |
+| `Session` | session | `start_session(rounds: int)` (host), `state: State`, `scores: Dictionary[int, int]` (slot -> points), `round_index` (0-based, -1 before the first), `round_count`, `current_minigame: Minigame`, `round_groups: Array` (last round's tied groups); *`state_changed(state: State)`*, *`round_intro(info: Dictionary, index: int)`* (info: `{id, title, rule_text}`), *`round_started`*, *`round_finished(ranking: Array[int], points: Dictionary)`* (flat), *`round_ranked(groups: Array, points: Dictionary)`* (right after, as tied groups), *`session_finished(final_ranking: Array[int])`*. `enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM }` |
 | `Cosmetics` | cosmetics system | `catalog(slot: StringName) -> Array`, `default_loadout(slot_index: int) -> Dictionary`, `load_profile() -> Dictionary` (`{name, loadout}`), `save_profile(player_name, loadout)`, `apply(model_root: Node3D, loadout: Dictionary)` (items and colours; not the size), `sizes() -> Array`, `size_info(id) -> Dictionary`, `sanitize(loadout, fallback_slot)` |
 | `Fx` | look and effects | `play(effect: StringName, at: Vector3, color := Color.WHITE)` |
 | `Sfx` | audio | `play(sound: StringName, at := Vector3.INF)` |
@@ -141,7 +142,9 @@ Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Pl
 - `games_found` entries: `{id, address ("ip:port", pass it to join_game), ip, port, game_name, host_name, players, max_players, in_lobby, version, compatible}`.
 - `session_in_progress: bool` (host sets, clients receive) and `accept_late_joiners: bool` (default false: joins during a session are refused with `in progress`). `Session` sets `session_in_progress` at session start and clears it when it returns to LOBBY.
 
-`Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these), `end_grace` (seconds left of a minigame's end grace, 0 = none; see `finish`). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place. Returning to LOBBY clears the stage.
+`Session` details (added after wave 1): also public `abort_session()`, `round_wins`, `phase_duration`, `phase_time_left` (UI derives countdowns from these), `end_grace` (seconds left of a minigame's end grace, 0 = none; see `finish`). Each transition emits `state_changed` first, then its event signal. On time-out survivors share first place (one tied group). Returning to LOBBY clears the stage.
+
+`Session` ties (v0.3): `round_finished(ranking, points)` is unchanged and keeps the FLAT order (tied groups flattened, best first). Right after it, *`round_ranked(groups: Array, points: Dictionary)`* carries the same ranking as tied groups (Array of `Array[int]`, best first), and `round_groups` holds them on every peer from RESULTS until the next round's intro (empty in LOBBY). Scoring: every member of a group scores the group's best place (`place_points`), the next group's place counts the tied players (1, 1, 3); every member of the first group gets a round win; the final ranking is unchanged (total, wins, slot). Static helpers: `points_for_groups(groups, player_count := -1)`, `points_for_ranking(ranking, tied_top := 1, player_count := -1)` (same code path), `groups_from_sizes(flat, sizes)`. `Progression.round_place(ranking, points, slot, groups := [])` pays the tied place (it reads `Session.round_groups` itself).
 
 Autoload scripts (paths fixed by project.godot; the owner edits the file, never the path): `game/net/net.gd`, `game/session/session.gd`, `game/cosmetics/cosmetics.gd`, `game/fx/fx.gd`, `game/audio/sfx.gd`, `game/audio/music.gd`, `game/progression/progression.gd`, `game/ui/settings/settings.gd`. Plain `extends Node` scripts without `class_name`; add child nodes from code if needed. `AgentScreenshot` (`game/tools/screenshot.gd`) is tooling.
 
@@ -166,14 +169,14 @@ class_name Minigame extends Node3D
 @export var title: String
 @export var rule_text: String                  # one line for the title card
 @export var time_limit: float = 60.0           # shown by the round UI; 0 = none. The minigame calls finish() itself when time is up (count it in _host_tick)
-signal finished(ranking: Array[int])          # slots, best first
+signal finished(ranking: Array[int])          # slots, best first (tied groups flattened)
 var players: Array[Player]                     # set by Stage before _setup
 var knocked_out: Array[int]                    # slots in knock-out order (knock_out)
 func get_spawn_points() -> Array[Transform3D]  # Marker3D children of $Spawns; the marker's +Z is the facing
 func _setup(players: Array[Player]) -> void    # every peer, players are frozen
 func _start() -> void                          # every peer, after the countdown, players unfrozen
 func _host_tick(delta: float) -> void          # host only, each physics frame while playing
-func finish(ranking: Array[int], grace := 0.0) -> void  # host only; later calls ignored. grace > 0: Session holds PLAYING, every player frozen on every peer, for `grace` s (Session.end_grace) before RESULTS
+func finish(ranking: Array, grace := 0.0) -> void  # host only; later calls ignored. Entries: a slot or an Array of slots (a tied group), e.g. [3, [1, 2], 0]. grace > 0: Session holds PLAYING, every player frozen on every peer, for `grace` s (Session.end_grace) before RESULTS
 func is_finished() -> bool
 func knock_out(player: Player) -> void         # host only helper: eliminates and records order; when <= 1 is left, finishes with the survivor first, then reverse knock-out order
 func get_bot_goal(player: Player) -> Vector3   # where a bot should want to be (default: a random spawn point)
@@ -183,6 +186,36 @@ func is_safe(pos: Vector3) -> bool             # bots avoid unsafe positions (de
 Flow (Session drives it; the sandbox and the test harness do the same offline): Stage spawns frozen players -> `_setup(players)` -> countdown -> `frozen = false` on every player, `_start()` -> `_host_tick(delta)` on the host until `finished`.
 
 A minigame lives in `game/minigames/<id>/` (scene `<id>.tscn` whose root script `<id>.gd` `extends Minigame`, plus its own assets). The placeholder has `WorldEnvironment`, `Sun`, `Camera3D` (fixed, current), `Ground` (20 m, top at y=0) and `Spawns` (8 markers on a 5 m ring, the first four spread out); replace anything but keep `Spawns` with 8 markers. Ids in v1 (`MinigameRegistry.IDS` in `game/minigames/registry.gd`): `floor_is_lava`, `bumper_sumo`, `hot_potato`, `coin_scramble`. A minigame may change player component tuning in `_setup` and must not reach into other systems beyond this contract. The host decides everything that matters (who is out, scores); clients learn it through the minigame's own RPCs.
+
+### Teams, ties and roles (v0.3, on `Minigame`)
+
+```gdscript
+var finish_groups: Array                       # host: what finish() got, normalised: Array of Array[int] groups, best first
+static func normalize_ranking(ranking: Array) -> Array    # slots / slot Arrays -> groups (repeats keep their first place, empty groups dropped)
+static func flatten_groups(groups: Array) -> Array[int]
+static func group_place(groups: Array, slot: int) -> int  # 1-based tied place (1, 1, 3), 0 if absent
+signal teams_changed                           # every peer, when an assignment arrives
+var teams: Dictionary[int, int]                # slot -> team (0-based), every peer; empty = no teams
+var team_count: int                            # 0 = no teams
+func assign_teams(team_count := 2) -> void     # host only (ignored elsewhere): living players, random, sizes differ by <= 1 (the odd ones land on random teams), 2..4 teams; one reliable call_local RPC to every peer
+static func split_teams(slots: Array[int], count: int) -> Dictionary[int, int]  # the pure split
+func has_teams() -> bool
+func team_of(slot: int) -> int                 # -1 if none
+func team_slots(team: int) -> Array[int]       # ascending
+static func team_color(team: int) -> Color     # 0 orange #e69f00, 1 sky blue #56b4e9, 2 green #009e73, 3 pink #cc79a7 (Okabe-Ito; not player colours)
+static func team_name(team: int) -> String     # "ORANGE", "BLUE", "GREEN", "PINK"
+func finish_teams(team_order: Array[int], grace := 0.0) -> void  # host: each team is one tied group, best first; unlisted teams follow by index, then players without a team as one group
+func is_ally(a: Player, b: Player) -> bool     # same team (false without teams)
+signal role_changed(slot: int, text: String)   # every peer
+var roles: Dictionary[int, String]             # slot -> role line, every peer
+func set_role_text(slot: int, text: String) -> void  # host only: the full line that player sees, e.g. "You are the SEEKER" ("" clears); reliable call_local RPC
+func role_of(slot: int) -> String
+```
+
+- Call `assign_teams` / `set_role_text` on the host in `_setup` (or later; clients get them a moment after the intro starts, the UI follows). Teams and roles live on the minigame instance: the next round's minigame starts without, and the team rings clear when the minigame leaves the tree.
+- Shown automatically: a ring in the team colour under each blob (`team` player component, `TeamComponent`, `game/player/components/team.*`), the HUD strip grouped in team-coloured boxes, "TEAM ORANGE" plus the role line on the local player's intro card, the role line as a banner ~1 s after GO!, and on the results a team (or any tied group) on one line with its shared place and "+N EACH".
+- Bots: the bot brain must not shove allies: before shoving, skip a target when `minigame.is_ally(player, target)` (owner: bot brain; `game/bots/` is not wired yet).
+- Roles themselves (who seeks, what each role may do) are the minigame's own business.
 
 ## Networking rules for minigames (added after player sync landed)
 

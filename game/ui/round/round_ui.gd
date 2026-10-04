@@ -22,6 +22,16 @@ extends CanvasLayer
 ## or, without referencing the class: get_tree().call_group(&"round_ui", &"set_counter", slot, value)
 ## and get_tree().call_group(&"round_ui", &"show_banner", text, seconds).
 ## Counters reset at every round_intro.
+##
+## Teams and roles (Minigame.assign_teams / set_role_text, read from the round's minigame and
+## its `teams_changed` / `role_changed`): the intro card shows this player's team and role
+## line, the HUD strip groups the players by team, the results list a team or any tied group
+## (Session.round_groups) on one line, and a role line also shows as a banner after GO!.
+## All of it is per round: the next round_intro starts without.
+
+## Seconds after round_started before the role banner (lets "GO!" clear first).
+const ROLE_BANNER_DELAY := 1.0
+const ROLE_BANNER_SECONDS := 2.6
 
 ## Pressed "Back to lobby" (the UI has already hidden itself).
 signal back_to_lobby_pressed
@@ -43,6 +53,9 @@ var _banner: PanelContainer
 var _banner_label: Label
 var _banner_tween: Tween
 var _podium_tween: Tween
+var _role_tween: Tween
+## The minigame whose teams_changed / role_changed this UI listens to.
+var _watched: Minigame = null
 ## Instance ids of the players whose events are connected.
 var _bound: Dictionary[int, bool] = {}
 
@@ -162,6 +175,8 @@ func reset() -> void:
 	_show(View.NONE)
 	if _banner_tween and _banner_tween.is_valid():
 		_banner_tween.kill()
+	if _role_tween and _role_tween.is_valid():
+		_role_tween.kill()
 	_banner.visible = false
 
 
@@ -199,20 +214,23 @@ func _on_state_changed(state: int) -> void:
 
 
 func _on_round_intro(info: Dictionary, index: int) -> void:
+	_watch_minigame(RoundStyle.current_minigame())
 	hud.rebuild()
 	_bind_players()
 	intro.play(str(info.get("title", "")), str(info.get("rule_text", "")), index, Session.round_count)
+	_refresh_intro_team()
 	_show(View.INTRO)
 
 
 func _on_round_started() -> void:
 	_bind_players()
-	var minigame := Session.current_minigame
-	if minigame == null:
-		var stage := _find_stage()
-		minigame = stage.minigame if stage else null
+	var minigame := RoundStyle.current_minigame()
+	_watch_minigame(minigame)
 	_show(View.HUD)
 	hud.start(minigame.time_limit if minigame else 0.0)
+	var role := minigame.role_of(Net.local_slot()) if minigame else ""
+	if role != "":
+		_queue_role_banner(role)
 
 
 func _on_round_finished(ranking: Array, points: Dictionary) -> void:
@@ -223,8 +241,56 @@ func _on_round_finished(ranking: Array, points: Dictionary) -> void:
 	for s: Variant in points:
 		if not totals.has(int(s)):
 			totals[int(s)] = int(points[s])
-	results.play(ranking, points, totals, Progression.local_round_award(ranking, points))
+	results.play(ranking, points, totals, Progression.local_round_award(ranking, points),
+		RoundStyle.groups_for(ranking), RoundStyle.current_teams())
 	_show(View.RESULTS)
+
+
+# --- Teams and roles -------------------------------------------------------------------
+
+## Follows `minigame`'s team and role changes (drops the previous round's minigame).
+func _watch_minigame(minigame: Minigame) -> void:
+	if minigame == _watched:
+		return
+	if is_instance_valid(_watched):
+		if _watched.teams_changed.is_connected(_on_teams_changed):
+			_watched.teams_changed.disconnect(_on_teams_changed)
+		if _watched.role_changed.is_connected(_on_role_changed):
+			_watched.role_changed.disconnect(_on_role_changed)
+	_watched = minigame
+	if minigame:
+		minigame.teams_changed.connect(_on_teams_changed)
+		minigame.role_changed.connect(_on_role_changed)
+
+
+func _on_teams_changed() -> void:
+	hud.layout_teams()
+	_refresh_intro_team()
+
+
+func _on_role_changed(slot: int, text: String) -> void:
+	if slot != Net.local_slot():
+		return
+	intro.set_role(text)
+	if view == View.HUD and text != "":
+		show_banner(text, ROLE_BANNER_SECONDS)
+
+
+func _refresh_intro_team() -> void:
+	var m := RoundStyle.current_minigame()
+	var me := Net.local_slot()
+	intro.set_team(m.team_of(me) if m else -1)
+	intro.set_role(m.role_of(me) if m else "")
+
+
+func _queue_role_banner(text: String) -> void:
+	if _role_tween and _role_tween.is_valid():
+		_role_tween.kill()
+	_role_tween = create_tween()
+	_role_tween.tween_interval(ROLE_BANNER_DELAY)
+	_role_tween.tween_callback(func() -> void:
+		if view == View.HUD:
+			show_banner(text, ROLE_BANNER_SECONDS))
 
 
 func _on_session_finished(final_ranking: Array) -> void:
@@ -266,6 +332,8 @@ func _show(v: View) -> void:
 			_podium_tween.kill()
 	if v != View.HUD:
 		hud.stop()
+		if _role_tween and _role_tween.is_valid():
+			_role_tween.kill()  # a role banner still waiting belongs to the round that ended
 	_hide_name_tags(v == View.RESULTS or v == View.PODIUM)
 
 

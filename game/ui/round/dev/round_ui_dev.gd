@@ -7,6 +7,9 @@ extends Node3D
 ##   --coins=N     Mansion Coins before the round (default 0); Progression never saves here
 ##   --local-place=P  put you (slot 0) at place P in the round and the final ranking
 ##   --half-rate   offline half rate on (default off here, so the numbers match a LAN game)
+##   --teams       two teams (fixed split): team boxes on the strip, rings, "TEAM X" on the
+##                 intro card, the results rank the teams (BLUE first)
+##   --role        you get the role line "You are the SEEKER" (intro card, banner at start)
 ## Esc quits.
 
 const DEV_ARENA: PackedScene = preload("res://dev/dev_arena.tscn")
@@ -18,6 +21,8 @@ const NAMES: Array[String] = ["Sander", "Mads", "Freja", "Bartholomew the Great"
 var _count: int = 4
 var _phase: String = "all"
 var _local_place: int = 0
+var _teams: bool = false
+var _role: bool = false
 
 
 func _ready() -> void:
@@ -37,6 +42,10 @@ func _ready() -> void:
 			_local_place = arg.trim_prefix("--local-place=").to_int()
 		elif arg == "--half-rate":
 			Progression.offline_half_rate = true
+		elif arg == "--teams":
+			_teams = true
+		elif arg == "--role":
+			_role = true
 	Net.start_offline()
 	for i in _count - 1:
 		Net.add_bot()
@@ -51,6 +60,15 @@ func _ready() -> void:
 	Session.round_index = 2
 	for slot: int in Net.roster:
 		Session.scores[slot] = [7, 4, 9, 2, 5, 3, 1, 6][slot]
+	if _teams:
+		var slots: Array = []
+		var ids: Array = []
+		for slot: int in Net.roster:
+			slots.append(slot)
+			ids.append([0, 1, 1, 0, 1, 0, 0, 1][slot])
+		minigame._rpc_set_teams(slots, ids, 2)
+	if _role:
+		minigame.set_role_text(0, "You are the SEEKER")
 	match _phase:
 		"intro":
 			_intro()
@@ -82,6 +100,11 @@ func _hud() -> void:
 func _results() -> void:
 	var ranking := _ranking()
 	var points := _points(ranking)
+	if _teams:
+		var groups: Array = [stage.minigame.team_slots(1), stage.minigame.team_slots(0)]
+		Session.round_groups = groups
+		ranking = Minigame.flatten_groups(groups)
+		points = Session.points_for_groups(groups, ranking.size())
 	for slot: int in points:
 		Session.scores[slot] = int(Session.scores.get(slot, 0)) + int(points[slot])
 	Session.round_finished.emit(ranking, points)

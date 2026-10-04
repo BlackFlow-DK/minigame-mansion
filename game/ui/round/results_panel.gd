@@ -93,6 +93,8 @@ var _ranking_list: VBoxContainer
 var _race_view: CenterContainer
 var _race_area: Control
 var _rows: Dictionary[int, RaceRow] = {}
+## The ranking lines' texts, top first (see get_row_texts).
+var _row_texts: Array[String] = []
 var _seq: Tween
 var _dim_tween: Tween
 var _max_value: int = 1
@@ -158,9 +160,16 @@ func _process(delta: float) -> void:
 ## Shows the round's `ranking` (slots, best first) with `points` (slot -> points this
 ## round), then races total scores from `totals - points` up to `totals` (slot -> total).
 ## `coins`: Mansion Coins this player earned this round, popped in under the ranking (0: none).
-func play(ranking: Array, points: Dictionary, totals: Dictionary, coins: int = 0) -> void:
+## `groups`: the ranking as tied groups (Session.round_groups; empty = one slot each): a tied
+## group shares one line and its place. `teams` (slot -> team): a group that is exactly one
+## team's players shows as "TEAM ORANGE" in the team colour.
+func play(ranking: Array, points: Dictionary, totals: Dictionary, coins: int = 0,
+		groups: Array = [], teams: Dictionary = {}) -> void:
 	stop()
-	_build_ranking(ranking, points)
+	if groups.is_empty():
+		for s: Variant in ranking:
+			groups.append([int(s)])
+	_build_ranking(groups, points, teams)
 	_build_race(ranking, points, totals)
 	_ranking_view.visible = true
 	_ranking_view.modulate.a = 0.0
@@ -315,42 +324,145 @@ func _build_coins_pill() -> void:
 	_coins_pill.visible = false
 
 
-func _build_ranking(ranking: Array, points: Dictionary) -> void:
+## One line per tied group (most are a single slot), best first.
+func _build_ranking(groups: Array, points: Dictionary, teams: Dictionary = {}) -> void:
 	for c in _ranking_list.get_children():
 		_ranking_list.remove_child(c)
 		c.queue_free()
-	var big := ranking.size() <= 6
+	_row_texts.clear()
+	var big := groups.size() <= 6
 	var row_h := 52.0 if big else 46.0
-	for i in ranking.size():
-		var slot := int(ranking[i])
-		var place := i + 1
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override(&"separation", 14)
-		row.custom_minimum_size = Vector2(0, row_h)
-		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var badge_style := RoundStyle.box(RoundStyle.place_color(place), RoundStyle.CHARCOAL, 3, 12, false)
-		badge_style.set_content_margin_all(0.0)
-		var badge := RoundStyle.panel(badge_style)
-		badge.custom_minimum_size = Vector2(76, row_h - 6)
-		badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		badge.add_child(RoundStyle.label(RoundStyle.ordinal(place), 26, RoundStyle.CHARCOAL, 0))
-		row.add_child(badge)
-		var blob := RoundBlobIcon.new(RoundStyle.player_color(slot), row_h - 8.0)
-		blob.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		row.add_child(blob)
-		var name_label := RoundStyle.label(RoundStyle.player_name(slot), 30 if big else 26, RoundStyle.CREAM, 7)
-		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		name_label.clip_text = true
-		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		name_label.custom_minimum_size = Vector2(300, 0)
-		row.add_child(name_label)
-		var gained := int(points.get(slot, 0))
-		var pts := RoundStyle.label("+%d" % gained, 34 if big else 30, RoundStyle.GOLD if gained > 0 else RoundStyle.GREY, 8)
-		pts.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		pts.custom_minimum_size = Vector2(90, 0)
-		row.add_child(pts)
-		_ranking_list.add_child(row)
+	var place := 1
+	for g: Variant in groups:
+		var members: Array = g if g is Array else [g]
+		if members.is_empty():
+			continue
+		if members.size() == 1:
+			_add_player_row(int(members[0]), place, points, big, row_h)
+		else:
+			_add_group_row(members, place, points, teams, big, row_h)
+		place += members.size()
+
+
+## The ranking lines as shown, top first: a player's name, "TEAM ORANGE", or tied names
+## joined with " & ". Read by tests.
+func get_row_texts() -> Array[String]:
+	return _row_texts.duplicate()
+
+
+func _add_player_row(slot: int, place: int, points: Dictionary, big: bool, row_h: float) -> void:
+	var who := RoundStyle.player_name(slot)
+	_row_texts.append(who)
+	var row := _begin_row(place, row_h)
+	var blob := RoundBlobIcon.new(RoundStyle.player_color(slot), row_h - 8.0)
+	blob.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(blob)
+	var name_label := RoundStyle.label(who, 30 if big else 26, RoundStyle.CREAM, 7)
+	_fit_name_label(name_label)
+	row.add_child(name_label)
+	_end_row(row, int(points.get(slot, 0)), big, false)
+
+
+## A tied group on one line: overlapping blobs, then "TEAM ORANGE" (when the group is exactly
+## one team) over the members' names, or the names joined; the points every member got.
+func _add_group_row(members: Array, place: int, points: Dictionary, teams: Dictionary, big: bool, row_h: float) -> void:
+	var team := _team_of_group(members, teams)
+	var names: Array[String] = []
+	for s: Variant in members:
+		names.append(RoundStyle.player_name(int(s)))
+	var joined := " & ".join(names)
+	_row_texts.append(RoundStyle.team_title(team) if team >= 0 else joined)
+	var row := _begin_row(place, row_h)
+	var blob_size := row_h - 8.0
+	var step := blob_size * 0.55
+	var blobs := Control.new()
+	blobs.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	blobs.custom_minimum_size = Vector2(blob_size + step * (members.size() - 1), blob_size)
+	blobs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	for i in members.size():
+		var blob := RoundBlobIcon.new(RoundStyle.player_color(int(members[i])), blob_size)
+		blob.position = Vector2(step * i, 0)
+		blob.size = Vector2(blob_size, blob_size)
+		blobs.add_child(blob)
+	row.add_child(blobs)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override(&"separation", -6)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.custom_minimum_size = Vector2(240, 0)
+	if team >= 0:
+		var title := RoundStyle.label(RoundStyle.team_title(team), 30 if big else 26, Minigame.team_color(team), 7)
+		_fit_name_label(title)
+		col.add_child(title)
+		var sub := RoundStyle.label(joined, 17, RoundStyle.CREAM, 4)
+		_fit_name_label(sub)
+		col.add_child(sub)
+	else:
+		var label := RoundStyle.label(joined, 26 if big else 22, RoundStyle.CREAM, 7)
+		_fit_name_label(label)
+		col.add_child(label)
+	row.add_child(col)
+	_end_row(row, int(points.get(int(members[0]), 0)), big, true)
+
+
+## The team every member of `members` is on when they are exactly that team's players; else -1.
+func _team_of_group(members: Array, teams: Dictionary) -> int:
+	if teams.is_empty():
+		return -1
+	var team := int(teams.get(int(members[0]), -1))
+	if team < 0:
+		return -1
+	var team_size := 0
+	for s: Variant in teams:
+		if int(teams[s]) == team:
+			team_size += 1
+	for s: Variant in members:
+		if int(teams.get(int(s), -1)) != team:
+			return -1
+	return team if team_size == members.size() else -1
+
+
+func _begin_row(place: int, row_h: float) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override(&"separation", 14)
+	row.custom_minimum_size = Vector2(0, row_h)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var badge_style := RoundStyle.box(RoundStyle.place_color(place), RoundStyle.CHARCOAL, 3, 12, false)
+	badge_style.set_content_margin_all(0.0)
+	var badge := RoundStyle.panel(badge_style)
+	badge.custom_minimum_size = Vector2(76, row_h - 6)
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge.add_child(RoundStyle.label(RoundStyle.ordinal(place), 26, RoundStyle.CHARCOAL, 0))
+	row.add_child(badge)
+	return row
+
+
+## Points on the right ("+4", or "+4 each" for a tied group), then the row joins the list.
+func _end_row(row: HBoxContainer, gained: int, big: bool, each: bool) -> void:
+	var color := RoundStyle.GOLD if gained > 0 else RoundStyle.GREY
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override(&"separation", 6)
+	box.alignment = BoxContainer.ALIGNMENT_END
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.custom_minimum_size = Vector2(90, 0)
+	var pts := RoundStyle.label("+%d" % gained, 34 if big else 30, color, 8)
+	pts.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	box.add_child(pts)
+	if each:
+		var each_label := RoundStyle.label("EACH", 16, color, 4)
+		each_label.size_flags_vertical = Control.SIZE_SHRINK_END
+		box.add_child(each_label)
+	row.add_child(box)
+	_ranking_list.add_child(row)
+
+
+func _fit_name_label(l: Label) -> void:
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	l.clip_text = true
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.custom_minimum_size = Vector2(300, 0)
 
 
 func _build_race(ranking: Array, points: Dictionary, totals: Dictionary) -> void:

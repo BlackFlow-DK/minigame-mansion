@@ -2,7 +2,8 @@ class_name RoundHud
 extends Control
 ## In-round HUD: round pill (top left), time left (top centre, only with a time limit),
 ## a "GO!" flash on start and a compact player strip along the bottom (colour, name,
-## total score, optional per-player counter, greyed with "OUT" when eliminated).
+## total score, optional per-player counter, greyed with "OUT" when eliminated). With teams
+## (Minigame.assign_teams) the strip groups the cards in boxes in the team colours.
 ## Owner: round UI.
 
 ## Seconds left at which the timer turns red and pulses.
@@ -171,6 +172,8 @@ var _go: Label
 var _go_tween: Tween
 var _pulse: Tween
 var _cards: Dictionary[int, PlayerCard] = {}
+## Team index -> its group box in the strip (only while the round has teams).
+var _team_boxes: Dictionary[int, PanelContainer] = {}
 var _time_limit: float = 0.0
 var _elapsed: float = 0.0
 var _running: bool = false
@@ -239,19 +242,106 @@ func _process(delta: float) -> void:
 	_update_timer()
 
 
-## Rebuilds the strip from the roster; clears counters and eliminations.
+## Rebuilds the strip from the roster; clears counters and eliminations. Grouped by team
+## when the round's minigame has teams (see layout_teams).
 func rebuild() -> void:
 	for c in _cards.values():
-		_strip.remove_child(c)
+		if c.get_parent():
+			c.get_parent().remove_child(c)
 		c.queue_free()
 	_cards.clear()
 	var local := Net.local_slot()
 	for slot in RoundStyle.roster_slots():
 		var card := PlayerCard.new(slot, slot == local)
 		card.set_score(RoundStyle.total_score(slot))
-		_strip.add_child(card)
 		_cards[slot] = card
+	layout_teams()
 	_update_round_label()
+
+
+## Lays the cards out again: one box per team in the team colour (team order, members by
+## slot), then anyone without a team; a plain row without teams. Keeps counters and "OUT".
+func layout_teams() -> void:
+	var teams := RoundStyle.current_teams()
+	for c in _cards.values():
+		if c.get_parent():
+			c.get_parent().remove_child(c)
+	for b in _team_boxes.values():
+		_strip.remove_child(b)
+		b.queue_free()
+	_team_boxes.clear()
+	var slots: Array[int] = []
+	slots.assign(_cards.keys())
+	slots.sort()
+	var team_ids: Array[int] = []
+	for s in slots:
+		var t := int(teams.get(s, -1))
+		if t >= 0 and not team_ids.has(t):
+			team_ids.append(t)
+	team_ids.sort()
+	for t in team_ids:
+		var box := _make_team_box(t)
+		_strip.add_child(box)
+		_team_boxes[t] = box
+		var row := box.get_node(^"Row") as HBoxContainer
+		for s in slots:
+			if int(teams.get(s, -1)) == t:
+				row.add_child(_cards[s])
+	for s in slots:
+		if int(teams.get(s, -1)) < 0:
+			_strip.add_child(_cards[s])
+
+
+## Team indices in strip order (empty without teams). Read by tests.
+func get_team_order() -> Array[int]:
+	var out: Array[int] = []
+	for child in _strip.get_children():
+		for t: int in _team_boxes:
+			if _team_boxes[t] == child:
+				out.append(t)
+	return out
+
+
+## Team whose box holds the card of `slot`, -1 if none. Read by tests.
+func get_card_team(slot: int) -> int:
+	var card := get_card(slot)
+	if card == null:
+		return -1
+	for t: int in _team_boxes:
+		if card.get_parent() == _team_boxes[t].get_node(^"Row"):
+			return t
+	return -1
+
+
+func _make_team_box(team: int) -> PanelContainer:
+	var color := Minigame.team_color(team)
+	var style := RoundStyle.box(Color(color.darkened(0.45), 0.85), color, 4, 20)
+	style.set_content_margin_all(5.0)
+	style.content_margin_top = 9.0
+	var box := RoundStyle.panel(style)
+	box.name = "Team%d" % team
+	var row := HBoxContainer.new()
+	row.name = "Row"
+	row.add_theme_constant_override(&"separation", 5)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(row)
+	# Team name tab overhanging the top edge (inside a free overlay, like the "OUT" sticker).
+	var overlay := Control.new()
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(overlay)
+	var tab_style := RoundStyle.box(color, RoundStyle.CHARCOAL, 3, 10, false)
+	tab_style.set_content_margin_all(0.0)
+	tab_style.content_margin_left = 10.0
+	tab_style.content_margin_right = 10.0
+	var tab := RoundStyle.panel(tab_style)
+	tab.anchor_left = 0.5
+	tab.anchor_right = 0.5
+	tab.offset_top = -26.0
+	tab.offset_bottom = -2.0
+	tab.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	tab.add_child(RoundStyle.label(Minigame.team_name(team), 17, RoundStyle.CHARCOAL, 0))
+	overlay.add_child(tab)
+	return box
 
 
 ## Called on Session.round_started: GO! flash, timer starts.
