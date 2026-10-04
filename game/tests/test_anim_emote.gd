@@ -16,12 +16,16 @@ func _press(p: Player, id: int) -> Callable:
 	return func(i: int) -> void: p.intent.emote = id if i == 0 else 0
 
 
-func test_component_is_registered_and_ticked_after_the_controller() -> void:
+func test_component_is_registered() -> void:
 	var p := spawn_arena(1)[0]
 	assert_true(p.get_component(&"emote") is EmoteComponent, "emote component")
-	var order := Player.TICK_ORDER
-	assert_eq(order.find(&"emote"), order.find(&"controller") + 1, "ticked right after the controller")
+	assert_false(Player.TICK_ORDER.has(&"emote"), "not ticked: it consumes the press in post_tick")
 	assert_true(p.has_signal(&"emote"), "player event")
+	p.intent.emote = 3
+	p.intent.clear()
+	assert_eq(p.intent.emote, 3, "clear() keeps the emote press for the emote component")
+	await step(1)
+	assert_eq(p.intent.emote, 0, "consumed")
 	for id in [1, 2, 3, 4]:
 		assert_ne_name(EmoteComponent.name_of(id))
 	assert_eq(EmoteComponent.name_of(7), &"", "unknown id")

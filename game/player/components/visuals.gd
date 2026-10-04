@@ -163,6 +163,7 @@ var _settings: Node = null
 var _vel: Vector3 = Vector3.ZERO
 var _accel: Vector3 = Vector3.ZERO
 var _inst_accel: Vector3 = Vector3.ZERO  # unsmoothed (skid detection)
+var _raw_speed: float = 0.0  # horizontal speed from the last tick's position change
 var _last_pos: Vector3 = Vector3.ZERO
 var _has_last: bool = false
 var _grounded: bool = true
@@ -856,6 +857,7 @@ func _physics_process(delta: float) -> void:
 		raw = (pos - _last_pos) / delta
 	_last_pos = pos
 	_has_last = true
+	_raw_speed = Vector2(raw.x, raw.z).length()
 	var v := _vel.lerp(raw, 1.0 - exp(-30.0 * delta))
 	_inst_accel = (v - _vel) / delta
 	_accel = _accel.lerp(_inst_accel, 1.0 - exp(-14.0 * delta))
@@ -1194,9 +1196,10 @@ func _in_lobby() -> bool:
 	return EmoteComponent.is_lobby(player)
 
 
-## Dust under the feet when a skid starts (and once more a moment later).
+## Dust under the feet when a skid starts (and once more a moment later), while the body
+## really still slides (not when it was stopped dead, e.g. teleported or pinned).
 func _skid_dust() -> void:
-	if not is_inside_tree():
+	if not is_inside_tree() or _raw_speed < 1.5 * _size_k:
 		return
 	var back := Basis(Vector3.UP, _yaw) * _skid_dir
 	Fx.play(&"dust_puff", player.global_position + back * 0.18 * _size_k + Vector3.UP * 0.03, Color.WHITE)

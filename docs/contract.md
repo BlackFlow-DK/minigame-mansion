@@ -26,7 +26,7 @@ Design spec: `docs/superpowers/specs/2026-09-30-minigame-mansion-design.md`.
 ```gdscript
 class_name PlayerComponent extends Node3D
 var player: Player                                 # set by Player (in its _enter_tree) before the component's _ready
-func physics_tick(_delta: float) -> void: pass     # authority only, in tick order; only the 7 ticked components get it
+func physics_tick(_delta: float) -> void: pass     # authority only, in tick order; only the 6 ticked components get it
 func post_tick(_delta: float) -> void: pass        # authority only, every component, after move_and_slide()
 ```
 
@@ -38,7 +38,7 @@ The Player root never rotates (identity basis); `facing` says where the blob loo
 |---|---|
 | `slot: int`, `display_name: String`, `is_bot: bool`, `loadout: Dictionary` | identity, set at spawn |
 | `is_extra: bool` | an NPC extra (see "NPC extras"): slot >= 100, not a player |
-| `intent: PlayerIntent` | what the controller wants this tick: `move: Vector2` (world X,Z, length 0..1), `jump_pressed`, `jump_held`, `action_pressed` (bools; `*_pressed` true only on the first tick), `emote: int` (1..4 on the tick an emote key went down, else 0), `clear()` |
+| `intent: PlayerIntent` | what the controller wants this tick: `move: Vector2` (world X,Z, length 0..1), `jump_pressed`, `jump_held`, `action_pressed` (bools; `*_pressed` true only on the first tick), `emote: int` (1..4 on the tick an emote key went down, else 0; consumed by the emote component, NOT reset by `clear()`), `clear()` |
 | `velocity` | built-in; components add to or set their axis of it |
 | `facing: Vector3` | unit vector on XZ the blob looks along |
 | `frozen: bool` | set by the minigame/session (countdown, round over): no movement, no actions. Player clears `intent` every tick while set |
@@ -50,7 +50,7 @@ Tuning: a component keeps its numbers in exported vars on its own component scri
 
 ### Tick order (authority only, inside `Player._physics_process`)
 
-`size` (scales the others' tuning) -> `controller` (human input or bot brain fills `intent`) -> `emote` (reads `intent.emote` before it can be cleared) -> [`intent` cleared if `frozen`] -> `status` -> [`intent` cleared if `frozen` or `control_locked`] -> `movement` -> `jump` -> `shove` -> `move_and_slide()` -> `post_tick` on every component (child order). Nothing ticks while `alive` is false.
+`size` (scales the others' tuning) -> `controller` (human input or bot brain fills `intent`) -> [`intent` cleared if `frozen`] -> `status` -> [`intent` cleared if `frozen` or `control_locked`] -> `movement` -> `jump` -> `shove` -> `move_and_slide()` -> `post_tick` on every component (child order). Nothing ticks while `alive` is false.
 
 Remote copies do not tick; the `sync` component moves them. Anything that must run on every peer (visuals, sound, the sync itself) uses its own `_process`/`_physics_process`, not the ticks.
 
@@ -294,7 +294,7 @@ func get_reaction() -> StringName / get_expression() / get_action()  # what show
 
 ### Emotes
 
-`EmoteComponent` (`game/player/components/emote.*`), ticked right after the controller on the authority: `intent.emote` (1..4) -> `player.emit_event(&"emote", [id])` -> every peer's visuals play it. Rules on the authority: one emote per 0.8 s (`cooldown`); none while stunned (`control_locked`) or dead; none while `frozen`, except in the lobby and on the podium (`Session.State.LOBBY` / `PODIUM`). The visuals cancel a player emote on movement, a jump, a shove or a knockback (an emote started with `play_emote` is not cancelled by movement, and a looping one resumes after a player emote). `request(id) -> bool` asks from code. Bots (not extras) emote now and then in the lobby hall (`EmoteComponent.is_lobby(player)`: Session LOBBY and the Stage `follow_roster`) and sometimes after winning a round.
+`EmoteComponent` (`game/player/components/emote.*`), in its post_tick on the authority: `intent.emote` (1..4, consumed) -> `player.emit_event(&"emote", [id])` -> every peer's visuals play it. Rules on the authority: one emote per 0.8 s (`cooldown`); none while stunned (`control_locked`) or dead; none while `frozen`, except in the lobby and on the podium (`Session.State.LOBBY` / `PODIUM`). The visuals cancel a player emote on movement, a jump, a shove or a knockback (an emote started with `play_emote` is not cancelled by movement, and a looping one resumes after a player emote). `request(id) -> bool` asks from code. Bots (not extras) emote now and then while standing still in the lobby hall (`EmoteComponent.is_lobby(player)`: Session LOBBY and the Stage `follow_roster`) and sometimes after winning a round.
 
 ## Tests
 

@@ -18,8 +18,7 @@ signal emote(id: int)
 
 ## Components that get physics_tick(), in this order, before move_and_slide().
 ## `size` goes first: it scales the others' tuning before they use it this tick.
-## `emote` reads the controller's emote press before `frozen` clears the intent.
-const TICK_ORDER: Array[StringName] = [&"size", &"controller", &"emote", &"status", &"movement", &"jump", &"shove"]
+const TICK_ORDER: Array[StringName] = [&"size", &"controller", &"status", &"movement", &"jump", &"shove"]
 
 ## Stable identity for the whole session, 0..7. Set by Stage at spawn.
 var slot: int = -1
@@ -56,7 +55,6 @@ func _physics_process(delta: float) -> void:
 		return
 	_tick(&"size", delta)
 	_tick(&"controller", delta)
-	_tick(&"emote", delta)
 	if frozen:
 		intent.clear()
 	_tick(&"status", delta)

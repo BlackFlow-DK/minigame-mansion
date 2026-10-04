@@ -12,7 +12,9 @@ var jump_pressed: bool = false
 var jump_held: bool = false
 ## True only on the tick the action button went down.
 var action_pressed: bool = false
-## Emote key 1..4 on the tick it went down (0 = none). Read by the `emote` component.
+## Emote key 1..4 on the tick it went down (0 = none). Consumed (reset to 0) by the `emote`
+## component in its post_tick; NOT reset by clear(), because the emote rules allow some
+## emotes while `frozen` (lobby, podium) and Player clears the intent of a frozen player.
 var emote: int = 0
 
 
@@ -22,4 +24,3 @@ func clear() -> void:
 	jump_pressed = false
 	jump_held = false
 	action_pressed = false
-	emote = 0
