@@ -164,7 +164,7 @@ func test_lobby_focus_is_opt_in() -> void:
 	tab.pressed = true
 	await _send(tab)
 	assert_true(menu.lobby.start_button.has_focus(), "Tab focuses Start")
-	assert_eq(_neighbor(menu.lobby.start_button, &"focus_neighbor_left"), menu.lobby.round_buttons[12], "Start <- 12")
+	assert_eq(_neighbor(menu.lobby.start_button, &"focus_neighbor_left"), menu.lobby.setup_button, "Start <- Game setup")
 
 
 func test_session_state_hides_and_restores_lobby() -> void:
