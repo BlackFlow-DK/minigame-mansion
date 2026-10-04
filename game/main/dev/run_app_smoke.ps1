@@ -11,10 +11,13 @@
 #   all reach the podium with identical scores;
 #   the host's "Back to lobby" returns everyone to the hall (podiums close by themselves); Bob leaves and is gone everywhere;
 #   the host quits and Alice lands on the title screen with the message.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\main\dev\run_app_smoke.ps1 [-Port 24605]
+# -Modes (game modes): the host plays a Playlist (bumper_sumo, coin_scramble) with Mutators: Always;
+#   additionally asserts both rounds come from the playlist and that every peer applied the same
+#   mutator to all 4 players at every round start (same body scales everywhere).
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File game\main\dev\run_app_smoke.ps1 [-Port 24605] [-Modes]
 # Exit 0 when every check passes. Always kills the processes it started.
 # -AllowError <regex>: log lines matching it do not fail the run (a known bug owned elsewhere).
-param([int]$Port = 24605, [int]$StepTimeoutSec = 25, [double]$TimeScale = 10, [double]$RoundTime = 25, [string]$AllowError = '', [string]$FirstRound = 'bumper_sumo')
+param([int]$Port = 24605, [int]$StepTimeoutSec = 25, [double]$TimeScale = 10, [double]$RoundTime = 25, [string]$AllowError = '', [string]$FirstRound = 'bumper_sumo', [switch]$Modes)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 . (Join-Path $Root 'tools\_common.ps1')  # Get-GodotBin, ConvertTo-ArgString, $GameDir, $GodotErrorPattern
@@ -173,7 +176,9 @@ $All = @('Host', 'Alice', 'Bob')
 $exit = 1
 try {
     # 1. Host from the title screen, plus a bot from the overlay: the hall loads with both.
-    Start-Actor 'Host'
+    $HostArgs = @()
+    if ($Modes) { $HostArgs = @('--order=playlist', '--playlist=bumper_sumo,coin_scramble', '--mutators=always') }
+    Start-Actor 'Host' $HostArgs
     Wait-For 'host app ready' { (Read-State 'Host').events -contains 'ready' }
     Send-Cmd 'Host' 'host'
     Wait-For 'host in the lobby (overlay, hall loaded, 1 player)' {
@@ -265,6 +270,24 @@ try {
     $script:Check = 'same minigames, players and tuning at every round start'
     if (@($tunings | Select-Object -Unique).Count -ne 1) { throw "round-start tuning differs between peers: $($tunings -join ' | ')" }
     Write-Host "PASS same minigames, players and tuning at every round start on all peers"
+    if ($Modes) {
+        $script:Check = 'game modes: playlist respected, the same mutator on every player of every peer'
+        foreach ($r in @((Read-State 'Host').rounds)) {
+            if ($r.scene -notmatch 'bumper_sumo|coin_scramble') { throw "round played $($r.scene), not from the playlist" }
+        }
+        $hostStarts = @((Read-State 'Host').round_starts)
+        foreach ($n in $All) {
+            $starts = @((Read-State $n).round_starts)
+            for ($i = 0; $i -lt $starts.Count; $i++) {
+                $r = $starts[$i]
+                if ($r.mutator -eq '') { throw "${n}: round $($r.index) has no mutator (Mutators: Always)" }
+                if ($r.mutator -ne $hostStarts[$i].mutator) { throw "${n}: round $($r.index) mutator $($r.mutator), host $($hostStarts[$i].mutator)" }
+                if ($r.mutated.count -ne 4) { throw "${n}: round $($r.index) only $($r.mutated.count) of 4 players carry $($r.mutator)" }
+            }
+        }
+        Write-Host "  mutators: $(@($hostStarts | ForEach-Object { $_.mutator }) -join ', ')"
+        Write-Host 'PASS game modes: playlist respected, the same mutator on every player of every peer'
+    }
     $states = @($All | ForEach-Object { (Read-State $_).rounds[0].mg_state })
     Write-Host "  round 1 end state: $($states -join ' | ')"
     $script:Check = 'round 1 host-decided state identical on all peers'

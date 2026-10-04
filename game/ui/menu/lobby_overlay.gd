@@ -1,10 +1,12 @@
 class_name MenuLobbyOverlay
 extends Control
 ## Lobby overlay drawn over the 3D lobby world: roster (colour, name, bot tag, host crown),
-## host-only controls (rounds 4/8/12, add/remove bot, a pulsing START), "Waiting for host" for
-## clients, the host's LAN address(es) (click one to copy it: "Copied!"), your Mansion Coins,
+## host-only controls (Game setup: rounds, order, playlist, mutators, practice in a panel
+## (GameSetupPanel); add/remove bot; a pulsing START), "Waiting for host" plus the host's setup
+## summary for clients, the host's LAN address(es) (click one to copy it: "Copied!"), your Mansion Coins,
 ## Wardrobe (change your look; everyone sees it live) and Leave. Pure view: `refresh()` feeds
-## it, signals report clicks.
+## it, signals report clicks. Game modes: the setup panel's choices go to `Session.configure`
+## (host) and Practice to `Session.start_practice`; clients read `Session` for their summary line.
 ## No solid panels: every block sits on a soft dark scrim (a gradient that fades out), so blobs
 ## standing at the screen edges stay visible through it, and the middle stays clear (and
 ## click-through) for the world.
@@ -16,6 +18,8 @@ signal leave_pressed
 signal wardrobe_pressed
 ## An address was copied to the clipboard.
 signal address_copied(address: String)
+## Host: Practice started from the setup panel (Session.start_practice is called too).
+signal practice_pressed(id: StringName, mutator: StringName)
 
 const ROUND_CHOICES: Array[int] = [4, 8, 12]
 const DEFAULT_ROUNDS := 8
@@ -44,8 +48,14 @@ var client_bar: Control
 var waiting_label: Label
 var start_button: Button
 var start_hint: Label
-## rounds -> toggle Button
+## rounds -> toggle Button (in the setup panel)
 var round_buttons: Dictionary[int, Button] = {}
+## Host: opens the Game setup panel.
+var setup_button: Button
+## Host: the setup in one line under START; clients: the host's setup under "Waiting...".
+var setup_label: Label
+var client_setup_label: Label
+var setup_panel: GameSetupPanel
 ## The soft dark gradients behind each block (tests check they stay translucent).
 var scrims: Array[TextureRect] = []
 
@@ -57,6 +67,8 @@ var _info_block: VBoxContainer
 var _roster_block: VBoxContainer
 var _roster_scrim: TextureRect
 var _info_scrim: TextureRect
+## The setup was sent to Session since this peer became the host view.
+var _setup_pushed: bool = false
 
 
 func _init() -> void:
@@ -140,8 +152,8 @@ func _init() -> void:
 	# Bottom centre: start bar (host) / waiting text (client).
 	var bottom := MenuUI.full_rect(CenterContainer.new())
 	bottom.anchor_top = 1.0
-	bottom.offset_top = -124
-	bottom.offset_bottom = -14
+	bottom.offset_top = -138
+	bottom.offset_bottom = -12
 	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bottom)
 	var host_col := MenuUI.vbox(4)
@@ -151,45 +163,100 @@ func _init() -> void:
 	var host_row := MenuUI.hbox(12)
 	host_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	host_col.add_child(host_row)
-	var rounds_l := MenuUI.label("Rounds", &"ScrimLabel")
-	rounds_l.add_theme_font_size_override(&"font_size", 22)
-	rounds_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	host_row.add_child(rounds_l)
-	var group := ButtonGroup.new()
-	for r in ROUND_CHOICES:
-		var b := MenuUI.button(str(r), &"ChipButton", 60)
-		b.toggle_mode = true
-		b.button_group = group
-		b.button_pressed = r == selected_rounds
-		b.toggled.connect(func(on: bool) -> void:
-			if on:
-				selected_rounds = r)
-		host_row.add_child(b)
-		round_buttons[r] = b
+	setup_panel = GameSetupPanel.new()
+	round_buttons = setup_panel.round_buttons
+	selected_rounds = setup_panel.rounds
+	setup_button = MenuUI.button("Game setup", &"BigButton", 230)
+	setup_button.tooltip_text = "Rounds, order, playlist, mutators, practice"
+	host_row.add_child(setup_button)
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(14, 0)
 	host_row.add_child(spacer)
 	start_button = MenuUI.button("START!", &"PrimaryButton", 210)
 	host_row.add_child(start_button)
+	setup_label = MenuUI.label("", &"ScrimLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	host_col.add_child(setup_label)
 	start_hint = MenuUI.label("Need at least 2 players: add a bot or wait for friends.", &"ScrimLabel", HORIZONTAL_ALIGNMENT_CENTER)
 	host_col.add_child(start_hint)
 
+	var client_col := MenuUI.vbox(4)
+	client_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	client_bar = client_col
+	bottom.add_child(client_col)
 	waiting_label = MenuUI.label("Waiting for the host to start...", &"ScrimHeader", HORIZONTAL_ALIGNMENT_CENTER)
 	waiting_label.add_theme_font_size_override(&"font_size", 28)
-	client_bar = waiting_label
-	bottom.add_child(waiting_label)
+	client_col.add_child(waiting_label)
+	client_setup_label = MenuUI.label("", &"ScrimLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	client_col.add_child(client_setup_label)
+
+	# Last: the setup panel draws over everything else.
+	add_child(setup_panel)
+	setup_panel.setup_changed.connect(_on_setup_changed)
+	setup_panel.practice_requested.connect(_on_practice_requested)
+	setup_panel.closed.connect(func(had_focus: bool) -> void:
+		if had_focus and is_visible_in_tree():
+			_refresh_focus_links()
+			setup_button.grab_focus())
+	setup_button.pressed.connect(open_setup)
 
 	leave_button.pressed.connect(func() -> void: leave_pressed.emit())
 	wardrobe_button.pressed.connect(func() -> void: wardrobe_pressed.emit())
 	add_bot_button.pressed.connect(func() -> void: add_bot_pressed.emit())
 	start_button.pressed.connect(func() -> void:
-		if _player_count >= MIN_PLAYERS and is_host_view:
+		if _player_count >= MIN_PLAYERS and is_host_view and setup_panel.can_start():
 			start_pressed.emit(selected_rounds))
 	visibility_changed.connect(_update_pulse)
+	visibility_changed.connect(func() -> void:
+		if not is_visible_in_tree():
+			setup_panel.close())
 
 
 func _ready() -> void:
 	_fit_scrims.call_deferred()
+	Session.setup_changed.connect(_refresh_setup_labels)
+	_refresh_setup_labels()
+
+
+## Host: opens the Game setup panel (focus goes into it).
+func open_setup() -> void:
+	if not is_host_view:
+		return
+	setup_panel.set_player_count(_player_count)
+	setup_panel.open()
+
+
+func _on_setup_changed(rounds: int, order: int, ticked: Array, mutators: int) -> void:
+	selected_rounds = rounds
+	if is_host_view:
+		Session.configure(rounds, order, ticked, mutators)
+	_refresh_setup_labels()
+	refresh_start()
+
+
+func _on_practice_requested(id: StringName, mutator: StringName) -> void:
+	if not is_host_view:
+		return
+	setup_panel.close()
+	practice_pressed.emit(id, mutator)
+	Session.start_practice(id, mutator)
+
+
+## The summary lines: the host's own panel, or what the host sent (clients).
+func _refresh_setup_labels() -> void:
+	setup_label.text = setup_panel.summary()
+	var games := Session.playlist.size() if not Session.playlist.is_empty() else MinigameCatalog.playable().size()
+	client_setup_label.text = GameModes.summary(Session.setup_rounds, Session.order_mode, Session.mutator_mode, games)
+
+
+## START: enabled with enough players and a usable setup; the hint says why not.
+func refresh_start() -> void:
+	start_button.disabled = _player_count < MIN_PLAYERS or not setup_panel.can_start()
+	if _player_count < MIN_PLAYERS:
+		start_hint.text = "Need at least 2 players: add a bot or wait for friends."
+	else:
+		start_hint.text = "Tick at least one game in Game setup."
+	start_hint.visible = start_button.disabled
+	_update_pulse()
 
 
 ## Rebuilds the view. `roster`: slot -> PlayerInfo (Net.roster). `local_slot`: this peer's
@@ -220,9 +287,16 @@ func refresh(roster: Dictionary, local_slot: int, is_host: bool, max_players: in
 	client_bar.visible = not is_host
 	add_bot_button.visible = is_host
 	add_bot_button.disabled = _player_count >= max_players
-	start_button.disabled = _player_count < MIN_PLAYERS
-	start_hint.visible = start_button.disabled
-	_update_pulse()
+	setup_panel.set_player_count(_player_count)
+	if not is_host:
+		setup_panel.close()
+		_setup_pushed = false
+	elif not _setup_pushed:
+		# This peer hosts now: its saved (or dev-arg) setup becomes the session's.
+		_setup_pushed = true
+		Session.configure(setup_panel.rounds, setup_panel.order, setup_panel.ticked(), setup_panel.mutator_mode)
+	_refresh_setup_labels()
+	refresh_start()
 
 	_refresh_focus_links()
 	if had_focus and not _focus_inside():
@@ -285,8 +359,11 @@ func row_count() -> int:
 
 
 func focus_default() -> void:
+	if setup_panel.is_open():
+		setup_panel.focus_default()
+		return
 	_refresh_focus_links()
-	MenuUI.focus_first([start_button, add_bot_button, wardrobe_button, leave_button])
+	MenuUI.focus_first([start_button, setup_button, add_bot_button, wardrobe_button, leave_button])
 
 
 ## Every focusable control in navigation order (tests walk it).
@@ -405,11 +482,7 @@ func _refresh_focus_links() -> Array[Control]:
 	for s: int in slots:
 		rows.append(_remove_buttons[s])
 	rows.append(add_bot_button)
-	var bottom_row: Array = []
-	for r in ROUND_CHOICES:
-		bottom_row.append(round_buttons[r])
-	bottom_row.append(start_button)
-	rows.append(bottom_row)
+	rows.append([setup_button, start_button])
 	return MenuUI.chain_grid(rows)
 
 

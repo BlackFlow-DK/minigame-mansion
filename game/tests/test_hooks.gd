@@ -113,6 +113,99 @@ func test_size_override_keeps_a_minigame_base() -> void:
 	assert_near(move.max_speed, 3.0 * size.factor("speed"), 0.001, "big override: base * big factor")
 
 
+## Snapshot of everything the size component writes on `p`.
+func _size_state(p: Player) -> Dictionary:
+	var size := p.get_component(&"size") as SizeComponent
+	var shape := p.get_node(^"CollisionShape3D") as CollisionShape3D
+	var capsule := shape.shape as CapsuleShape3D
+	var out := {"id": size.size_id, "body": snappedf(size.body_scale, 0.0001),
+		"radius": snappedf(capsule.radius, 0.0001), "height": snappedf(capsule.height, 0.0001),
+		"centre": snappedf(shape.position.y, 0.0001)}
+	for stat: Array in SizeComponent.STATS:
+		out[stat[3]] = snappedf(float(p.get_component(stat[0]).get(stat[1])), 0.0001)
+	return out
+
+
+func _mutate(p: Player, id: StringName) -> void:
+	var m := Mutators.get_mutator(id)
+	(p.get_component(&"size") as SizeComponent).set_modifier(&"mutator", m.stats, m.body_scale)
+
+
+## Override replaces the loadout size; a mutator multiplies on top of it: a big blob under a
+## `normal` override and the `giant` mutator is exactly a normal blob under `giant`.
+func test_size_override_and_mutator_compose() -> void:
+	var ps := spawn_arena(2)
+	var big := ps[0]
+	var normal := ps[1]
+	_with_size(big, "big")
+	await step(2)
+	(big.get_component(&"size") as SizeComponent).set_size_override("normal", true)
+	_mutate(big, &"giant")
+	_mutate(normal, &"giant")
+	await step(2)
+	var a := _size_state(big)
+	var b := _size_state(normal)
+	assert_eq(a, b, "big + normal override + giant == normal + giant")
+	assert_near(float(a["body"]), Mutators.get_mutator(&"giant").body_scale, 0.001, "body = normal scale * giant")
+
+
+func test_size_override_and_mutator_clear_in_either_order() -> void:
+	for order in 2:
+		var ps := spawn_arena(1)
+		var p := ps[0]
+		_with_size(p, "big")
+		await step(2)
+		var before := _size_state(p)
+		var size := p.get_component(&"size") as SizeComponent
+		size.set_size_override("small", true)
+		_mutate(p, &"giant")
+		await step(2)
+		assert_true(_size_state(p) != before, "order %d: changed while both are set" % order)
+		if order == 0:
+			size.clear_size_override(true)
+			await step(1)
+			size.clear_modifier(&"mutator")
+		else:
+			size.clear_modifier(&"mutator")
+			await step(1)
+			size.clear_size_override(true)
+		await step(2)
+		assert_eq(_size_state(p), before, "order %d: restored exactly" % order)
+		stage.clear()
+		remove_child(stage)
+		stage.queue_free()
+		stage = null
+		Net.leave()
+
+
+func test_big_loadout_normal_override_tiny_mutator() -> void:
+	var ps := spawn_arena(2)
+	var p := ps[0]
+	_with_size(p, "big")
+	await step(2)
+	var size := p.get_component(&"size") as SizeComponent
+	var base_speed := size.base_of(&"movement", &"max_speed")
+	var base_reach := size.base_of(&"shove", &"reach")
+	size.set_size_override("normal", true)
+	_mutate(p, &"tiny")
+	await step(2)
+	var tiny := Mutators.get_mutator(&"tiny")
+	var s := _size_state(p)
+	assert_eq(s["id"], "normal", "normal size in effect")
+	assert_near(float(s["body"]), tiny.body_scale, 0.001, "body = 1 * tiny")
+	assert_near(float(s["radius"]), 0.4 * tiny.body_scale, 0.001, "tiny normal capsule")
+	assert_near(float(s["centre"]), 0.5 * tiny.body_scale, 0.001, "feet on the floor")
+	assert_near(float(s["movement:max_speed"]), base_speed, 0.001, "normal speed (tiny does not touch it)")
+	assert_near(float(s["shove:reach"]), base_reach * float(tiny.stats["shove:reach"]), 0.001, "reach = base * 1 * tiny")
+	await step(30)  # a modifier eases the shown scale (no snap)
+	assert_near((p.get_component(&"visuals") as Node3D).scale.x, tiny.body_scale, 0.001, "shown tiny")
+	# Frozen: stat factors 1, the body scale stays applied.
+	p.frozen = true
+	await step(2)
+	assert_near((p.get_component(&"shove") as ShoveComponent).reach, base_reach, 0.001, "frozen: base reach")
+	assert_near(size.body_scale, tiny.body_scale, 0.001, "frozen: still tiny")
+
+
 # --- 3. Name tag and shadow ---------------------------------------------------------------------
 
 func test_name_tag_suppressed_and_presentation_hidden() -> void:
