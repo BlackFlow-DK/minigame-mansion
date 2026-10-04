@@ -33,8 +33,21 @@ extends Node
 ## (`place_points`): 2-3 players 3/2/1; 4-5 players 4/3/2/1; 6-8 players 5/4/3/2/1/1. Places
 ## past the table (and anyone missing from the ranking) score 0.
 ## Final ranking: total desc, then round wins desc, then slot asc.
+##
+## Game modes (v0.3, A3/A4; logic in res://modes/): the host's setup (`configure`: rounds,
+## `order_mode` SHUFFLE / PLAYLIST / VOTE, the ticked `playlist`, `mutator_mode`) is sent to
+## every peer, lobby included (`setup_changed`). Every mode only draws minigames that fit the
+## player count (MinigameCatalog). VOTE adds a VOTE state before each round's INTRO: three
+## candidates (`vote_candidates`), every player moves a marker (`vote(index, lock)`), bots vote
+## at random, the host tallies (ties random) and sends `vote_decided`, then the INTRO of the
+## winner. Mutators: the host rolls one per round from the minigame's allowed set
+## (`mutator_blocklist`) and sends it with the INTRO (`round_mutator`, `info["mutator"]`); every
+## peer applies it to every player for the round and takes it off at RESULTS.
+## Practice (`start_practice(id, mutator)`): one round of `id`, normal INTRO/PLAYING/RESULTS,
+## no points (all 0), no coins (Progression skips `practice` rounds), then straight to LOBBY.
 
-enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM }
+## VOTE (appended, so the older values keep their numbers): the next round's vote.
+enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM, VOTE }
 
 signal state_changed(state: State)
 ## `info`: `{ "id": StringName, "title": String, "rule_text": String }`; `index` is 0-based.
@@ -46,6 +59,17 @@ signal round_finished(ranking: Array[int], points: Dictionary)
 ## first; flattened it is `ranking`).
 signal round_ranked(groups: Array, points: Dictionary)
 signal session_finished(final_ranking: Array[int])
+## The host's game setup reached this peer (`setup_rounds`, `order_mode`, `playlist`,
+## `mutator_mode`), lobby included.
+signal setup_changed
+## VOTE started for round `index` (0-based): `candidates` (Array of StringName, the cards).
+signal vote_started(candidates: Array, index: int)
+## A player's marker moved or locked (`vote_marks`, `vote_locked`).
+signal vote_updated
+## The host tallied: `winner` indexes `vote_candidates`; the INTRO of `id` follows.
+signal vote_decided(winner: int, id: StringName)
+## This round's mutator changed on this peer (&"" = none / taken off).
+signal mutator_changed(id: StringName)
 
 
 ## Seconds the title card shows before the countdown.
@@ -65,6 +89,10 @@ signal session_finished(final_ranking: Array[int])
 ## that counts time in `_host_tick` stays in step with the backstop. Tests and smokes raise
 ## it; player physics still runs at normal speed.
 @export var time_scale: float = 1.0
+## Seconds players have to vote (VOTE); it ends early once everyone locked.
+@export var vote_time: float = 8.0
+## Seconds the winning card shows before the INTRO.
+@export var vote_reveal_time: float = 1.8
 
 ## Seed for the round order; -1 = random. Host only.
 var order_seed: int = -1
@@ -95,6 +123,28 @@ var end_grace: float = 0.0
 ## peer just before `round_finished`; empty from the next round's intro (and in LOBBY).
 var round_groups: Array = []
 
+## Game setup, host decides (`configure`), every peer holds it. `setup_rounds` is the lobby's
+## choice (start_session's `rounds` still wins); `playlist` the ticked ids (PLAYLIST and VOTE draw
+## from them; empty = every id); `order_mode` GameModes.Order; `mutator_mode` Mutators.Mode.
+var setup_rounds: int = 8
+var order_mode: int = GameModes.Order.SHUFFLE
+var playlist: Array[StringName] = []
+var mutator_mode: int = Mutators.Mode.OFF
+## Host, dev (`--mutator=<id>`): every round tries this mutator (when the minigame allows it).
+var forced_mutator: StringName = &""
+## Every peer: this session is a practice round (no points, no coins, back to LOBBY after).
+var practice: bool = false
+## Every peer: the mutator on every player this round (&"" = none). Set with the INTRO,
+## cleared at RESULTS.
+var round_mutator: StringName = &""
+## Every peer, VOTE: the round being voted for, its candidates, slot -> marked candidate index,
+## slot -> true once locked, and the winner (-1 until the host tallied).
+var vote_index: int = -1
+var vote_candidates: Array[StringName] = []
+var vote_marks: Dictionary[int, int] = {}
+var vote_locked: Dictionary[int, bool] = {}
+var vote_winner: int = -1
+
 ## Seconds of play in the current round (scaled), host only.
 var _play_elapsed: float = 0.0
 ## Ranking groups the minigame finished with during INTRO, applied when play starts. Host only.
@@ -105,12 +155,63 @@ var _round_player_count: int = 0
 ## The ranking groups waiting for the end grace to run out. Host only.
 var _grace_ranking: Array = []
 var _grace_active: bool = false
+## Host: per-round mutator rolls, vote draws and bot votes.
+var _mode_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var _last_mutator: StringName = &""
+## Host: the practice round's mutator pick.
+var _practice_mutator: StringName = &""
+## Host, VOTE: bot slot -> [mark at (s), candidate, lock at (s)]; seconds into the vote.
+var _bot_votes: Dictionary = {}
+var _vote_elapsed: float = 0.0
+## The Stage whose players_spawned we listen to (late spawns get the round's mutator).
+var _watched_stage: Stage = null
 
 
 func _ready() -> void:
 	Net.roster_changed.connect(_on_roster_changed)
 	Net.server_closed.connect(_on_server_closed)
 	multiplayer.peer_connected.connect(_on_peer_connected)
+	apply_dev_args(OS.get_cmdline_user_args())
+	# The vote cards and the mutator badge (a CanvasLayer; loaded at runtime: it names autoloads).
+	_add_overlay.call_deferred()
+
+
+func _add_overlay() -> void:
+	var overlay_script := load("res://modes/modes_overlay.gd") as GDScript
+	if overlay_script and get_node_or_null(^"ModesOverlay") == null:
+		add_child(overlay_script.new() as Node)
+
+
+## Dev / smoke args: `--order=shuffle|playlist|vote`, `--playlist=id,id`,
+## `--mutators=off|sometimes|always`, `--mutator=<id>` (every round, when allowed).
+func apply_dev_args(args: PackedStringArray) -> void:
+	for arg in args:
+		var kv := arg.trim_prefix("--").split("=", true, 1)
+		if kv.size() < 2:
+			continue
+		match kv[0]:
+			"order":
+				var i := _find_name(GameModes.ORDER_NAMES, kv[1])
+				if i >= 0:
+					order_mode = i
+			"playlist":
+				playlist.clear()
+				for id in kv[1].split(",", false):
+					playlist.append(StringName(id.strip_edges()))
+			"mutators":
+				var m := _find_name(Mutators.MODE_NAMES, kv[1])
+				if m >= 0:
+					mutator_mode = m
+			"mutator":
+				if Mutators.has(StringName(kv[1])):
+					forced_mutator = StringName(kv[1])
+
+
+static func _find_name(names: Array[String], text: String) -> int:
+	for i in names.size():
+		if names[i].to_lower() == text.to_lower():
+			return i
+	return -1
 
 
 # --- Public API ------------------------------------------------------------------------
@@ -132,19 +233,88 @@ func start_session(rounds: int) -> void:
 	var rng := RandomNumberGenerator.new()
 	if order_seed >= 0:
 		rng.seed = order_seed
+		_mode_rng.seed = order_seed + 7919
 	else:
 		rng.randomize()
-	round_order = build_round_order(rounds, rng)
-	if round_order.is_empty():
-		push_warning("Session.start_session: the minigame registry is empty")
-		return
+		_mode_rng.randomize()
+	_last_mutator = &""
+	_practice_mutator = &""
+	var pool := GameModes.pool(order_mode, playlist, Net.roster.size())
+	if order_mode == GameModes.Order.VOTE:
+		round_order = []
+	else:
+		round_order = build_round_order(rounds, rng, pool)
+		if round_order.is_empty():
+			push_warning("Session.start_session: the minigame registry is empty")
+			return
 	# Before the intro RPC goes out: refuse joiners from now on, and leave lobby mode now.
 	# Turning follow_roster off sends the lobby's last manifest, which must reach clients
 	# before the intro, not after (a late lobby manifest made clients rebuild round 1's
 	# minigame without _setup/_start).
 	Net.session_in_progress = true
 	_stage().follow_roster = false
-	_rpc_intro.rpc(0, rounds, String(round_order[0]), intro_time + countdown_time)
+	if order_mode == GameModes.Order.VOTE:
+		_begin_vote(0, rounds)
+	else:
+		_send_intro(0, rounds, false)
+
+
+## Host only, from LOBBY: plays ONE round of `id` with the current roster (the normal INTRO /
+## PLAYING / RESULTS flow, no points, no coins), then returns to LOBBY. `mutator`: a mutator id
+## for the round (&"" = none; ignored if the minigame blocks it).
+func start_practice(id: StringName, mutator: StringName = &"") -> void:
+	if not Net.is_host() or state != State.LOBBY:
+		return
+	if not MinigameRegistry.has(id):
+		push_warning("Session.start_practice: unknown minigame '%s'" % id)
+		return
+	var need := maxi(1, MinigameCatalog.min_players(id))
+	if Net.roster.size() < need:
+		push_warning("Session.start_practice: %s needs %d players, roster has %d" % [id, need, Net.roster.size()])
+		return
+	if _stage() == null:
+		push_warning("Session.start_practice: no Stage in the tree (group 'stage')")
+		return
+	if order_seed >= 0:
+		_mode_rng.seed = order_seed + 7919
+	else:
+		_mode_rng.randomize()
+	_practice_mutator = mutator if Mutators.has(mutator) else &""
+	_last_mutator = &""
+	round_order = [id]
+	Net.session_in_progress = true
+	_stage().follow_roster = false
+	_send_intro(0, 1, true)
+
+
+## Host only: the game setup for the next session, sent to every peer (lobby summary).
+## `order`: GameModes.Order; `ticked`: the playlist (ids); `mutators`: Mutators.Mode.
+## Outside a game (or offline) it is just stored.
+func configure(rounds: int, order: int, ticked: Array, mutators: int) -> void:
+	var ids: Array = []
+	for id: Variant in ticked:
+		ids.append(str(id))
+	if Net.is_host() and Net.local_slot() >= 0:
+		_rpc_setup.rpc(rounds, order, ids, mutators)
+	else:
+		_rpc_setup(rounds, order, ids, mutators)
+
+
+## Any peer, during VOTE: this peer's player puts its marker on candidate `index`; `lock` makes
+## it final. The host decides (it ignores changes after a lock or after the tally).
+func vote(index: int, lock: bool = false) -> void:
+	var slot := Net.local_slot()
+	if slot < 0 or state != State.VOTE:
+		return
+	if Net.is_host():
+		_host_vote(slot, index, lock)
+	else:
+		_rpc_vote_input.rpc_id(1, index, lock)
+
+
+## Every peer: the title-card line of the round's mutator ("" for none).
+func mutator_line() -> String:
+	return Mutators.card_line(round_mutator)
 
 
 ## Host only: leaves the podium early (the podium's "Back to lobby" button) and returns
@@ -164,11 +334,11 @@ func abort_session() -> void:
 		_rpc_lobby()
 
 
-## `rounds` minigame ids from the registry: shuffled bags, so no id repeats until all
-## have been played, and no id twice in a row across bags.
-static func build_round_order(rounds: int, rng: RandomNumberGenerator) -> Array[StringName]:
+## `rounds` minigame ids from `from` (default: the registry): shuffled bags, so no id repeats
+## until all have been played, and no id twice in a row across bags.
+static func build_round_order(rounds: int, rng: RandomNumberGenerator, from: Array[StringName] = []) -> Array[StringName]:
 	var order: Array[StringName] = []
-	var pool: Array[StringName] = MinigameRegistry.IDS.duplicate()
+	var pool: Array[StringName] = from.duplicate() if not from.is_empty() else MinigameRegistry.IDS.duplicate()
 	if pool.is_empty():
 		return order
 	while order.size() < rounds:
@@ -270,14 +440,125 @@ func _physics_process(delta: float) -> void:
 			_tick_playing(delta)
 		State.RESULTS:
 			if phase_time_left <= 0.0:
-				if round_index + 1 < round_count and round_index + 1 < round_order.size():
-					var next := round_index + 1
-					_rpc_intro.rpc(next, round_count, String(round_order[next]), intro_time + countdown_time)
+				var next := round_index + 1
+				if practice:
+					_rpc_lobby.rpc()
+				elif next < round_count and order_mode == GameModes.Order.VOTE:
+					_begin_vote(next, round_count)
+				elif next < round_count and next < round_order.size():
+					_send_intro(next, round_count, false)
 				else:
 					_go_podium()
 		State.PODIUM:
 			if phase_time_left <= 0.0:
 				_rpc_lobby.rpc()
+		State.VOTE:
+			_tick_vote(delta)
+
+
+## Host: sends round `index`'s INTRO (the planned id, swapped for one that fits the player
+## count if needed) with its mutator.
+func _send_intro(index: int, count: int, is_practice: bool) -> void:
+	var id: StringName = round_order[index] if index < round_order.size() else &""
+	if not is_practice and not MinigameCatalog.fits(id, Net.roster.size()):
+		var pool := GameModes.pool(order_mode, playlist, Net.roster.size())
+		var prev: StringName = round_order[index - 1] if index > 0 else &""
+		if pool.size() > 1:
+			pool.erase(prev)
+		id = pool[_mode_rng.randi_range(0, pool.size() - 1)]
+		round_order[index] = id
+	var mode := Mutators.Mode.OFF if is_practice else mutator_mode
+	var forced := _practice_mutator if is_practice else forced_mutator
+	var mutator := Mutators.roll(mode, _blocklist_for(id), _mode_rng, forced, _last_mutator)
+	if mutator != &"":
+		_last_mutator = mutator
+	_rpc_intro.rpc(index, count, String(id), intro_time + countdown_time, is_practice, String(mutator))
+
+
+## The minigame's `mutator_blocklist` without loading its whole scene: an instance of its root
+## script alone (no children, never in the tree), or the scene's own override of the property.
+func _blocklist_for(id: StringName) -> Array:
+	var scene: PackedScene = scene_override
+	if scene == null and MinigameRegistry.has(id):
+		scene = load(MinigameRegistry.scene_path(id)) as PackedScene
+	if scene == null:
+		return []
+	var st := scene.get_state()
+	var script: Script = null
+	for i in st.get_node_property_count(0):
+		var prop := st.get_node_property_name(0, i)
+		if prop == &"mutator_blocklist":
+			var v: Variant = st.get_node_property_value(0, i)
+			return (v as Array).duplicate() if v is Array else []
+		if prop == &"script":
+			script = st.get_node_property_value(0, i) as Script
+	if script == null or not script.can_instantiate():
+		return []
+	var probe: Object = script.new()
+	var out := Mutators.blocklist_of(probe).duplicate()
+	if probe is Node:
+		(probe as Node).free()
+	return out
+
+
+# --- Vote (host) -----------------------------------------------------------------------------
+
+func _begin_vote(index: int, count: int) -> void:
+	var pool := GameModes.pool(order_mode, playlist, Net.roster.size())
+	var last: StringName = round_order[index - 1] if index > 0 and index - 1 < round_order.size() else &""
+	var candidates := GameModes.pick_candidates(pool, _mode_rng, last, round_order)
+	_bot_votes.clear()
+	for s: int in Net.roster:
+		if Net.roster[s].is_bot:
+			var mark_at := _mode_rng.randf_range(0.6, vote_time * 0.45)
+			_bot_votes[s] = [mark_at, _mode_rng.randi_range(0, candidates.size() - 1),
+				_mode_rng.randf_range(mark_at + 0.5, vote_time * 0.8)]
+	var names: Array = []
+	for id in candidates:
+		names.append(String(id))
+	_rpc_vote_start.rpc(index, count, names, vote_time)
+
+
+func _tick_vote(delta: float) -> void:
+	_vote_elapsed += delta * time_scale
+	if vote_winner < 0:
+		for s: int in _bot_votes.keys():
+			var plan: Array = _bot_votes[s]
+			if not Net.roster.has(s):
+				_bot_votes.erase(s)
+			elif not vote_marks.has(s) and _vote_elapsed >= float(plan[0]):
+				_host_vote(s, int(plan[1]), false)
+			elif not vote_locked.has(s) and _vote_elapsed >= float(plan[2]):
+				_host_vote(s, int(plan[1]), true)
+		if phase_time_left <= 0.0:
+			var votes: Dictionary = {}
+			for s: int in vote_marks:
+				if Net.roster.has(s):
+					votes[s] = vote_marks[s]
+			_rpc_vote_result.rpc(GameModes.tally(votes, vote_candidates.size(), _mode_rng), vote_reveal_time)
+	elif phase_time_left <= 0.0:
+		var id := vote_candidates[clampi(vote_winner, 0, vote_candidates.size() - 1)]
+		if round_order.size() <= vote_index:
+			round_order.resize(vote_index + 1)
+		round_order[vote_index] = id
+		_send_intro(vote_index, round_count, false)
+
+
+func _host_vote(slot: int, index: int, lock: bool) -> void:
+	if state != State.VOTE or vote_winner >= 0 or vote_locked.has(slot) or not Net.roster.has(slot):
+		return
+	if index < 0 or index >= vote_candidates.size():
+		return
+	_rpc_vote_mark.rpc(slot, index, lock)
+	if lock and _all_locked():
+		phase_time_left = minf(phase_time_left, 0.5)
+
+
+func _all_locked() -> bool:
+	for s: int in Net.roster:
+		if not vote_locked.has(s):
+			return false
+	return true
 
 
 func _tick_playing(delta: float) -> void:
@@ -339,6 +620,9 @@ func _on_minigame_finished(ranking: Array[int], minigame: Minigame) -> void:
 ## (see Minigame.finish). Slots not in the roster are dropped; roster slots missing from the
 ## ranking score 0.
 func _end_round(ranking: Array) -> void:
+	if practice:
+		_end_practice_round(ranking)
+		return
 	var clean: Array = []
 	for g: Array in Minigame.normalize_ranking(ranking):
 		var kept: Array[int] = []
@@ -370,6 +654,31 @@ func _end_round(ranking: Array) -> void:
 	_rpc_results.rpc(Minigame.flatten_groups(clean), points, totals, wins, results_time, sizes)
 
 
+## Practice: the same results, every point 0, totals and wins untouched.
+func _end_practice_round(ranking: Array) -> void:
+	var clean: Array = []
+	for g: Array in Minigame.normalize_ranking(ranking):
+		var kept: Array[int] = []
+		for s: int in g:
+			if Net.roster.has(s):
+				kept.append(s)
+		if not kept.is_empty():
+			clean.append(kept)
+	var points: Dictionary = {}
+	for s: int in Net.roster:
+		points[s] = 0
+	var sizes: Array[int] = []
+	for g: Array in clean:
+		sizes.append(g.size())
+	var totals: Dictionary = {}
+	for s: int in scores:
+		totals[s] = scores[s]
+	var wins: Dictionary = {}
+	for s: int in round_wins:
+		wins[s] = round_wins[s]
+	_rpc_results.rpc(Minigame.flatten_groups(clean), points, totals, wins, results_time, sizes)
+
+
 func _go_podium() -> void:
 	var slots: Array[int] = []
 	slots.assign(Net.roster.keys())
@@ -388,9 +697,9 @@ func _on_roster_changed() -> void:
 		if state != State.LOBBY:
 			_rpc_lobby()  # we left the game: reset locally
 		return
-	if not Net.is_host():
-		return
-	if (state == State.INTRO or state == State.PLAYING or state == State.RESULTS) \
+	if not Net.is_host() or practice:
+		return  # practice plays on with whoever is left (a minigame ends itself when needed)
+	if (state == State.INTRO or state == State.PLAYING or state == State.RESULTS or state == State.VOTE) \
 			and Net.roster.size() < min_players:
 		_go_podium()
 
@@ -399,18 +708,56 @@ func _on_server_closed() -> void:
 	_rpc_lobby()
 
 
-## Host: a peer joined mid-session; it spectates until the next round and gets the
-## current state and scores now.
+## Host: a peer joined. It gets the game setup (the lobby summary); mid-session it spectates
+## until the next round and gets the current state, scores, mutator and vote now.
 func _on_peer_connected(peer_id: int) -> void:
-	if not Net.is_host() or state == State.LOBBY:
+	if not Net.is_host():
 		return
-	_rpc_snapshot.rpc_id(peer_id, state, round_index, round_count, scores, round_wins, phase_duration, phase_time_left)
+	_rpc_setup.rpc_id(peer_id, setup_rounds, order_mode, _playlist_strings(), mutator_mode)
+	if state == State.LOBBY:
+		return
+	_rpc_snapshot.rpc_id(peer_id, state, round_index, round_count, scores, round_wins, phase_duration, phase_time_left, snapshot_extra())
+
+
+## The mode fields a late joiner needs (also read by tests).
+func snapshot_extra() -> Dictionary:
+	var cands: Array = []
+	for id in vote_candidates:
+		cands.append(String(id))
+	return {
+		"practice": practice, "mutator": String(round_mutator), "vote_index": vote_index,
+		"vote_candidates": cands, "vote_marks": vote_marks.duplicate(), "vote_locked": vote_locked.duplicate(),
+		"vote_winner": vote_winner,
+	}
+
+
+func _playlist_strings() -> Array:
+	var out: Array = []
+	for id in playlist:
+		out.append(String(id))
+	return out
 
 
 # --- Replicated transitions (host -> every peer, host included) ----------------------------
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
+func _rpc_setup(rounds: int, order: int, ticked: Array, mutators: int) -> void:
+	setup_rounds = maxi(1, rounds)
+	order_mode = clampi(order, 0, GameModes.ORDER_NAMES.size() - 1)
+	playlist.clear()
+	for id: Variant in ticked:
+		playlist.append(StringName(str(id)))
+	mutator_mode = clampi(mutators, 0, Mutators.MODE_NAMES.size() - 1)
+	setup_changed.emit()
+
+
+## `is_practice`: a practice round. `mutator`: this round's mutator id ("" = none), applied to
+## every player on every peer.
+@rpc("authority", "call_local", "reliable")
+func _rpc_intro(index: int, count: int, id: String, duration: float, is_practice: bool = false, mutator: String = "") -> void:
+	practice = is_practice
+	_clear_mutator()
+	_clear_vote()
 	if index == 0:
 		if Net.is_host():
 			Net.session_in_progress = true
@@ -440,14 +787,18 @@ func _rpc_intro(index: int, count: int, id: String, duration: float) -> void:
 			current_minigame = stage.load_minigame(StringName(id))
 	else:
 		push_error("Session: no Stage in the tree (group 'stage') to load '%s'" % id)
-	var info := {"id": StringName(id), "title": "", "rule_text": ""}
+	var info := {"id": StringName(id), "title": "", "rule_text": "", "mutator": StringName(mutator),
+		"mutator_line": Mutators.card_line(StringName(mutator)), "practice": is_practice}
 	_round_player_count = current_minigame.players.size() if current_minigame else Net.roster.size()
 	if current_minigame:
 		info["title"] = current_minigame.title
 		info["rule_text"] = current_minigame.rule_text
 		if Net.is_host():
 			current_minigame.finished.connect(_on_minigame_finished.bind(current_minigame))
+		current_minigame.active_mutator = StringName(mutator) if Mutators.has(StringName(mutator)) else &""
 		current_minigame._setup(current_minigame.players)
+	_watch_stage(stage)
+	_set_mutator(StringName(mutator))
 	_set_phase(State.INTRO, duration)
 	round_intro.emit(info, index)
 
@@ -475,6 +826,7 @@ func _rpc_results(ranking: Array, points: Dictionary, totals: Dictionary, wins: 
 	round_groups = groups_from_sizes(r, group_sizes)
 	_assign_totals(totals, wins)
 	_clear_grace()
+	_clear_mutator()
 	for p in _stage_players():
 		p.frozen = true
 	_set_phase(State.RESULTS, duration)
@@ -507,6 +859,8 @@ func _rpc_podium(final_ranking: Array, totals: Dictionary, wins: Dictionary, dur
 		r.append(int(s))
 	_assign_totals(totals, wins)
 	_clear_grace()
+	_clear_mutator()
+	_clear_vote()
 	for p in _stage_players():
 		p.frozen = true
 	_set_phase(State.PODIUM, duration)
@@ -532,6 +886,9 @@ func _clear_grace() -> void:
 func _rpc_lobby() -> void:
 	if Net.is_host():
 		Net.session_in_progress = false
+	_clear_mutator()
+	_clear_vote()
+	practice = false
 	var stage := _stage()
 	if stage:
 		stage.clear()
@@ -551,14 +908,130 @@ func _rpc_lobby() -> void:
 		phase_time_left = 0.0
 
 
-## Late joiner: current state, no round events (it spectates until the next round).
+## Late joiner: current state, no round events (it spectates until the next round). `extra`:
+## snapshot_extra() (practice, the round's mutator, the vote).
 @rpc("authority", "call_remote", "reliable")
-func _rpc_snapshot(new_state: int, index: int, count: int, totals: Dictionary, wins: Dictionary, duration: float, time_left: float) -> void:
+func _rpc_snapshot(new_state: int, index: int, count: int, totals: Dictionary, wins: Dictionary, duration: float, time_left: float, extra: Dictionary = {}) -> void:
 	round_index = index
 	round_count = count
 	_assign_totals(totals, wins)
+	apply_snapshot_extra(new_state, extra)
 	_set_phase(new_state as State, duration)
 	phase_time_left = time_left
+
+
+## The mode part of a late joiner's snapshot (`snapshot_extra()` from the host).
+func apply_snapshot_extra(new_state: int, extra: Dictionary) -> void:
+	practice = bool(extra.get("practice", false))
+	_clear_vote()
+	vote_index = int(extra.get("vote_index", -1))
+	for id: Variant in extra.get("vote_candidates", []):
+		vote_candidates.append(StringName(str(id)))
+	var marks: Dictionary = extra.get("vote_marks", {})
+	for s: Variant in marks:
+		vote_marks[int(s)] = int(marks[s])
+	var locked: Dictionary = extra.get("vote_locked", {})
+	for s: Variant in locked:
+		vote_locked[int(s)] = true
+	vote_winner = int(extra.get("vote_winner", -1))
+	_watch_stage(_stage())
+	var playing := new_state == State.INTRO or new_state == State.PLAYING
+	_set_mutator(StringName(str(extra.get("mutator", ""))) if playing else &"")
+
+
+## Every peer: VOTE for round `index` of `count` between `candidates` (ids as Strings).
+@rpc("authority", "call_local", "reliable")
+func _rpc_vote_start(index: int, count: int, candidates: Array, duration: float) -> void:
+	_clear_mutator()
+	_clear_vote()
+	round_count = count
+	vote_index = index
+	for id: Variant in candidates:
+		vote_candidates.append(StringName(str(id)))
+	_vote_elapsed = 0.0
+	for p in _stage_players():
+		p.frozen = true
+	_set_phase(State.VOTE, duration)
+	vote_started.emit(vote_candidates.duplicate(), index)
+
+
+## A client's vote input reaches the host (the sender's own human slot only).
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_vote_input(index: int, lock: bool) -> void:
+	if not Net.is_host():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	for s: int in Net.roster:
+		var info: PlayerInfo = Net.roster[s]
+		if info.peer_id == sender and not info.is_bot:
+			_host_vote(s, index, lock)
+			return
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_vote_mark(slot: int, index: int, lock: bool) -> void:
+	vote_marks[slot] = index
+	if lock:
+		vote_locked[slot] = true
+	vote_updated.emit()
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_vote_result(winner: int, reveal: float) -> void:
+	vote_winner = winner
+	phase_duration = reveal
+	phase_time_left = reveal
+	var id: StringName = vote_candidates[winner] if winner >= 0 and winner < vote_candidates.size() else &""
+	vote_decided.emit(winner, id)
+
+
+func _clear_vote() -> void:
+	vote_index = -1
+	vote_candidates.clear()
+	vote_marks.clear()
+	vote_locked.clear()
+	vote_winner = -1
+
+
+# --- Mutators (every peer) ------------------------------------------------------------------
+
+## Puts `id` on every player of the stage (&"" takes it off) and mirrors this peer's input if
+## the mutator says so.
+func _set_mutator(id: StringName) -> void:
+	if not Mutators.has(id):
+		id = &""
+	var changed := id != round_mutator
+	round_mutator = id
+	for p in _stage_players():
+		Mutators.apply_to(p, id)
+	var m := Mutators.get_mutator(id)
+	Mutators.set_mirror(m != null and m.mirror)
+	if changed and is_instance_valid(current_minigame):
+		current_minigame.active_mutator = id
+		current_minigame._mutator_changed(id)
+	if changed:
+		mutator_changed.emit(id)
+
+
+func _clear_mutator() -> void:
+	_set_mutator(&"")
+
+
+## Players that spawn after the INTRO (a client's manifest) get the round's mutator too.
+func _watch_stage(stage: Stage) -> void:
+	if stage == null or stage == _watched_stage:
+		return
+	if is_instance_valid(_watched_stage) and _watched_stage.players_spawned.is_connected(_on_players_spawned):
+		_watched_stage.players_spawned.disconnect(_on_players_spawned)
+	_watched_stage = stage
+	stage.players_spawned.connect(_on_players_spawned)
+
+
+func _on_players_spawned(spawned: Array[Player]) -> void:
+	if round_mutator == &"" or not (state == State.INTRO or state == State.PLAYING):
+		return
+	for p in spawned:
+		Mutators.apply_to(p, round_mutator)
 
 
 # --- Helpers -------------------------------------------------------------------------------

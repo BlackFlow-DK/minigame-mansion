@@ -15,12 +15,16 @@ extends Node
 ##   walk <x> <z> <secs>     own player walks along (x, z)
 ##   start <rounds>          lobby overlay: pick rounds, START!
 ##   first_round <id>        host: pick Session.order_seed so round 1 plays minigame <id>
+##                           (from the round pool of Session's game setup: Shuffle / Playlist)
 ##   podium_time <secs>      Session.podium_time
 ##   knockout <slot>         host: current minigame knock_out
 ##   back                    podium: Back to lobby
 ##   leave                   lobby overlay: Leave
 ##   quit
 ## Every local controller is scripted (intent comes from the commands only).
+## Game modes (`--order=`, `--playlist=`, `--mutators=` on the host, read by Session): each round
+## start also records this peer's `Session.round_mutator`, how many players carry it and their
+## body scales, so the runner can check every peer applied the same mutator.
 
 var _name: String = "Player"
 var _dir: String = ""
@@ -88,6 +92,8 @@ func _on_round_started() -> void:
 		"players": mg.players.size() if mg else -1,
 		"scene": mg.scene_file_path if mg else "",
 		"tuning": _tuning(),
+		"mutator": String(Session.round_mutator),
+		"mutated": _mutated(),
 	})
 	_event("round_started:%d" % Session.round_index)
 
@@ -100,6 +106,21 @@ func _tuning() -> Dictionary:
 		var shove := p.get_component(&"shove") as ShoveComponent if is_instance_valid(p) else null
 		out[str(slot)] = snappedf(shove.force, 0.01) if shove else -1.0
 	return out
+
+
+## Players carrying the round's mutator and their body scales (slot -> scale): game modes.
+func _mutated() -> Dictionary:
+	var scales: Dictionary = {}
+	var n := 0
+	for slot: int in app.stage.players:
+		var p := app.stage.players[slot]
+		var size := p.get_component(&"size") as SizeComponent if is_instance_valid(p) else null
+		if size == null:
+			continue
+		if Mutators.applied_to(p):
+			n += 1
+		scales[str(slot)] = snappedf(size.body_scale, 0.001)
+	return {"count": n, "scales": scales}
 
 
 ## Host-decided minigame state every peer must agree on at the end of a round.
@@ -209,7 +230,8 @@ func _run(cmd: String) -> void:
 			for seed_value in 1000:
 				var rng := RandomNumberGenerator.new()
 				rng.seed = seed_value
-				if Session.build_round_order(2, rng)[0] == StringName(parts[1]):
+				var pool := GameModes.pool(Session.order_mode, Session.playlist, Net.roster.size())
+				if Session.build_round_order(2, rng, pool)[0] == StringName(parts[1]):
 					Session.order_seed = seed_value
 					_event("order_seed:%d" % seed_value)
 					return

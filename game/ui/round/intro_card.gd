@@ -3,6 +3,8 @@ extends Control
 ## Title card (minigame title + one-line rule) that slides in, then parks at the top while
 ## a big 3-2-1 counts down. "GO!" belongs to the HUD (shown on Session.round_started).
 ## A ribbon under the card shows this player's team ("TEAM ORANGE") and role line, if any.
+## A sticker on the card's top-right corner names the round's mutator ("MUTATOR: Low gravity!",
+## from Session.round_mutator; game modes).
 ## Owner: round UI.
 
 const CARD_SIZE := Vector2(840, 300)
@@ -32,6 +34,10 @@ var _team_style: StyleBoxFlat
 var _team_label: Label
 var _role_pill: PanelContainer
 var _role_label: Label
+## Sticker on the top-right corner: the round's mutator (hidden without one).
+var _mutator_pill: PanelContainer
+var _mutator_style: StyleBoxFlat
+var _mutator_label: Label
 var _seq: Tween
 var _pop: Tween
 ## The number currently shown (3, 2, 1), 0 before the countdown. Read by tests.
@@ -83,6 +89,7 @@ func _ready() -> void:
 	_rule.custom_minimum_size = Vector2(CARD_SIZE.x - 60.0, 0)
 	vbox.add_child(_rule)
 	_build_ribbon()
+	_build_mutator_sticker()
 
 	var count_center := RoundStyle.centered()
 	count_center.offset_top = 140.0
@@ -92,6 +99,7 @@ func _ready() -> void:
 	_count.pivot_offset = Vector2(300, 190)
 	count_center.add_child(_count)
 	_count.visible = false
+	Session.mutator_changed.connect(set_mutator)
 
 
 ## Starts the title card and countdown for round `index` (0-based) of `count` (0 = unknown).
@@ -101,6 +109,7 @@ func play(title: String, rule_text: String, index: int, count: int) -> void:
 	count_value = 0
 	set_team(-1)
 	set_role("")
+	set_mutator(Session.round_mutator)
 	_title.text = title.to_upper() if title != "" else "GET READY"
 	_rule.text = rule_text
 	_round_label.text = "ROUND %d OF %d" % [index + 1, count] if count > 0 else "ROUND %d" % (index + 1)
@@ -153,6 +162,24 @@ func set_role(text: String) -> void:
 	_update_ribbon()
 
 
+## Shows the mutator sticker for mutator `id` (&"" hides it).
+func set_mutator(id: StringName) -> void:
+	var m := Mutators.get_mutator(id)
+	_mutator_pill.visible = m != null
+	if m == null:
+		return
+	_mutator_label.text = "MUTATOR: %s" % m.card_line
+	_mutator_style.bg_color = m.color
+	var light := m.color.get_luminance() > 0.6
+	_mutator_label.add_theme_color_override(&"font_color", RoundStyle.CHARCOAL if light else RoundStyle.CREAM)
+	_mutator_label.add_theme_constant_override(&"outline_size", 0 if light else 7)
+
+
+## "MUTATOR: Low gravity!" or "" when none is shown. Read by tests.
+func get_mutator_text() -> String:
+	return _mutator_label.text if _mutator_pill.visible else ""
+
+
 ## "TEAM ORANGE" or "" when no team is shown. Read by tests.
 func get_team_text() -> String:
 	return _team_label.text if _team_pill.visible else ""
@@ -199,6 +226,29 @@ func _build_ribbon() -> void:
 	_team_pill.visible = false
 	_role_pill.visible = false
 	_ribbon.visible = false
+
+
+func _build_mutator_sticker() -> void:
+	# A free overlay inside the card (moves and scales with it), the sticker hanging over the
+	# top-right corner, tilted.
+	var overlay := Control.new()
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_card.add_child(overlay)
+	_mutator_style = RoundStyle.box(RoundStyle.TEAL, RoundStyle.CHARCOAL, 5, 16)
+	_mutator_style.set_content_margin_all(6.0)
+	_mutator_style.content_margin_left = 18.0
+	_mutator_style.content_margin_right = 18.0
+	_mutator_pill = RoundStyle.panel(_mutator_style)
+	_mutator_label = RoundStyle.label("", 28, RoundStyle.CREAM, 7)
+	_mutator_pill.add_child(_mutator_label)
+	_mutator_pill.anchor_left = 1.0
+	_mutator_pill.anchor_right = 1.0
+	_mutator_pill.offset_top = -30.0
+	_mutator_pill.offset_right = 34.0
+	_mutator_pill.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_mutator_pill.rotation_degrees = 5.0
+	_mutator_pill.visible = false
+	overlay.add_child(_mutator_pill)
 
 
 func _update_ribbon() -> void:
