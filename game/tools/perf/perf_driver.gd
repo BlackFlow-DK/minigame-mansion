@@ -10,13 +10,25 @@ extends Node
 ##   title    res://main/main.tscn as is (the live hall behind the title)
 ##   lobby    res://main/main.tscn; pass --offline --bots=7 --name=Perf for the 8-player hall
 ##   sandbox  res://dev/sandbox.tscn (reads --minigame / --players itself)
-## The probe warms up, measures, appends one CSV row, optionally saves a PNG and quits.
+##   podium   res://main/main.tscn; pass --offline --bots=7 --auto-start=1 --round-minigame=<id>
+##            --round-time=2 --time-scale=6: the probe waits for Session PODIUM (--perf-wait=podium)
+##   vote     res://main/main.tscn; pass --offline --bots=7 --auto-start=1 --order=vote: the
+##            probe waits for Session VOTE (--perf-wait=vote), the cards over the lobby hall
+##   transitions  res://main/main.tscn; a playlist session through every minigame (pass
+##            --order=playlist --playlist=a,b,.. --auto-start=N ...): the probe times each
+##            round's stage load to its first drawn frame (--perf-transitions, see perf_probe.gd)
+## Waiting targets slow Session.time_scale to 0.001 once the state is reached, so the phase
+## outlasts the measurement. The probe warms up, measures, appends one CSV row, optionally
+## saves a PNG and quits.
 
 const PROBE := preload("res://tools/perf/perf_probe.gd")
 const TARGETS := {
 	"title": "res://main/main.tscn",
 	"lobby": "res://main/main.tscn",
 	"sandbox": "res://dev/sandbox.tscn",
+	"podium": "res://main/main.tscn",
+	"vote": "res://main/main.tscn",
+	"transitions": "res://main/main.tscn",
 }
 
 
