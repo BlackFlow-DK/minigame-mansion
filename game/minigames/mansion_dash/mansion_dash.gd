@@ -104,11 +104,6 @@ const ORDINALS: Array[String] = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"
 @export var hit_grace: float = 0.6
 @export var bumper_cooldown: float = 0.4
 
-@export_group("Bots")
-## Bots run at this fraction of their normal top speed (rolled per bot from the seed), so a
-## decent human can beat them and they do not all arrive together.
-@export var bot_speed: Vector2 = Vector2(0.8, 0.93)
-
 @export_group("Round")
 ## Seconds a fallen player waits (in the water) before the host respawns it.
 @export var respawn_delay: float = 1.0
@@ -125,6 +120,10 @@ const ORDINALS: Array[String] = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"
 
 ## Bot brain hint: bots shove a little less than in the brawls (a race, and rafts are slippery).
 var bot_aggression_scale: float = 0.7
+## Bot brain hint: bots race with this share of their skill (they run flat out, but misjudge
+## more: late to see a hammer coming, a stale line, a mistimed raft jump), so a decent human
+## beats them and they do not all arrive together.
+var bot_skill_scale: float = 0.4
 ## The layout of this round (every peer, from the host-sent seed).
 var layout: DashCourse.Layout = DashCourse.build(0)
 ## slot -> highest checkpoint reached (-1 none), identical on every peer (host-sent).
@@ -174,8 +173,6 @@ var _strip: Control = null
 var _dots: Dictionary[int, Control] = {}
 var _dash_at: float = INF
 var _fade_mats: Dictionary = {}
-## slot -> movement.max_speed read in _setup (the base the bot handicap scales).
-var _base_speed: Dictionary[int, float] = {}
 
 @onready var _camera: ArenaCamera = $ArenaCamera as ArenaCamera
 
@@ -208,9 +205,6 @@ func _setup(setup_players: Array[Player]) -> void:
 	for p in setup_players:
 		checkpoints[p.slot] = -1
 		_places[p.slot] = 0
-		var mv := p.get_component(&"movement") as MovementComponent
-		if mv:
-			_base_speed[p.slot] = mv.max_speed
 	_build_strip(setup_players)
 
 
@@ -437,26 +431,6 @@ func _push(p: Player, impulse: Vector3, stun: float) -> void:
 		_camera.add_shake(0.25)
 
 
-## Bots this peer simulates run at a per-bot fraction of their base speed (from the seed).
-func _handicap_bots() -> void:
-	for p in players:
-		if not is_instance_valid(p) or not p.is_bot or not p.is_authority() or not _base_speed.has(p.slot):
-			continue
-		handicap(p)
-
-
-## Sets `p`'s top speed to its bot fraction of the base (bots; tests use it on slot 0 too).
-func handicap(p: Player) -> void:
-	var mv := p.get_component(&"movement") as MovementComponent
-	if mv and _base_speed.has(p.slot):
-		mv.max_speed = _base_speed[p.slot] * bot_speed_factor(p.slot)
-
-
-## The fraction of its top speed bot `slot` runs at this round (from the seed).
-func bot_speed_factor(slot: int) -> float:
-	return lerpf(bot_speed.x, bot_speed.y, _hash01(_seed * 31 + slot * 977 + 5))
-
-
 # --- RPCs ------------------------------------------------------------------------------------------
 
 @rpc("authority", "call_local", "reliable")
@@ -472,7 +446,6 @@ func _rpc_begin(seed_value_: int, t0: float) -> void:
 	_log_first = 0
 	_running = true
 	_update_movers(_t)
-	_handicap_bots()
 	round_began.emit(seed_value_, t0)
 
 

@@ -109,14 +109,6 @@ const MAX_VIEW_LAG := 0.35
 const WALK_SPEED := 2.2
 const SHOVE_COOLDOWN := 0.5
 
-## Bots: per-bot reflex rolled per round; stop delay after WARNING starts (s) = lerp of this
-## range by reflex (+ a little jitter), before the bot's own reaction time.
-const BOT_STOP_DELAY := Vector2(0.7, 0.12)
-const BOT_STOP_JITTER := 0.4
-## Bots: seconds after GREEN starts before a bot sets off again (it watches the statue turn
-## away first), by reflex, plus jitter.
-const BOT_GO_DELAY := Vector2(0.5, 0.1)
-const BOT_GO_JITTER := 0.25
 ## Bots walk to a point this far ahead in their lane, curving to the plinth at the end.
 const BOT_LOOKAHEAD := 5.0
 ## Bot hint read by BotBrain (0..1, how often bots chase and whether they shove), per phase:
@@ -131,10 +123,13 @@ var music_track := &"none"
 
 ## Test/dev only: multiplies how fast the host's phase clock runs.
 var time_scale: float = 1.0
+## Bot brain hint: their hold reactions (late to stop at WARNING, late to go at GREEN) follow
+## the phase clock.
+var bot_reaction_scale: float:
+	get:
+		return 1.0 / maxf(time_scale, 0.01)
 ## Host randomness (phase lengths, lane order, ties). Tests may seed it.
 var rng := RandomNumberGenerator.new()
-## Host randomness for the bots' reflexes. Tests may seed it.
-var bot_rng := RandomNumberGenerator.new()
 
 ## Every peer: the phase, its index (0-based, -1 before the first) and length (scaled s).
 var phase: Phase = Phase.IDLE
@@ -154,10 +149,6 @@ var _red_start: float = INF
 var _red_end: float = INF
 var _history: Dictionary[int, Array] = {}     # slot -> [[t, pos], ...] oldest first
 var _caught_now: Dictionary[int, bool] = {}   # slot -> caught in the current RED
-var _bot_reflex: Dictionary[int, float] = {}
-var _bot_stop_at: Dictionary[int, float] = {}
-var _bot_stopped: Dictionary[int, bool] = {}
-var _bot_go_at: Dictionary[int, float] = {}
 var _hold: Phase = Phase.IDLE
 var _circles: Array[Array] = obstacle_circles()
 var _lanes_received: bool = false
@@ -197,7 +188,6 @@ var _counters: Dictionary[int, int] = {}
 
 func _ready() -> void:
 	rng.randomize()
-	bot_rng.randomize()
 	_audible = DisplayServer.get_name() != "headless"
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--statue-time-scale="):
@@ -261,8 +251,6 @@ func _start() -> void:
 	elapsed = 0.0
 	for p in players:
 		catches[p.slot] = 0
-		if multiplayer.is_server():
-			_bot_reflex[p.slot] = bot_rng.randf()
 
 
 func _host_tick(delta: float) -> void:
@@ -283,7 +271,6 @@ func _host_tick(delta: float) -> void:
 			if _phase_left <= 0.0:
 				_begin(_next_phase(phase))
 	_detect_movement()
-	_tell_bots_to_stop()
 	_check_touch()
 	if is_finished():
 		return
@@ -311,23 +298,11 @@ func _begin(next: Phase) -> void:
 			length = rng.randf_range(lo, maxf(lo, green_range.y))
 			if phase == Phase.RED:
 				_red_end = elapsed
-			_bot_go_at.clear()
-			for p in _alive():
-				var reflex: float = _bot_reflex.get(p.slot, 0.5)
-				var delay := lerpf(BOT_GO_DELAY.x, BOT_GO_DELAY.y, reflex) + bot_rng.randf() * BOT_GO_JITTER
-				_bot_go_at[p.slot] = elapsed + delay / maxf(time_scale, 0.01)
 		Phase.RED:
 			length = rng.randf_range(red_range.x, red_range.y)
 			_red_start = elapsed
 			_red_end = INF
 			_caught_now.clear()
-		Phase.WARNING:
-			_bot_stopped.clear()  # a bot still waiting to go when GREEN ended goes now
-			_bot_stop_at.clear()
-			for p in _alive():
-				var reflex: float = _bot_reflex.get(p.slot, 0.5)
-				var delay := lerpf(BOT_STOP_DELAY.x, BOT_STOP_DELAY.y, reflex) + bot_rng.randf() * BOT_STOP_JITTER
-				_bot_stop_at[p.slot] = elapsed + delay / maxf(time_scale, 0.01)
 	if _hold != Phase.IDLE and next != _hold:
 		length = minf(length, 0.7)  # screenshots: hurry to the held phase
 	_phase_left = length
@@ -424,27 +399,13 @@ func _send_back(p: Player, _was_caught: bool) -> void:
 	request_bot_rethink(p.slot)
 
 
-func _tell_bots_to_stop() -> void:
-	if phase == Phase.GREEN:
-		for slot: int in _bot_go_at:
-			if _bot_stopped.get(slot, false) and elapsed >= _bot_go_at[slot]:
-				_bot_stopped[slot] = false
-				request_bot_rethink(slot)
-		return
-	if phase != Phase.WARNING and phase != Phase.RED:
-		return
-	for slot: int in _bot_stop_at:
-		if not _bot_stopped.get(slot, false) and elapsed >= _bot_stop_at[slot]:
-			_bot_stopped[slot] = true
-			request_bot_rethink(slot)
-
-
-## BotBrain hook (host, where bots are simulated): a stopped bot stands dead still until its go
-## time in GREEN (no wandering, personal-space nudges or hops: in RED any of that is a catch).
-## Shoves still move it (status impulses), so it can still be shoved into a catch. The stop
-## comes after this bot's reflex delay (BOT_STOP_DELAY), so a slow bot is late to stop.
+## BotBrain hook (every peer: the phase is replicated): from WARNING through RED a bot should
+## stand dead still (no wandering, personal-space nudges or hops: in RED any of that is a catch).
+## The brain notices the change after its own skill-based hold reaction (BotBrain.HOLD_STOP /
+## HOLD_GO, scaled by `bot_reaction_scale`), so a slow bot is late to stop and late to set off
+## again. Shoves still move a held bot (status impulses), so it can still be shoved into a catch.
 func bot_should_hold(player: Player) -> bool:
-	return player != null and _bot_stopped.get(player.slot, false)
+	return player != null and (phase == Phase.WARNING or phase == Phase.RED)
 
 
 func _check_touch() -> void:
@@ -533,16 +494,14 @@ static func obstacle_circles() -> Array[Array]:
 
 # --- Bots ------------------------------------------------------------------------------------------
 
-## Up the lane toward the statue, around obstacles; from the moment this bot's reflex fires
-## in WARNING / RED until its go delay in the next GREEN has passed (and in IDLE / OVER):
-## stand still where it is (see `bot_should_hold`).
+## Up the lane toward the statue, around obstacles (a bot still walking in WARNING / RED has
+## not noticed yet: see `bot_should_hold`); in IDLE / OVER: stand still where it is.
 func get_bot_goal(player: Player) -> Vector3:
 	if player == null or not player.alive:
 		return super.get_bot_goal(player)
 	match phase:
 		Phase.GREEN, Phase.WARNING, Phase.RED:
-			if not _bot_stopped.get(player.slot, false):
-				return _lane_goal(player)
+			return _lane_goal(player)
 	return player.global_position
 
 

@@ -24,7 +24,8 @@ extends Minigame
 ##   path around now, scores once per ball and broadcasts (`_rpc_hit`). Snow-ins and releases,
 ##   the pile and the round end are host decisions sent the same way. `frozen` is set on every peer.
 ##
-## Bots: see SnowBot (the thrower AI, run on the blob's authority) and get_bot_goal / is_safe.
+## Bots: SnowBot (perception and goals, on the blob's authority) answers get_bot_goal and the
+## BotBrain hooks bot_wants_action / bot_aim; the brain presses action like a human does.
 
 ## Every peer: the clocks (re)started at round time `start_time`.
 signal round_began(start_time: float)
@@ -127,7 +128,7 @@ class Ball:
 
 ## Mutators that make no sense here (the shove is off).
 var mutator_blocklist: Array[StringName] = [&"super_shove"]
-## BotBrain hint: never chase or shove; the walking goals come from SnowBot.
+## BotBrain hint: never chase; the walking goals and the presses come from SnowBot's answers.
 var bot_aggression_scale: float = 0.0
 ## Tests / dev / network check: human slots driven by the thrower AI on their authority peer.
 var ai_slots: Array[int] = []
@@ -584,7 +585,7 @@ func _physics_process(delta: float) -> void:
 		var bot := _ai_of(p)
 		if bot:
 			bot.tick(delta)
-		elif p.intent.action_pressed:
+		if p.intent.action_pressed:
 			press(p)
 	_update_speeds()
 
@@ -859,7 +860,8 @@ func _rpc_end(winners: Array) -> void:
 
 # --- Bots ------------------------------------------------------------------------------------------
 
-## The thrower AI of `p` on this peer (bots, and `ai_slots`), created on first use; null otherwise.
+## The bot mind of `p` on this peer (bots, and `ai_slots`: humans a test or dev check drives with
+## a BotBrain), created on first use; null otherwise.
 func _ai_of(p: Player) -> SnowBot:
 	if not ai_enabled or p == null or p.is_extra or not (p.is_bot or ai_slots.has(p.slot)):
 		return null
@@ -871,10 +873,21 @@ func _ai_of(p: Player) -> SnowBot:
 	return bot
 
 
-## Throw requests the AI of `slot` made (0 without one).
-func ai_throws(slot: int) -> int:
-	var bot: SnowBot = _bots.get(slot)
-	return bot.throws if bot else 0
+## BotBrain hook: scoop or throw now (SnowBot decides; the brain adds its reaction and aim).
+func bot_wants_action(player: Player) -> bool:
+	var bot := _ai_of(player)
+	return bot != null and _running and bot.wants_action()
+
+
+## BotBrain hook: the point to face before the throw (ZERO for a scoop).
+func bot_aim(player: Player) -> Vector3:
+	var bot := _ai_of(player)
+	return bot.aim() if bot else Vector3.ZERO
+
+
+## BotBrain hook: no faster than the throw cooldown.
+func bot_action_cooldown() -> float:
+	return throw_cooldown
 
 
 func get_bot_goal(player: Player) -> Vector3:

@@ -43,6 +43,8 @@ extends Node
 ## default 1). It scales how often bots chase, and at 0 they never shove (the lobby: calm).
 ## Optional hint `var bot_reaction_scale: float` (default 1): multiplies the hold and action
 ## reaction delays (a minigame whose clock runs faster in tests).
+## Optional hint `var bot_skill_scale: float` (0..1, default 1): the skill every bot plays this
+## minigame with is `skill` x this (an unforgiving course: more mistakes, not slower legs).
 ## Optional minigame hook: `func bot_should_hold(player: Player) -> bool`, polled every tick by
 ## every brain (bots, extras, test brains). While the brain holds it fills an EMPTY intent: no
 ## move, jump or action, no wandering, personal-space nudges, hops or shoves (status knockback
@@ -190,6 +192,8 @@ const AIM_TOLERANCE_DEG := 7.0
 const AIM_SETTLE := Vector2(0.2, 0.04)
 ## Stick length while turning to face the aim (facing follows movement), and near danger.
 const AIM_STICK := 0.3
+## The same for a bot posing as an NPC (an extra mode): a stroller's slow turn.
+const AIM_STICK_STROLL := 0.2
 const AIM_STICK_MIN := 0.1
 ## An act without a press ends after this long (s); a reach adds ACT_APPROACH_TIMEOUT.
 const ACT_TIMEOUT := 1.2
@@ -292,6 +296,7 @@ var _hook_aim: bool = false
 var _hook_cooldown: bool = false
 var _hook_reach: bool = false
 var _extra_hooks: bool = false
+var _skill_scale: float = 1.0      # the minigame's bot_skill_scale hint
 var _held: bool = false
 var _hold_known: bool = false     # the first answer after configure applies at once
 var _hold_switch: float = -1.0    # seconds until a changed hold answer is noticed (-1 none)
@@ -305,6 +310,7 @@ var _act_reach: float = 0.0
 var _act_cd: float = 0.0
 var _act_fire: bool = false
 var _act_facing: bool = false
+var _act_followup: bool = false   # after a press: ask again as soon as the cooldown is over
 # Jump probes.
 var _ray: PhysicsRayQueryParameters3D = null
 var _probe_timer: float = 0.0
@@ -400,6 +406,7 @@ func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector
 
 
 ## Fills `intent` for this tick. Dead or frozen: empty intent.
+## (Action hook: besides each think, the brain asks again once right after a press's cooldown.)
 func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	if not _configured:
 		configure(randi())
@@ -469,6 +476,10 @@ func fill_intent(intent: PlayerIntent, delta: float) -> void:
 			_think_timer = 0.0
 	if _think_timer <= 0.0:
 		_think(game, pos)
+	elif _act_followup and _act_cd <= 0.0:
+		# A press usually leads straight to the next one (a scoop to a throw): ask again now.
+		_act_followup = false
+		_poll_action(game)
 
 	var move := _desired_move(game, pos)
 	if state != State.RECOVER and move.length_squared() > 0.0001:
@@ -476,7 +487,7 @@ func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	_act_fire = false
 	_act_facing = false
 	if _act:
-		move = _act_move(game, pos, move, delta, maxf(_move_scale, 0.6))
+		move = _act_move(game, pos, move, delta, maxf(_move_scale, 0.6), AIM_STICK)
 	_gap_jump = false
 	if not _act_facing:
 		if state != State.RECOVER and state != State.NONE:
@@ -519,6 +530,8 @@ func _lookup_hooks(game: Minigame) -> void:
 	_hook_cooldown = ok and game.has_method(&"bot_action_cooldown")
 	_hook_reach = ok and game.has_method(&"bot_action_reach")
 	_extra_hooks = ok and game.get(&"bot_extra_hooks") == true
+	var ss: Variant = game.get(&"bot_skill_scale") if ok else null
+	_skill_scale = clampf(float(ss), 0.0, 1.0) if ss is float or ss is int else 1.0
 	_end_act()
 
 
@@ -557,7 +570,7 @@ func _think(game: Minigame, pos: Vector3) -> void:
 	_aim_error = deg_to_rad(_lerp_skill(AIM_ERROR_DEG)) * _rng.randf_range(-1.0, 1.0)
 	_move_scale = _speed_scale * _rng.randf_range(0.9, 1.0)
 	_shove_reaction = _lerp_skill(SHOVE_REACTION) * _rng.randf_range(0.8, 1.25)
-	if _rng.randf() < HESITATE_CHANCE * (1.0 - skill) and not _floor_crumbles:
+	if _rng.randf() < HESITATE_CHANCE * (1.0 - _skill()) and not _floor_crumbles:
 		_move_scale = 0.0
 	_update_goal(game, pos)
 	_poll_action(game)
@@ -575,7 +588,7 @@ func _think(game: Minigame, pos: Vector3) -> void:
 	var roll := _rng.randf()
 	if _target and roll < aggression * _aggression_scale(game):
 		state = State.CHASE
-	elif _rng.randf() < WANDER_CHANCE * (1.0 - skill):
+	elif _rng.randf() < WANDER_CHANCE * (1.0 - _skill()):
 		state = State.WANDER
 		if _wander_dir == Vector2.ZERO or _rng.randf() < 0.6:
 			_wander_dir = Vector2.RIGHT.rotated(_rng.randf() * TAU)
@@ -727,7 +740,7 @@ func _poll_action(game: Minigame) -> void:
 ## One tick of the act under way: returns the move (unchanged without an aim point, toward it
 ## while out of reach, a short stick toward the erroneous aim direction while facing it, then
 ## `_act_facing` is set) and fires the press when the reaction is over and the aim has settled.
-func _act_move(game: Minigame, pos: Vector3, move: Vector2, delta: float, approach_stick: float) -> Vector2:
+func _act_move(game: Minigame, pos: Vector3, move: Vector2, delta: float, approach_stick: float, face_stick: float) -> Vector2:
 	_act_time += delta
 	_act_delay -= delta
 	if _act_time > ACT_TIMEOUT + (ACT_APPROACH_TIMEOUT if _act_reach > 0.0 else 0.0):
@@ -757,13 +770,14 @@ func _act_move(game: Minigame, pos: Vector3, move: Vector2, delta: float, approa
 		_fire(game)
 	_act_facing = true
 	var safe := game == null or game.is_safe(pos + _to3(want * 0.6))
-	return want * (AIM_STICK if safe else AIM_STICK_MIN)
+	return want * (face_stick if safe else AIM_STICK_MIN)
 
 
 ## The press: one tick of `action`, then the cooldown.
 func _fire(game: Minigame) -> void:
 	_act_fire = true
 	_act = false
+	_act_followup = true
 	acts += 1
 	var cd := ACT_COOLDOWN
 	if _hook_cooldown and game != null:
@@ -774,6 +788,7 @@ func _fire(game: Minigame) -> void:
 func _end_act() -> void:
 	_act = false
 	_act_settle = 0.0
+	_act_followup = false
 
 
 # --- Safety -----------------------------------------------------------------------------
@@ -1116,7 +1131,7 @@ func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2, game: Minigam
 		_blocked_time += delta
 	else:
 		_blocked_time = 0.0
-	var blocked := _blocked_time > BLOCKED_TIME * lerpf(1.6, 1.0, skill)
+	var blocked := _blocked_time > BLOCKED_TIME * lerpf(1.6, 1.0, _skill())
 	if blocked and _wall_high:
 		# Pressed against a wall it cannot jump: hopping is pointless. Side-step, think again.
 		blocked = false
@@ -1234,7 +1249,11 @@ func _fill_extra(intent: PlayerIntent, delta: float) -> void:
 		_x_think = EXTRA_THINK * _rng.randf_range(0.8, 1.2)
 		_x_push = _crowd_push(game, pos)
 		if hooks:
+			_act_followup = false
 			_poll_action(game)
+	elif hooks and _act_followup and _act_cd <= 0.0:
+		_act_followup = false
+		_poll_action(game)
 	var move := Vector2.ZERO
 	match extra_mode:
 		&"dance":
@@ -1245,7 +1264,7 @@ func _fill_extra(intent: PlayerIntent, delta: float) -> void:
 		# An act (a bot posing as an NPC): close in at a brisk stroll, face, press.
 		_act_fire = false
 		_act_facing = false
-		var act_move := _act_move(game, pos, move, delta, EXTRA_SPEED.y)
+		var act_move := _act_move(game, pos, move, delta, EXTRA_SPEED.y, AIM_STICK_STROLL)
 		intent.action_pressed = _act_fire
 		if _act or _act_fire or act_move != move:
 			intent.move = act_move.limit_length(1.0)
@@ -1423,7 +1442,12 @@ func _reset() -> void:
 
 
 func _lerp_skill(range_: Vector2) -> float:
-	return lerpf(range_.x, range_.y, skill)
+	return lerpf(range_.x, range_.y, _skill())
+
+
+## The skill this bot plays with in this minigame: skill x the minigame's ot_skill_scale.
+func _skill() -> float:
+	return skill * _skill_scale
 
 
 static func _flat(v: Vector3) -> Vector2:

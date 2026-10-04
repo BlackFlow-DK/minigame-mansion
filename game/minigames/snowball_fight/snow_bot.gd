@@ -1,30 +1,26 @@
 class_name SnowBot
 extends RefCounted
-## Snowball Fight's thrower AI for one blob, run on that blob's authority (the host for bots).
+## Snowball Fight's bot mind for one blob, on that blob's authority (the host for bots): what it
+## sees and where it wants to be. The BotBrain does the rest through the generic hooks
+## (SnowballFight.bot_wants_action / bot_aim / bot_action_cooldown): it reacts, turns to face
+## the aim point with its own skill-based aim error and presses `action`, which goes through
+## exactly the path a human's press takes (`SnowballFight.press`: scoop when empty-handed, else
+## throw along the facing with the same aim assist a human gets).
 ##
-## Why it exists: the generic BotBrain walks to `Minigame.get_bot_goal` and presses action only to
-## shove someone right in front of it, and it cannot aim. So the minigame drives the scoop and the
-## throw itself, through exactly the path a human's press takes (`SnowballFight.press` /
-## `throw_at`: a request to the host, which validates it). The brain still does the walking:
 ## `goal()` (answered through get_bot_goal) picks cover from an armed enemy while empty-handed,
 ## a spot at fighting range off to one side of the target while armed (the side flips now and
 ## then: strafing), the ammo pile when it is near; `SnowballFight.is_safe` keeps it off cover.
-##
 ## Perception is re-made every THINK seconds (slower for low skill): the target is the nearest
 ## enemy a ball would reach right now (`SnowArc.clear_shot`, so cover hides), the threat the
 ## nearest armed enemy with a clear shot at this blob. Skill (from the bot's BotBrain, else rolled)
-## sets reaction, aim error and lead. All randomness comes from its own seeded generator.
+## sets the perception rate, the scoop delay, the courage and how much of the target's motion the
+## aim point leads. All randomness comes from its own seeded generator.
 
 ## Seconds between perception updates (low skill, high skill).
 const THINK := Vector2(0.32, 0.14)
-## Seconds a target must be in sight before the throw.
-const REACT := Vector2(0.55, 0.18)
-## Aim error (degrees, about this much at most) and how much of the target's motion it leads.
-const AIM_ERROR_DEG := Vector2(15.0, 3.5)
+## How much of the target's motion the aim point leads.
 const LEAD := Vector2(0.15, 0.85)
-## Extra seconds between two throws of one bot (random in 0.7..1.3 of this).
-const THROW_GAP := Vector2(0.9, 0.35)
-## Seconds after its last ball before it scoops the next.
+## Seconds after its last ball before it wants to scoop the next.
 const SCOOP_DELAY := Vector2(0.45, 0.12)
 ## Unarmed with an armed enemy this near and in the clear: take cover first...
 const THREAT_RANGE := 8.5
@@ -38,17 +34,12 @@ const PILE_GREED := 8.0
 var game: SnowballFight
 var player: Player
 var skill: float = 0.6
-## Throws this AI asked for (the host may still refuse one).
-var throws: int = 0
 
 var _rng := RandomNumberGenerator.new()
 var _think: float = 0.0
 var _target: Player = null
-var _target_seen: float = 0.0
-var _react: float = 0.3
 var _threat: Player = null
 var _threat_time: float = 0.0
-var _gap: float = 0.0
 var _scoop_wait: float = 0.0
 var _strafe: float = 1.0
 var _strafe_timer: float = 1.0
@@ -66,17 +57,15 @@ func _init(owner_game: SnowballFight, p: Player, seed_value: int) -> void:
 	_think = _rng.randf_range(0.0, _lerp(THINK))
 
 
-## One physics tick on the authority.
+## One physics tick on the authority: perception and timers (no presses: the brain presses).
 func tick(delta: float) -> void:
 	if not is_instance_valid(player) or not player.alive or player.frozen:
 		_target = null
 		_threat = null
-		_target_seen = 0.0
 		_threat_time = 0.0
 		return
 	var slot := player.slot
 	_think -= delta
-	_gap -= delta
 	_scoop_wait -= delta
 	_strafe_timer -= delta
 	if _strafe_timer <= 0.0:
@@ -88,33 +77,36 @@ func tick(delta: float) -> void:
 	if armed != _armed:
 		_armed = armed
 		_scoop_wait = _lerp(SCOOP_DELAY) * _rng.randf_range(0.7, 1.3)
-		_target_seen = 0.0
 		game.request_bot_rethink(slot)
 	if _think <= 0.0:
 		_think = _lerp(THINK) * _rng.randf_range(0.8, 1.2)
 		_perceive()
-	if player.control_locked:
-		_target_seen = 0.0
-		return
-	if not armed:
-		if game.is_scooping(slot):
-			return
+	_threat_time = _threat_time + delta if _threat != null and not armed else 0.0
+
+
+## Hook answer: scoop (empty-handed, on its own terms) or throw (armed, a target in sight).
+func wants_action() -> bool:
+	if not is_instance_valid(player) or not player.alive or player.frozen or player.control_locked:
+		return false
+	var slot := player.slot
+	if game.ammo_of(slot) <= 0:
+		if game.is_scooping(slot) or not player.is_on_floor():
+			return false
 		if game.pile_active and _pile_distance() < PILE_GREED * 0.6:
-			return  # run for the pile instead
-		_threat_time = _threat_time + delta if _threat != null else 0.0
-		if _scoop_wait <= 0.0 and (_threat == null or _threat_time > _lerp(BRAVE_TIME)):
-			game.press(player)
-		return
-	if not game.can_throw(slot) or _target == null:
-		_target_seen = 0.0
-		return
-	_target_seen += delta
-	if _target_seen >= _react and _gap <= 0.0:
-		if game.throw_at(player, _aim(_target)):
-			throws += 1
-			_gap = _lerp(THROW_GAP) * _rng.randf_range(0.7, 1.3)
-			_target_seen = 0.0
-			_react = _lerp(REACT) * _rng.randf_range(0.6, 1.0)
+			return false  # run for the pile instead
+		return _scoop_wait <= 0.0 and (_threat == null or _threat_time > _lerp(BRAVE_TIME))
+	return game.can_throw(slot) and _target != null and is_instance_valid(_target) and _target.alive
+
+
+## Hook answer: where to face for the throw (the target, leading its motion); ZERO to scoop.
+func aim() -> Vector3:
+	if game.ammo_of(player.slot) <= 0 or _target == null or not is_instance_valid(_target) or not _target.alive:
+		return Vector3.ZERO
+	var from := player.global_position
+	var to := _target.global_position
+	var fly := Vector2(to.x - from.x, to.z - from.z).length() / SnowArc.SPEED
+	var lead := Vector3(_target.velocity.x, 0.0, _target.velocity.z) * fly * _lerp(LEAD)
+	return Vector3(to.x + lead.x, from.y, to.z + lead.z)
 
 
 ## Where the brain should walk now (asked through SnowballFight.get_bot_goal).
@@ -163,22 +155,8 @@ func _perceive() -> void:
 		if armed and d < threat_d:
 			threat_d = d
 			threat = o
-	if best != _target:
-		_target = best
-		_target_seen = 0.0
-		_react = _lerp(REACT) * _rng.randf_range(0.8, 1.25)
+	_target = best
 	_threat = threat
-
-
-## Throw direction at `target`: leads its motion a little, with skill-based error.
-func _aim(target: Player) -> Vector3:
-	var from := player.global_position
-	var to := target.global_position
-	var fly := Vector2(to.x - from.x, to.z - from.z).length() / SnowArc.SPEED
-	var lead := Vector3(target.velocity.x, 0.0, target.velocity.z) * fly * _lerp(LEAD)
-	var dir := SnowArc.flat_dir(to + lead - from)
-	var err := deg_to_rad(_lerp(AIM_ERROR_DEG)) * (_rng.randf_range(-1.0, 1.0) + _rng.randf_range(-1.0, 1.0)) * 0.5
-	return dir.rotated(Vector3.UP, err)
 
 
 ## A walkable spot behind the cover piece that best hides this blob from `threat`.

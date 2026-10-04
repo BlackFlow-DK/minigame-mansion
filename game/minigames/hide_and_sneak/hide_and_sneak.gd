@@ -31,7 +31,8 @@ extends Minigame
 ## tuning run on every peer from that state. Clients send their own `action` presses to the
 ## host (`_rpc_action`). Bots: hiders walk to a spot beside furniture of their own kind and
 ## keep still (rare shuffles); seekers keep a noisy suspicion per prop (movement they saw,
-## rustles they heard, hunches, the glow) and poke the most suspicious one in reach.
+## rustles they heard, hunches, the glow) and poke the most suspicious one in reach: the BotBrain
+## hooks bot_wants_action / bot_aim make the brain face it and press `action` (a human's poke).
 ## Dev args (after `--`): `--hide-seekers=a,b` force seekers, `--hide-seed=<n>` layout,
 ## `--hide-time-scale=<x>` host clocks, `--hide-time=<s>` HIDE length, `--hide-reveal-at=<s>`
 ## reveal the hider nearest to a seeker at SEEK second s (screenshots). Quality: `--quality=`.
@@ -284,13 +285,11 @@ func _physics_process(delta: float) -> void:
 	for p in players:
 		if is_instance_valid(p):
 			_apply_tuning(p)
-	# This peer's own players: `action` goes to the host (cycle disguise / poke).
+	# This peer's own players (bots too: their brains press for the poke hook): `action` goes to
+	# the host (cycle disguise / poke).
 	if phase == Phase.HIDE or phase == Phase.SEEK:
 		for p in players:
 			if not is_instance_valid(p) or not p.alive or p.frozen or not p.is_authority():
-				continue
-			var c := p.get_component(&"controller") as ControllerComponent
-			if p.is_bot and not (c and c.scripted):
 				continue
 			if p.intent.action_pressed:
 				_request_action(p.slot)
@@ -478,6 +477,7 @@ func poke(slot: int, aim: Vector3 = Vector3.INF) -> int:
 	var id: int = hit[1]
 	var at: Vector3 = hit[2]
 	_last_poke_id = id
+	_mind_poked(p, target, id)
 	_rpc_poke.rpc(slot, target, id, at)
 	if target == PokeTarget.FURNITURE:
 		_set_pokes(slot, pokes_left.get(slot, 0) - 1)
@@ -1008,22 +1008,52 @@ func _tick_seeker_bots(dt: float) -> void:
 			m.observe_left = BOT_OBSERVE
 			_observe(m)
 			_choose_target(m, p)
-		if m.target == -1:
-			continue
-		var tp := _key_pos(m.target)
-		if tp == Vector3.INF:
+		if m.target != -1 and _key_pos(m.target) == Vector3.INF:
 			m.target = -1
-			continue
-		var edge := _flat(tp - p.global_position) - _key_radius(m.target)
-		if edge <= poke_reach - 0.1 and _cooldown.get(s, 0.0) <= 0.0 and pokes_left.get(s, 0) > 0:
-			var key := m.target
-			var hit := poke(s, tp)
-			if hit == PokeTarget.FURNITURE:
-				m.known[_last_poke_id] = true
-				m.suspicion.erase(_last_poke_id)
-			m.suspicion.erase(key)
-			m.target = -1
-			request_bot_rethink(s)
+
+
+## BotBrain hook: a seeker bot whose target is within poke reach pokes it (the brain turns to
+## face it first, with its own reaction and aim error; the poke goes out along the facing like
+## a human's).
+func bot_wants_action(player: Player) -> bool:
+	if phase != Phase.SEEK or is_finished() or player == null or not player.alive or not _is_host():
+		return false
+	var m: SeekerMind = _minds.get(player.slot)
+	if m == null or m.target == -1 or not _ai_drives(player):
+		return false
+	var tp := _key_pos(m.target)
+	if tp == Vector3.INF:
+		return false
+	var edge := _flat(tp - player.global_position) - _key_radius(m.target)
+	return edge <= poke_reach - 0.1 and _cooldown.get(player.slot, 0.0) <= 0.0 and pokes_left.get(player.slot, 0) > 0
+
+
+## BotBrain hook: the poke target (ZERO without one).
+func bot_aim(player: Player) -> Vector3:
+	var m: SeekerMind = _minds.get(player.slot) if player else null
+	if m == null or m.target == -1:
+		return Vector3.ZERO
+	var tp := _key_pos(m.target)
+	return Vector3.ZERO if tp == Vector3.INF else tp
+
+
+## BotBrain hook: no faster than the poke cooldown.
+func bot_action_cooldown() -> float:
+	return poke_cooldown / maxf(time_scale, 0.01)
+
+
+## Host: a seeker the AI drives poked: its mind learns what the poke found and picks anew.
+func _mind_poked(p: Player, target: int, id: int) -> void:
+	var m: SeekerMind = _minds.get(p.slot)
+	if m == null or not _ai_drives(p):
+		return
+	if target == PokeTarget.FURNITURE:
+		m.known[id] = true
+		m.suspicion.erase(id)
+	if m.target != -1:
+		m.suspicion.erase(m.target)
+	m.target = -1
+	request_bot_rethink(p.slot)
 
 
 func _ai_drives(p: Player) -> bool:

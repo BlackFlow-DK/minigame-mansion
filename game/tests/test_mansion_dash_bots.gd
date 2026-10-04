@@ -34,7 +34,6 @@ func _race(count: int, seed_value: int, check: bool = true) -> Dictionary:
 		add_child(brain)
 		brain.configure(seed_value * 97 + p.slot * 13)
 		brains.append(brain)
-		m.handicap(p)  # slot 0 is the "human": give it the same bot pace as the rest
 	var hits := {}
 	m.local_hit.connect(func(_s: int, kind: StringName) -> void: hits[kind] = int(hits.get(kind, 0)) + 1)
 	var cp_times := {}
