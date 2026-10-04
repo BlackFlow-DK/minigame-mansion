@@ -22,6 +22,9 @@ const TICK_ORDER: Array[StringName] = [&"size", &"controller", &"status", &"move
 var slot: int = -1
 var display_name: String = ""
 var is_bot: bool = false
+## An NPC extra (Stage.spawn_extras): bot-driven, host-owned, slot >= 100, not in the roster,
+## never scored, not in `Stage.players` or `Minigame.players`.
+var is_extra: bool = false
 ## `{ "primary": "#rrggbb", "secondary": "#rrggbb", "hat": id, "face": id, "neck": id, "back": id }`.
 var loadout: Dictionary = {}
 ## What the controller wants this tick.

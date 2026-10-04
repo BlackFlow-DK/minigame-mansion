@@ -12,6 +12,9 @@ extends Node
 ## - State: 30 times a second each peer sends one unreliable packet with the state of every
 ##   player it is authority for (SyncComponent.pack_state). Accepted only from that player's
 ##   authority. The receiving SyncComponent buffers and interpolates it.
+## - Extras (Stage.spawn_extras, slots >= 100, always host-owned): the host adds one compact
+##   packet per tick with all of them (`pack_extras`, EXTRA_BYTES each); events and impulses
+##   work exactly as for players (slots are looked up with `Stage.get_body`).
 ## - Events: `Player.emit_event` -> SyncComponent.relay_event -> every other peer (reliable)
 ##   -> `Player.receive_event`. Accepted from the player's authority or the host;
 ##   `eliminated` / `respawned` only from the host.
@@ -92,12 +95,18 @@ func _physics_process(delta: float) -> void:
 		var s := p.get_component(&"sync") as SyncComponent
 		if s:
 			data.append(s.pack_state())
-	if data.is_empty():
+	var extras := PackedByteArray()
+	if multiplayer.is_server() and not stage.extras.is_empty():
+		extras = pack_extras(stage.extras)
+	if data.is_empty() and extras.is_empty():
 		return
 	_seq += 1
 	if multiplayer.is_server():
 		for id in live_peers(multiplayer):
-			_rpc_fwd_states.rpc_id(id, HOST_PEER, stage.net_load_id, _seq, clock, data)
+			if not data.is_empty():
+				_rpc_fwd_states.rpc_id(id, HOST_PEER, stage.net_load_id, _seq, clock, data)
+			if not extras.is_empty():
+				_rpc_fwd_extras.rpc_id(id, stage.net_load_id, _seq, clock, extras)
 	elif live_peers(multiplayer).has(HOST_PEER):
 		_rpc_states.rpc_id(HOST_PEER, stage.net_load_id, _seq, clock, data)
 
@@ -196,6 +205,12 @@ func _rpc_fwd_impulse(origin: Variant, load_id: Variant, slot: Variant, impulse:
 		receive_impulse(origin, load_id, slot, impulse, source_slot)
 
 
+## Host -> client: the state of every extra (host-owned), packed by `pack_extras`.
+@rpc("authority", "call_remote", "unreliable")
+func _rpc_fwd_extras(load_id: Variant, seq: Variant, t: Variant, packed: Variant) -> void:
+	receive_extras(HOST_PEER, load_id, seq, t, packed)
+
+
 ## Host: raises an event from `origin` on every live client except `origin`.
 func _forward_event(origin: int, load_id: Variant, slot: Variant, event: Variant, args: Variant) -> void:
 	for id in live_peers(multiplayer):
@@ -221,7 +236,7 @@ func receive_states(sender: int, load_id: Variant, seq: Variant, t: Variant, dat
 	for e: Variant in data:
 		if typeof(e) != TYPE_ARRAY or (e as Array).is_empty() or typeof(e[0]) != TYPE_INT:
 			continue
-		var p := stage.get_player(e[0])
+		var p := stage.get_body(e[0])
 		if p == null or p.is_authority() or p.get_multiplayer_authority() != sender:
 			continue
 		var s := p.get_component(&"sync") as SyncComponent
@@ -230,13 +245,77 @@ func receive_states(sender: int, load_id: Variant, seq: Variant, t: Variant, dat
 	return applied
 
 
+## A packed extras state packet from `sender` (only the host's are accepted). Returns how
+## many extra states were applied.
+func receive_extras(sender: int, load_id: Variant, seq: Variant, t: Variant, packed: Variant) -> int:
+	if sender != HOST_PEER or typeof(packed) != TYPE_PACKED_BYTE_ARRAY:
+		return 0
+	return receive_states(sender, load_id, seq, t, unpack_extras(packed))
+
+
+# --- Extras wire format ---------------------------------------------------------------------
+# Extras are many and always host-owned, so their state travels compactly in one
+# PackedByteArray per tick (EXTRA_BYTES each; 20 extras = 520 bytes, well under one MTU) instead
+# of SyncComponent's Variant array (~88 bytes each). Per extra, little endian:
+#   u8 slot - EXTRA_SLOT_BASE, u8 flags, u16 respawns, u16 teleports,
+#   f32 x3 position, f16 x3 velocity, u16 facing yaw (0..65535 = 0..TAU).
+# Decoded back into SyncComponent.pack_state()'s array, so remote playback is the same as bots'.
+
+const EXTRA_BYTES := 26
+
+
+## Packs the current state of `extras` (valid ones with a sync component).
+static func pack_extras(extras: Array[Player]) -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(extras.size() * EXTRA_BYTES)
+	var o := 0
+	for p in extras:
+		if not is_instance_valid(p):
+			continue
+		var s := p.get_component(&"sync") as SyncComponent
+		if s == null:
+			continue
+		var e := s.pack_state()  # [slot, respawns, teleports, pos, vel, facing, flags]
+		var pos: Vector3 = e[3]
+		var vel: Vector3 = e[4]
+		var f: Vector3 = e[5]
+		out.encode_u8(o, clampi(int(e[0]) - Stage.EXTRA_SLOT_BASE, 0, 255))
+		out.encode_u8(o + 1, int(e[6]) & 0xFF)
+		out.encode_u16(o + 2, int(e[1]) & 0xFFFF)
+		out.encode_u16(o + 4, int(e[2]) & 0xFFFF)
+		out.encode_float(o + 6, pos.x)
+		out.encode_float(o + 10, pos.y)
+		out.encode_float(o + 14, pos.z)
+		out.encode_half(o + 18, vel.x)
+		out.encode_half(o + 20, vel.y)
+		out.encode_half(o + 22, vel.z)
+		out.encode_u16(o + 24, int(fposmod(atan2(f.x, f.z), TAU) / TAU * 65535.0 + 0.5) & 0xFFFF)
+		o += EXTRA_BYTES
+	out.resize(o)
+	return out
+
+
+## The inverse of pack_extras: one state array per extra (empty on a malformed packet).
+static func unpack_extras(packed: PackedByteArray) -> Array:
+	var out: Array = []
+	if packed.size() % EXTRA_BYTES != 0:
+		return out
+	for o in range(0, packed.size(), EXTRA_BYTES):
+		var yaw := float(packed.decode_u16(o + 24)) / 65535.0 * TAU
+		out.append([Stage.EXTRA_SLOT_BASE + packed.decode_u8(o), packed.decode_u16(o + 2), packed.decode_u16(o + 4),
+			Vector3(packed.decode_float(o + 6), packed.decode_float(o + 10), packed.decode_float(o + 14)),
+			Vector3(packed.decode_half(o + 18), packed.decode_half(o + 20), packed.decode_half(o + 22)),
+			Vector3(sin(yaw), 0.0, cos(yaw)), packed.decode_u8(o + 1)])
+	return out
+
+
 ## An event from `sender`. Returns true if it was raised here.
 func receive_event(sender: int, load_id: Variant, slot: Variant, event: Variant, args: Variant) -> bool:
 	if stage == null or typeof(load_id) != TYPE_INT or load_id != stage.net_load_id \
 			or typeof(slot) != TYPE_INT or typeof(args) != TYPE_ARRAY \
 			or (typeof(event) != TYPE_STRING_NAME and typeof(event) != TYPE_STRING):
 		return false
-	var p := stage.get_player(slot)
+	var p := stage.get_body(slot)
 	var ev := StringName(event)
 	if p == null or not _is_player_event(p, ev):
 		return false
@@ -254,7 +333,7 @@ func receive_impulse(sender: int, load_id: Variant, slot: Variant, impulse: Vari
 	var p := _impulse_victim(sender, load_id, slot, impulse, source_slot)
 	if p == null or not p.is_authority():
 		return false
-	p.apply_impulse(impulse, stage.get_player(source_slot) if source_slot >= 0 else null)
+	p.apply_impulse(impulse, stage.get_body(source_slot) if source_slot >= 0 else null)
 	return true
 
 
@@ -264,10 +343,10 @@ func _impulse_victim(sender: int, load_id: Variant, slot: Variant, impulse: Vari
 	if stage == null or typeof(load_id) != TYPE_INT or load_id != stage.net_load_id \
 			or typeof(slot) != TYPE_INT or typeof(impulse) != TYPE_VECTOR3 or typeof(source_slot) != TYPE_INT:
 		return null
-	var p := stage.get_player(slot)
+	var p := stage.get_body(slot)
 	if p == null or not (impulse as Vector3).is_finite():
 		return null
-	var source: Player = stage.get_player(source_slot) if source_slot >= 0 else null
+	var source: Player = stage.get_body(source_slot) if source_slot >= 0 else null
 	if sender != HOST_PEER and (source == null or source.get_multiplayer_authority() != sender):
 		return null
 	return p

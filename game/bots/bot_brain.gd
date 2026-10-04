@@ -30,6 +30,16 @@ extends Node
 ##
 ## Optional minigame hint: a minigame may declare `var bot_aggression_scale: float` (0..1,
 ## default 1). It scales how often bots chase, and at 0 they never shove (the lobby: calm).
+## Optional `Minigame.is_ally(a, b) -> bool` (teams; Players or slots, whichever its first
+## parameter is typed as): bots never chase an ally and never shove while one is in front.
+## Bots ignore NPC extras (not in `Minigame.players`); a shove may still hit one in passing.
+##
+## NPC extras (`Stage.spawn_extras`) use a cheap separate mode instead of the state machine:
+## `configure_extra(mode, seed, center)` with mode `wander` (walk between random safe points
+## within `wander_radius` of home, pausing in between), `dance` (loose circles around `center`,
+## or home: give a group the same centre for a crowd dance) or `idle` (stand, still reacting
+## to knocks). Extras never shove or jump, keep a little space, re-plan after a knock, and are
+## deterministic for a seed.
 
 enum State { NONE, GOAL, WANDER, CHASE, RECOVER }
 
@@ -109,6 +119,22 @@ const HOP_WILL := Vector2(0.6, 0.95)
 const HOP_MIN_SPEED := 2.5
 const HOP_AIR_TIME := 0.6
 
+# Extras.
+const EXTRA_MODES: Array[StringName] = [&"wander", &"dance", &"idle"]
+## Seconds between an extra's crowd checks (personal space).
+const EXTRA_THINK := 0.3
+## Seconds an extra pauses between wander walks (random in range).
+const EXTRA_PAUSE := Vector2(0.8, 3.0)
+## Seconds an extra walks toward one point before giving up (blocked by someone).
+const EXTRA_WALK_MAX := 6.0
+## Stick length an extra walks at (random in range per extra): a stroll, not a run.
+const EXTRA_SPEED := Vector2(0.3, 0.55)
+## Personal space of an extra (m) and how hard it steers off others.
+const EXTRA_SPACE := 1.1
+const EXTRA_SPACE_WEIGHT := 0.8
+## Dance circle radius (m, random in range per extra).
+const DANCE_RADIUS := Vector2(1.2, 2.6)
+
 # --- Configuration ----------------------------------------------------------------------
 
 ## The player this brain drives (set by the controller before it enters the tree).
@@ -121,6 +147,10 @@ var skill: float = 0.6
 var aggression: float = 0.5
 ## The seed this brain was configured with.
 var rng_seed: int = 0
+## Extras only (see configure_extra): &"wander", &"dance", &"idle"; &"" = a normal bot.
+var extra_mode: StringName = &""
+## Extras, wander: metres a target may lie from home (where the extra was at its first tick).
+var wander_radius: float = 4.0
 
 var _rng := RandomNumberGenerator.new()
 var _configured: bool = false
@@ -163,6 +193,21 @@ var _jump_hold: float = 0.0
 var _jump_cooldown: float = 0.0
 var _gap_jump: bool = false
 var _hooked: Minigame = null
+var _ally_game: Minigame = null
+var _ally_by_slot: bool = false
+# Extras.
+var _home: Vector3 = Vector3.INF
+var _dance_center: Vector3 = Vector3.INF
+var _dance_radius: float = 1.8
+var _dance_dir: float = 1.0
+var _dance_angle: float = 0.0
+var _x_target: Vector3 = Vector3.INF
+var _x_pause: float = 0.0
+var _x_walk: float = 0.0
+var _x_speed: float = 0.45
+var _x_think: float = 0.0
+var _x_push: Vector2 = Vector2.ZERO
+var _stage_ref: Stage = null
 
 
 func _ready() -> void:
@@ -175,6 +220,7 @@ func _ready() -> void:
 func configure(seed_value: int, skill_value: float = -1.0, aggression_value: float = -1.0) -> void:
 	rng_seed = seed_value
 	_rng.seed = seed_value
+	extra_mode = &""
 	skill = clampf(skill_value, 0.0, 1.0) if skill_value >= 0.0 else _rng.randf_range(0.35, 0.95)
 	aggression = clampf(aggression_value, 0.0, 1.0) if aggression_value >= 0.0 else _rng.randf_range(0.2, 0.85)
 	_speed_scale = _rng.randf_range(0.9, 1.0)
@@ -185,10 +231,44 @@ func configure(seed_value: int, skill_value: float = -1.0, aggression_value: flo
 	_reset()
 
 
+## The brain driving `p` (bots and extras; null for humans or without a brain).
+static func of(p: Player) -> BotBrain:
+	var c := p.get_component(&"controller") as ControllerComponent if p else null
+	return c.brain as BotBrain if c else null
+
+
+## Makes this brain an NPC extra's: `mode` &"wander" | &"dance" | &"idle" (unknown = wander),
+## everything random from `seed_value`. `center`: the dance's centre (INF = where the extra
+## stands at its next tick). Call again any time to switch mode.
+func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector3.INF) -> void:
+	extra_mode = mode if EXTRA_MODES.has(mode) else &"wander"
+	rng_seed = seed_value
+	_rng.seed = seed_value
+	skill = 0.5
+	aggression = 0.0
+	_x_speed = _rng.randf_range(EXTRA_SPEED.x, EXTRA_SPEED.y)
+	_dance_radius = _rng.randf_range(DANCE_RADIUS.x, DANCE_RADIUS.y)
+	_dance_dir = 1.0 if _rng.randf() < 0.5 else -1.0
+	_dance_angle = _rng.randf() * TAU
+	_dance_center = center
+	_home = Vector3.INF
+	_x_target = Vector3.INF
+	_x_pause = _rng.randf_range(0.0, 1.5)  # staggered start: a crowd does not move in lockstep
+	_x_walk = 0.0
+	_x_think = 0.0
+	_x_push = Vector2.ZERO
+	_clock = 0.0
+	state = State.NONE
+	_configured = true
+
+
 ## Fills `intent` for this tick. Dead or frozen: empty intent.
 func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	if not _configured:
 		configure(randi())
+	if extra_mode != &"":
+		_fill_extra(intent, delta)
+		return
 	if player == null or not player.alive or player.frozen:
 		intent.clear()
 		if state != State.NONE:
@@ -380,8 +460,14 @@ func _enter_recover(knocked: bool = true) -> void:
 
 
 func _on_got_hit(_impulse: Vector3, _source_slot: int) -> void:
-	if player and player.alive:
-		_enter_recover()
+	if player == null or not player.alive:
+		return
+	if extra_mode != &"":
+		# Knocked: stand dazed a moment, then pick a fresh point from wherever it landed.
+		_x_target = Vector3.INF
+		_x_pause = maxf(_x_pause, _rng.randf_range(0.4, 1.0))
+		return
+	_enter_recover()
 
 
 func _on_rethink_requested(slot: int) -> void:
@@ -602,18 +688,141 @@ func _want_shove(delta: float, pos: Vector3, game: Minigame) -> bool:
 	return false
 
 
+## An enemy is in front within range and no ally is (a shove would hit the ally too).
 func _enemy_in_front(pos: Vector3, game: Minigame) -> bool:
 	var face := _flat(player.facing)
 	if face.length_squared() < 0.0001:
 		return false
 	face = face.normalized()
 	var min_dot := cos(deg_to_rad(SHOVE_CONE_DEG))
+	var enemy := false
 	for other in _others(game):
 		var to := _flat(other.global_position - pos)
 		var d := to.length()
 		if d <= SHOVE_RANGE and d > 0.01 and face.dot(to / d) >= min_dot:
-			return true
-	return false
+			if _is_ally(game, other):
+				return false
+			enemy = true
+	return enemy
+
+
+## The minigame's optional `is_ally(a, b)` (teams) for this bot and `other`; false without it.
+## Called with Players, or with slots when its first parameter is typed int.
+func _is_ally(game: Minigame, other: Player) -> bool:
+	if game == null or not game.has_method(&"is_ally"):
+		return false
+	if game != _ally_game:
+		_ally_game = game
+		_ally_by_slot = false
+		for m: Dictionary in game.get_method_list():
+			if m.get("name") == "is_ally":
+				var args: Array = m.get("args", [])
+				_ally_by_slot = not args.is_empty() and int((args[0] as Dictionary).get("type", TYPE_NIL)) == TYPE_INT
+				break
+	var v: Variant = game.call(&"is_ally", player.slot, other.slot) if _ally_by_slot else game.call(&"is_ally", player, other)
+	return v == true
+
+
+# --- Extras -------------------------------------------------------------------------------
+
+func _fill_extra(intent: PlayerIntent, delta: float) -> void:
+	intent.clear()
+	if player == null or not player.alive or player.frozen or player.control_locked:
+		return
+	_clock += delta
+	var pos := player.global_position
+	if _home == Vector3.INF:
+		_home = pos
+		if _dance_center == Vector3.INF and extra_mode == &"dance":
+			_dance_center = pos
+	var game := _game()
+	_x_think -= delta
+	if _x_think <= 0.0:
+		_x_think = EXTRA_THINK * _rng.randf_range(0.8, 1.2)
+		_x_push = _crowd_push(game, pos)
+	var move := Vector2.ZERO
+	match extra_mode:
+		&"dance":
+			move = _dance_move(pos, delta)
+		&"wander":
+			move = _wander_move(game, pos, delta)
+	if move == Vector2.ZERO:
+		return
+	move = (move + _x_push * EXTRA_SPACE_WEIGHT).limit_length(maxf(move.length(), _x_speed))
+	if game and move.length_squared() > 0.0001 and not game.is_safe(pos + _to3(move.normalized() * 0.8)):
+		# Never stroll into danger: stop and plan again from here.
+		_x_target = Vector3.INF
+		_x_pause = _rng.randf_range(0.2, 0.6)
+		var home := _flat(_home - pos)
+		move = home.normalized() * _x_speed if home.length() > 0.3 and game.is_safe(pos + _to3(home.normalized() * 0.8)) else Vector2.ZERO
+	intent.move = move.limit_length(1.0)
+
+
+func _wander_move(game: Minigame, pos: Vector3, delta: float) -> Vector2:
+	if _x_pause > 0.0:
+		_x_pause -= delta
+		return Vector2.ZERO
+	if _x_target == Vector3.INF:
+		_x_target = _pick_wander_target(game)
+		_x_walk = 0.0
+	_x_walk += delta
+	var to := _flat(_x_target - pos)
+	if to.length() < 0.5 or _x_walk > EXTRA_WALK_MAX:
+		_x_target = Vector3.INF
+		_x_pause = _rng.randf_range(EXTRA_PAUSE.x, EXTRA_PAUSE.y)
+		return Vector2.ZERO
+	return to.normalized() * _x_speed * clampf(to.length() / 0.8, 0.5, 1.0)
+
+
+## A random safe point within `wander_radius` of home (home itself when none is found).
+func _pick_wander_target(game: Minigame) -> Vector3:
+	for i in 6:
+		var off := Vector2.RIGHT.rotated(_rng.randf() * TAU) * wander_radius * sqrt(_rng.randf())
+		var c := _home + _to3(off)
+		if game == null or game.is_safe(c):
+			return c
+	return _home
+
+
+## Loose circles: steer to a point a little ahead on a wobbling circle around the centre.
+func _dance_move(pos: Vector3, delta: float) -> Vector2:
+	if _x_pause > 0.0:
+		_x_pause -= delta
+		return Vector2.ZERO
+	var speed := _x_speed * 6.0  # about the m/s this stick length walks (movement.max_speed 6)
+	_dance_angle += _dance_dir * delta * speed / maxf(_dance_radius, 0.5)
+	var r := _dance_radius * (1.0 + 0.15 * sin(_clock * 1.3 + float(rng_seed % 97)))
+	var a := _dance_angle + _dance_dir * 0.5
+	var target := _dance_center + Vector3(cos(a) * r, 0.0, sin(a) * r)
+	var to := _flat(target - pos)
+	if to.length() < 0.05:
+		return Vector2.ZERO
+	return to.normalized() * _x_speed * clampf(to.length() / 0.5, 0.4, 1.4)
+
+
+## Steer-away vector from bodies (players and extras) within EXTRA_SPACE.
+func _crowd_push(game: Minigame, pos: Vector3) -> Vector2:
+	var push := Vector2.ZERO
+	var bodies: Array[Player] = []
+	if game:
+		bodies.append_array(game.players)
+	var stage := _stage_node()
+	if stage:
+		bodies.append_array(stage.extras)
+	for o in bodies:
+		if o == player or not is_instance_valid(o) or not o.alive:
+			continue
+		var away := _flat(pos - o.global_position)
+		var d := away.length()
+		if d < EXTRA_SPACE and d > 0.01:
+			push += away / d * (1.0 - d / EXTRA_SPACE)
+	return push
+
+
+func _stage_node() -> Stage:
+	if _stage_ref == null or not is_instance_valid(_stage_ref):
+		_stage_ref = get_tree().get_first_node_in_group(&"stage") as Stage if is_inside_tree() else null
+	return _stage_ref
 
 
 # --- World --------------------------------------------------------------------------------
@@ -662,7 +871,7 @@ func _chase_candidate(game: Minigame, pos: Vector3) -> Player:
 	for other in _others(game):
 		var to := _flat(other.global_position - pos)
 		var d := to.length()
-		if d >= best_d or d < 0.01:
+		if d >= best_d or d < 0.01 or _is_ally(game, other):
 			continue
 		if goal_far and _flat(other.global_position - _goal).length() > CHASE_NEAR_GOAL \
 				and to.normalized().dot(to_goal.normalized()) < min_dot:

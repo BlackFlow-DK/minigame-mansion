@@ -22,6 +22,9 @@ const CROWD_ALPHA := 0.45
 const CROWD_PAD := 6.0
 
 var player: Player = null
+## NPC extras (`Player.is_extra`) get no tag unless this is set before setup (Stage sets it
+## for `Stage.extra_name_tags`).
+var show_extras: bool = false
 ## Current opacity 0..1 (distance fade). Read by tests.
 var alpha: float = 1.0
 ## Metres this tag is lifted above `height` to clear a crowd (smoothed). Read by tests.
@@ -65,7 +68,7 @@ func setup(p: Player) -> void:
 
 
 func _process(delta: float) -> void:
-	if not is_instance_valid(player):
+	if not is_instance_valid(player) or (player.is_extra and not show_extras):
 		visible = false
 		return
 	visible = player.alive

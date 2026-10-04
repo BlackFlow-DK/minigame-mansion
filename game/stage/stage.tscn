@@ -6,3 +6,5 @@
 script = ExtResource("1_stage")
 
 [node name="Players" type="Node3D" parent="."]
+
+[node name="Extras" type="Node3D" parent="."]

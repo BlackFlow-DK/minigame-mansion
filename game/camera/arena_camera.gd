@@ -13,12 +13,15 @@ extends Camera3D
 ## the normal framing (relative to whatever the mode frames, so it fits any arena bounds);
 ## `view_basis()` stays the fixed one throughout, only the drawn transform sweeps.
 ## Players come from the Stage API (`stage` group, `Stage.players`); dead ones are ignored.
+## NPC extras (`Stage.extras`) are not framed unless `include_extras` is on.
 ## With nothing to look at the camera holds where it is.
 
 enum Mode { FRAME_ALL, FOLLOW_LOCAL, FIXED }
 enum BoundsMode { NONE, BOX, RADIUS }
 
 @export var mode: Mode = Mode.FRAME_ALL
+## FRAME_ALL: also frame the Stage's living NPC extras (`Stage.extras`). Off: players only.
+@export var include_extras: bool = false
 
 @export_group("View")
 ## Degrees below the horizon the camera looks.
@@ -228,10 +231,18 @@ func compute_target() -> Array:
 			return [_clamp_to_bounds(framed[0]), clampf(framed[1], min_distance, max_distance)]
 
 
-## Framed points (bounds applied) of every living player on the Stage.
+## Framed points (bounds applied) of every living player on the Stage (and its living extras
+## with `include_extras`).
 func get_framed_points() -> Array[Vector3]:
 	var points: Array[Vector3] = []
-	for p in get_living_players():
+	var framed := get_living_players()
+	if include_extras:
+		var stage := _get_stage()
+		if stage:
+			for p in stage.extras:
+				if is_instance_valid(p) and p.is_inside_tree() and p.alive:
+					framed.append(p)
+	for p in framed:
 		points.append(_clamp_to_bounds(p.global_position + Vector3.UP * target_height))
 	return points
 
