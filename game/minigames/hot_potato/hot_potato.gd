@@ -613,10 +613,13 @@ func _build_arena() -> void:
 		var a := TAU * (i + 0.5) / 8.0
 		var pos := Vector3(sin(a), 0.0, cos(a)) * LANTERN_RADIUS
 		_place(arena, "sumo_lantern", pos, a)
+		# Perf: LOW lights every other lantern (a little further); the lantern models glow anyway.
+		if Look.is_low() and i % 2 == 1:
+			continue
 		var lamp := OmniLight3D.new()
 		lamp.light_color = Color(1.0, 0.78, 0.45)
 		lamp.light_energy = 1.4
-		lamp.omni_range = 6.0
+		lamp.omni_range = 7.5 if Look.is_low() else 6.0
 		lamp.position = pos + Vector3.UP * 1.0
 		arena.add_child(lamp)
 

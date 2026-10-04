@@ -76,6 +76,11 @@ const KEY_HUES: Array[float] = [0.0, 0.08, 0.15, 0.33, 0.5, 0.6, 0.75, 0.88]
 const CHANDELIERS: Array[Vector3] = [
 	Vector3(-9.3, 5.0, 6.0), Vector3(9.3, 5.0, 6.0), Vector3(-7.6, 5.0, -1.9), Vector3(8.8, 5.0, -4.2),
 ]
+## Chandelier lights: energy and range; LOW quality range and energy factor.
+const CHANDELIER_ENERGY := 2.2
+const CHANDELIER_RANGE := 11.0
+const CHANDELIER_RANGE_LOW := 8.0
+const CHANDELIER_GAIN_LOW := 1.25
 ## Emission energy per kit emissive material (the imports come in at 1.0).
 const EMIT_ENERGY: Dictionary[String, float] = {
 	"EmitMoon": 1.1, "EmitFire": 3.0, "EmitCandle": 3.2, "EmitPortal": 2.4, "EmitPortalDeep": 1.5,
@@ -224,6 +229,7 @@ func _ready() -> void:
 	_build_decor()
 	_build_piano_keys()
 	_collect_emissives()
+	_merge_static()
 	_build_lights()
 	_apply_look()
 	_build_toys()
@@ -245,6 +251,11 @@ func apply_quality() -> void:
 		l.visible = not _low
 	for s in _moon_spots:
 		s.visible = not _low
+	# LOW: the chandelier pools reach less far (a light's cost grows with the volume it covers),
+	# a little brighter so the hall keeps its level under them.
+	for i in mini(CHANDELIERS.size(), _candle_lights.size()):
+		_candle_lights[i].omni_range = CHANDELIER_RANGE_LOW if _low else CHANDELIER_RANGE
+		_candle_energy[i] = CHANDELIER_ENERGY * (CHANDELIER_GAIN_LOW if _low else 1.0)
 
 
 # --- Minigame ------------------------------------------------------------------------------
@@ -949,11 +960,29 @@ func _collect_emissives() -> void:
 			mi.set_surface_override_material(s, _emit[mat.resource_name])
 
 
+## The hall's static kit (floor, walls, stairs, furniture, decor, keyboard frame) drawn as one
+## mesh per material (StaticMerge, docs/performance.md). The clock pendulums swing: kept apart.
+## The materials stay the same objects, so the emissive flicker and key glow still work.
+## Flat pieces on the floor (tiles, rugs, the keyboard) cast no sun shadow: nothing lies below
+## them. 16 m cells (2 x 2 over the hall) keep shadow-split and frustum culling working on the merged meshes.
+func _merge_static() -> void:
+	var skip: Array = []
+	for p in _pendulums:
+		skip.append(p)
+	for c: Node in _hall.find_children("*", "Node3D", false, false):
+		var flat := c.name.begins_with("floor_tile") or c.name.begins_with("rug") or c.name == "Floor" \
+			or c.name == "FloorKeyboard"
+		if flat:
+			for g: Node in c.find_children("*", "GeometryInstance3D", true, false):
+				(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	StaticMerge.merge(_hall, skip, 16.0, "HallMerged")
+
+
 func _build_lights() -> void:
 	var lights := _group("Lights", self)
 	_fire_lights.append(_omni(lights, Vector3(-10.3, 0.9, -3.0), Color(1.0, 0.52, 0.2), FIRE_ENERGY, 9.0, true))
 	for pos in CHANDELIERS:
-		_add_candle_light(lights, pos + Vector3(0.0, -1.45, 0.0), Color(1.0, 0.78, 0.5), 2.2, 11.0)
+		_add_candle_light(lights, pos + Vector3(0.0, -1.45, 0.0), Color(1.0, 0.78, 0.5), CHANDELIER_ENERGY, CHANDELIER_RANGE)
 	for c: Node in _hall.get_children():
 		if c.name.begins_with("candelabra"):
 			var n3 := c as Node3D

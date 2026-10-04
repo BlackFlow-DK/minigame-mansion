@@ -179,6 +179,11 @@ func _ready() -> void:
 	_build_hanging()
 	_build_awnings()
 	_build_decor()
+	# Perf: repeated static pieces (crates, shelves, wall storeys, pillars, torches) as one
+	# MultiMesh each, the rest merged per 8 m of tower; the flag waves (skipped).
+	for n: Node3D in [$Tower, $Decor]:
+		StaticMerge.batch(n)
+		StaticMerge.merge(n, [], 8.0)
 	_build_water()
 	_build_audio()
 	_update_movers(0.0)
@@ -1151,6 +1156,7 @@ func _build_decor() -> void:
 		root.add_child(light)
 	# the summit flag
 	var flag := _place(root, FLAG_SCENE, TideTower.FLAG_POS, 0.0)
+	flag.set_meta(StaticMerge.SKIP_META, true)  # the cloth waves
 	_flag_cloth = flag.find_child("Flag", true, false) as MeshInstance3D
 	if _flag_cloth:
 		var src := _flag_cloth.get_active_material(0) as StandardMaterial3D
