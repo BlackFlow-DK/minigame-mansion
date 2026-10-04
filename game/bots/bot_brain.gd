@@ -181,9 +181,9 @@ const HIGH_WALL_GIVE_UP := 0.6
 
 # Hold and action hooks.
 ## Seconds to notice a hold coming on (stop) / going off (go): by skill, plus random jitter.
-const HOLD_STOP := Vector2(1.04, 0.07)
+const HOLD_STOP := Vector2(1.04, 0.15)
 const HOLD_STOP_JITTER := 0.4
-const HOLD_GO := Vector2(0.73, 0.07)
+const HOLD_GO := Vector2(0.8, 0.25)
 const HOLD_GO_JITTER := 0.25
 ## Seconds from the action hook's yes (seen at a think) to the press, x 0.8..1.25.
 const ACTION_REACTION := Vector2(0.4, 0.1)
@@ -560,9 +560,9 @@ func _update_hold(game: Minigame, delta: float) -> bool:
 		_held = want
 		_hold_switch = -1.0
 		if not _held:
-			# Going again: with a fresh plan, now.
+			# Going again: with a fresh plan, as soon as it has thought about where to.
 			_rethink = true
-			_think_timer = 0.0
+			_think_timer = minf(_think_timer, _danger_reaction * _rng_b.randf_range(1.0, 2.0))
 	return _held
 
 

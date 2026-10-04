@@ -895,7 +895,7 @@ func _plan_bots() -> void:
 		var brain := BotBrain.of(p)
 		if brain:
 			# Hiders: sharp (no wandering off, no dithering), never aggressive.
-			brain.configure(bot_rng.randi(), 1.0 if hider_slots.has(p.slot) else 0.85, 0.0)
+			brain.configure(bot_rng.randi(), 1.0 if hider_slots.has(p.slot) else 0.7, 0.0)
 
 
 ## A spot next to furniture of `kind` (else any kind), clear of other furniture and of the other
