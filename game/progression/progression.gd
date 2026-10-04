@@ -7,7 +7,8 @@ extends Node
 ## `user://profile.json` (through `Cosmetics.load_progress` / `save_progress`).
 ##
 ##   round_finished   -> the local human gets coins by placement: 1st 6, 2nd 4, 3rd 3, else 2
-##                       (only when in the round's ranking; slots sharing first place all get 6)
+##                       (only when in the round's ranking; a tied group (Session.round_groups)
+##                       pays its shared place, so slots sharing first place all get 6)
 ##   session_finished -> session bonus by final placement: 1st 40, 2nd 25, 3rd 15, else 10
 ##   half rate (half of both, rounded up) for offline sessions (`Net.start_offline`) and for any
 ##   session with fewer than 2 human players (a host alone with bots); bots never earn
@@ -209,12 +210,16 @@ func _on_session_state_changed(state: int) -> void:
 		_session_half = null
 
 
-## Placement (1-based) of `slot` in a round: its index in `ranking`, except that slots with the
-## winner's points (time-out survivors) share 1st. 0 if `slot` is not in the ranking.
-static func round_place(ranking: Array, points: Dictionary, slot: int) -> int:
+## Placement (1-based) of `slot` in a round; 0 if `slot` is not in the ranking. With `groups`
+## (the round's tied groups, `Session.round_groups`, matching `ranking`) a tied slot has its
+## group's place (1, 1, 3). Without them: its index in `ranking`, except that slots with the
+## winner's points (time-out survivors) share 1st.
+static func round_place(ranking: Array, points: Dictionary, slot: int, groups: Array = []) -> int:
 	var i := ranking.find(slot)
 	if i < 0:
 		return 0
+	if not groups.is_empty() and _same_order(Minigame.flatten_groups(groups), ranking):
+		return Minigame.group_place(groups, slot)
 	if i > 0 and points.has(slot) and points.has(ranking[0]):
 		var mine := int(points[slot])
 		if mine > 0 and mine == int(points[ranking[0]]):
@@ -222,12 +227,28 @@ static func round_place(ranking: Array, points: Dictionary, slot: int) -> int:
 	return i + 1
 
 
+static func _same_order(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	for k in a.size():
+		if int(a[k]) != int(b[k]):
+			return false
+	return true
+
+
+## The tied groups of the round `ranking` belongs to (Session.round_groups), or [] when they
+## are for another ranking (a dev scene emitting round_finished by hand).
+func _groups_for(ranking: Array) -> Array:
+	var groups: Array = Session.round_groups
+	return groups if _same_order(Minigame.flatten_groups(groups), ranking) else []
+
+
 ## Coins a round gives `slot` (0 for a bot or a slot not in the ranking), halved (rounded up)
 ## when `half` (see is_half_rate).
 func round_award(ranking: Array, points: Dictionary, slot: int, half: bool) -> int:
 	if not _is_human(slot):
 		return 0
-	var place := round_place(ranking, points, slot)
+	var place := round_place(ranking, points, slot, _groups_for(ranking))
 	if place == 0:
 		return 0
 	var coins_for := ROUND_COINS[place - 1] if place <= ROUND_COINS.size() else ROUND_COINS_TAKING_PART
@@ -260,7 +281,7 @@ func _on_round_finished(ranking: Array, points: Dictionary) -> void:
 	if not _is_human(slot) or not ranking.has(slot):
 		return
 	_bump(&"rounds_played")
-	if round_place(ranking, points, slot) == 1:
+	if round_place(ranking, points, slot, _groups_for(ranking)) == 1:
 		_bump(&"rounds_won")
 	_grant(&"round", last_round_award)
 	save()

@@ -12,6 +12,7 @@
 [ext_resource type="PackedScene" path="res://player/components/sfx.tscn" id="10_sfx"]
 [ext_resource type="PackedScene" path="res://player/components/sync.tscn" id="11_sync"]
 [ext_resource type="PackedScene" path="res://player/components/size.tscn" id="12_size"]
+[ext_resource type="PackedScene" path="res://player/components/team.tscn" id="13_team"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
 radius = 0.4
@@ -49,3 +50,5 @@ shape = SubResource("CapsuleShape3D_body")
 [node name="sfx" parent="Components" instance=ExtResource("10_sfx")]
 
 [node name="sync" parent="Components" instance=ExtResource("11_sync")]
+
+[node name="team" parent="Components" instance=ExtResource("13_team")]
