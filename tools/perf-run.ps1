@@ -59,7 +59,10 @@ function Get-RegistryIds {
     return @([regex]::Matches($line, '&"([a-z0-9_]+)"') | ForEach-Object { $_.Groups[1].Value })
 }
 $RegistryIds = @(Get-RegistryIds)
-$AllScenes = @('title', 'lobby', 'podium', 'vote', 'dev_arena') + $RegistryIds
+$AllScenes = @('title', 'lobby', 'dev_arena') + $RegistryIds
+# The screens (podium, vote) run by default too, after the scenes; -ListScenes keeps listing the
+# scenes only (test_wire checks that list against the registry).
+$Screens = @('podium', 'vote')
 if ($ListScenes) { $AllScenes | ForEach-Object { Write-Output $_ }; exit 0 }
 # PowerShell -File passes "a,b" as one string: split it.
 $Scenes = @($Scenes | ForEach-Object { $_ -split ',' } | Where-Object { $_ -ne '' })
@@ -68,7 +71,7 @@ if ($Transitions) {
     $ids = @($Scenes | Where-Object { $RegistryIds -contains $_ })
     if ($ids.Count -eq 0) { $ids = $RegistryIds }
     $Scenes = @('transitions')
-} elseif ($Scenes.Count -eq 0) { $Scenes = $AllScenes }
+} elseif ($Scenes.Count -eq 0) { $Scenes = $AllScenes + $Screens }
 
 $perfDir = Join-Path $RepoRoot 'build\perf'
 New-Item -ItemType Directory -Force -Path $perfDir | Out-Null
@@ -234,6 +237,14 @@ foreach ($scene in $Scenes) {
         if (-not $row) { Write-Host "   !! no result row (exit $($p.ExitCode))" }
         Add-Line $memCsv "$Label,$scene,$q,$([Math]::Round($peak / 1MB)),$([Math]::Round($priv / 1MB)),$wall,$($p.ExitCode),$($errs.Count)"
     }
+}
+
+if ($Transitions) {
+    if (Test-Path -LiteralPath $loadCsv) {
+        Import-Csv -LiteralPath $loadCsv | Where-Object { $_.label -eq $Label } | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+    }
+    Write-Host "perf-run: loads -> $loadCsv"
+    exit 0
 }
 
 # Table: this label's rows joined with the memory rows.

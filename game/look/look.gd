@@ -81,8 +81,12 @@ static var _outlined: Array[WeakRef] = []
 static var _outline_meshes: Dictionary = {}
 ## [source material, outline] -> its toon copy; [colour, roughness, outline] -> toon_material.
 static var _toon_cache: Dictionary = {}
+## mesh -> _analyze() result (welded ids, normal sums, stats), kept for the session.
+static var _analysis: Dictionary = {}
 ## Prints one line per prepared mesh (size, fill, open, weight) for tuning the opt-outs.
 static var outline_debug: bool = false
+## Microseconds spent preparing outline meshes so far (load-time diagnostics).
+static var outline_usec: int = 0
 
 
 ## Current quality. The first call reads `--quality=low|medium|high` from the user args.
@@ -232,6 +236,7 @@ static func prepare_outline(mi: MeshInstance3D) -> float:
 		return mesh.get_meta(&"look_outline_weight")
 	if mesh is ArrayMesh and (mesh as ArrayMesh).get_blend_shape_count() > 0:
 		return 0.0  # morphing meshes would need the smoothing redone per shape
+	var t0 := Time.get_ticks_usec()
 	var weight := _outline_weight(mi)
 	var key := [mesh, weight]
 	var baked: ArrayMesh = _outline_meshes.get(key)
@@ -240,6 +245,7 @@ static func prepare_outline(mi: MeshInstance3D) -> float:
 		if baked == null:
 			return 0.0
 		_outline_meshes[key] = baked
+	outline_usec += Time.get_ticks_usec() - t0
 	mi.mesh = baked
 	return weight
 
@@ -268,39 +274,83 @@ static func _outline_weight(mi: MeshInstance3D) -> float:
 
 ## Volume (closed meshes), area, and whether the welded surface has border edges.
 static func _mesh_stats(mesh: Mesh) -> Dictionary:
+	return _analyze(mesh)
+
+
+## One pass over a mesh, cached per mesh for the session (a kit piece placed 30 times is
+## analysed once): vertices welded by position (`wids`: per surface, vertex -> welded id),
+## volume, area, open (border edges), and per welded id the angle-weighted sum of the face
+## normals meeting there (`sums`, for the outline's smoothed normals). Packed arrays and int
+## keys only: this runs while a round loads.
+static func _analyze(mesh: Mesh) -> Dictionary:
+	var cached: Dictionary = _analysis.get(mesh, {})
+	if not cached.is_empty():
+		return cached
+	var weld: Dictionary = {}  # position key -> welded id
+	var sums := PackedVector3Array()
+	var wids: Array[PackedInt32Array] = []
+	var edges: Dictionary = {}  # (lo << 32) | hi -> count
 	var volume := 0.0
 	var area := 0.0
-	var edges: Dictionary = {}
 	for s in mesh.get_surface_count():
-		if _primitive(mesh, s) != Mesh.PRIMITIVE_TRIANGLES:
-			continue
 		var arrays := mesh.surface_get_arrays(s)
 		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
-		var count := idx.size() if idx.size() > 0 else verts.size()
-		var keys := PackedInt64Array()
-		keys.resize(verts.size())
+		var wid := PackedInt32Array()
+		wid.resize(verts.size())
 		for i in verts.size():
-			keys[i] = _pos_key(verts[i])
+			var k := _pos_key(verts[i])
+			var w: int = weld.get(k, -1)
+			if w < 0:
+				w = sums.size()
+				weld[k] = w
+				sums.append(Vector3.ZERO)
+			wid[i] = w
+		wids.append(wid)
+		if _primitive(mesh, s) != Mesh.PRIMITIVE_TRIANGLES:
+			continue
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		var indexed := idx.size() > 0
+		var count := idx.size() if indexed else verts.size()
 		for t in range(0, count - 2, 3):
-			var a := idx[t] if idx.size() > 0 else t
-			var b := idx[t + 1] if idx.size() > 0 else t + 1
-			var c := idx[t + 2] if idx.size() > 0 else t + 2
-			volume += verts[a].dot(verts[b].cross(verts[c])) / 6.0
-			area += (verts[b] - verts[a]).cross(verts[c] - verts[a]).length() * 0.5
-			for e in [[keys[a], keys[b]], [keys[b], keys[c]], [keys[c], keys[a]]]:
-				var lo: int = mini(e[0], e[1])
-				var hi: int = maxi(e[0], e[1])
-				if lo == hi:
-					continue
-				var ek := [lo, hi]
-				edges[ek] = int(edges.get(ek, 0)) + 1
+			var a := idx[t] if indexed else t
+			var b := idx[t + 1] if indexed else t + 1
+			var c := idx[t + 2] if indexed else t + 2
+			var p0 := verts[a]
+			var p1 := verts[b]
+			var p2 := verts[c]
+			volume += p0.dot(p1.cross(p2)) / 6.0
+			area += (p1 - p0).cross(p2 - p0).length() * 0.5
+			var wa := wid[a]
+			var wb := wid[b]
+			var wc := wid[c]
+			_count_edge(edges, wa, wb)
+			_count_edge(edges, wb, wc)
+			_count_edge(edges, wc, wa)
+			var fn := (p2 - p0).cross(p1 - p0)  # Godot winds front faces clockwise
+			if fn.length_squared() < 1e-20:
+				continue
+			fn = fn.normalized()
+			sums[wa] += fn * (p1 - p0).angle_to(p2 - p0)
+			sums[wb] += fn * (p2 - p1).angle_to(p0 - p1)
+			sums[wc] += fn * (p0 - p2).angle_to(p1 - p2)
 	var border := 0
-	for k in edges:
+	for k: int in edges:
 		if int(edges[k]) == 1:
 			border += 1
 	# a few stray border edges (tiny holes, pinched poles) do not make a sheet
-	return {"volume": absf(volume), "area": area, "open": border > maxi(8, edges.size() / 50)}
+	var out := {"volume": absf(volume), "area": area, "open": border > maxi(8, edges.size() / 50),
+		"sums": sums, "wids": wids}
+	if _analysis.size() > 512:
+		_analysis.clear()
+	_analysis[mesh] = out
+	return out
+
+
+static func _count_edge(edges: Dictionary, a: int, b: int) -> void:
+	if a == b:
+		return
+	var key := (mini(a, b) << 32) | maxi(a, b)
+	edges[key] = int(edges.get(key, 0)) + 1
 
 
 static func _primitive(mesh: Mesh, s: int) -> Mesh.PrimitiveType:
@@ -315,45 +365,21 @@ static func _pos_key(v: Vector3) -> int:
 
 
 static func _bake_outline_mesh(mesh: Mesh, weight: float) -> ArrayMesh:
-	# angle-weighted normal sums per welded position, across every surface
-	var sums: Dictionary = {}
-	var surfaces: Array = []
-	for s in mesh.get_surface_count():
-		var arrays := mesh.surface_get_arrays(s)
-		surfaces.append(arrays)
-		if _primitive(mesh, s) != Mesh.PRIMITIVE_TRIANGLES:
-			continue
-		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
-		var count := idx.size() if idx.size() > 0 else verts.size()
-		for t in range(0, count - 2, 3):
-			var ids := PackedInt32Array([t, t + 1, t + 2])
-			if idx.size() > 0:
-				ids = PackedInt32Array([idx[t], idx[t + 1], idx[t + 2]])
-			var p0 := verts[ids[0]]
-			var p1 := verts[ids[1]]
-			var p2 := verts[ids[2]]
-			var fn := (p2 - p0).cross(p1 - p0)  # Godot winds front faces clockwise
-			if fn.length_squared() < 1e-20:
-				continue
-			fn = fn.normalized()
-			var corners := [[p0, p1, p2], [p1, p2, p0], [p2, p0, p1]]
-			for c in 3:
-				var e1: Vector3 = corners[c][1] - corners[c][0]
-				var e2: Vector3 = corners[c][2] - corners[c][0]
-				var angle := e1.angle_to(e2)
-				var k := _pos_key(verts[ids[c]])
-				sums[k] = (sums.get(k, Vector3.ZERO) as Vector3) + fn * angle
+	# angle-weighted normal sums per welded position, across every surface (cached analysis)
+	var an := _analyze(mesh)
+	var sums: PackedVector3Array = an["sums"]
+	var wids: Array[PackedInt32Array] = an["wids"]
 	var out := ArrayMesh.new()
 	var flags := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
 	for s in mesh.get_surface_count():
-		var arrays: Array = surfaces[s]
+		var arrays := mesh.surface_get_arrays(s)
 		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var normals: Variant = arrays[Mesh.ARRAY_NORMAL]
+		var wid := wids[s]
 		var custom := PackedFloat32Array()
 		custom.resize(verts.size() * 4)
 		for i in verts.size():
-			var sn: Vector3 = sums.get(_pos_key(verts[i]), Vector3.ZERO)
+			var sn := sums[wid[i]]
 			if sn.length_squared() < 1e-12:
 				sn = (normals as PackedVector3Array)[i] if normals != null else Vector3.UP
 			sn = sn.normalized()

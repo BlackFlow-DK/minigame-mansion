@@ -27,12 +27,21 @@ const SKIP_META := &"no_merge"
 
 ## Prints why each mesh instance was left out (tuning).
 static var debug: bool = false
+## Microseconds spent in merge() and batch() so far (load-time diagnostics).
+static var usec: int = 0
 
 
 ## Merges what it can under `root` (the merged meshes become children of `root`, in its local
 ## space). Returns {"sources": instances merged, "surfaces": surfaces merged, "meshes": new
 ## mesh instances}.
 static func merge(root: Node3D, skip: Array = [], cell: float = 0.0, node_name: String = "Merged") -> Dictionary:
+	var t0 := Time.get_ticks_usec()
+	var stats := _merge(root, skip, cell, node_name)
+	usec += Time.get_ticks_usec() - t0
+	return stats
+
+
+static func _merge(root: Node3D, skip: Array, cell: float, node_name: String) -> Dictionary:
 	var stats := {"sources": 0, "surfaces": 0, "meshes": 0}
 	if root == null:
 		return stats
@@ -87,6 +96,13 @@ static func merge(root: Node3D, skip: Array = [], cell: float = 0.0, node_name: 
 ## The MultiMesh mesh is a copy whose surfaces carry the active (toon) materials.
 ## Returns {"sources", "multimeshes"}.
 static func batch(root: Node3D, skip: Array = [], min_count: int = 3, node_name: String = "Batch") -> Dictionary:
+	var t0 := Time.get_ticks_usec()
+	var stats := _batch(root, skip, min_count, node_name)
+	usec += Time.get_ticks_usec() - t0
+	return stats
+
+
+static func _batch(root: Node3D, skip: Array, min_count: int, node_name: String) -> Dictionary:
 	var stats := {"sources": 0, "multimeshes": 0}
 	if root == null:
 		return stats
@@ -159,6 +175,8 @@ static func _with_materials(mi: MeshInstance3D) -> Mesh:
 static func _canonical(mat: Material, canon: Dictionary) -> Material:
 	if mat == null:
 		return mat
+	if canon.has(mat):  # this object seen before in this merge
+		return canon[mat]
 	var key: Array = [mat.get_class()]
 	for p: Dictionary in mat.get_property_list():
 		if int(p["usage"]) & PROPERTY_USAGE_STORAGE and p["name"] != "resource_path" and p["name"] != "resource_scene_unique_id":
@@ -168,7 +186,8 @@ static func _canonical(mat: Material, canon: Dictionary) -> Material:
 	var got: Material = canon.get(key)
 	if got == null:
 		canon[key] = mat
-		return mat
+		got = mat
+	canon[mat] = got
 	return got
 
 
@@ -351,6 +370,8 @@ static func _rotated_custom(src: Variant, count: int, nb: Basis) -> PackedFloat3
 	if src == null or (src as PackedFloat32Array).size() != count * 4:
 		return out
 	var c: PackedFloat32Array = src
+	if nb.is_equal_approx(Basis.IDENTITY):
+		return c
 	for k in count:
 		var n := (nb * Vector3(c[k * 4], c[k * 4 + 1], c[k * 4 + 2])).normalized()
 		out[k * 4] = n.x
