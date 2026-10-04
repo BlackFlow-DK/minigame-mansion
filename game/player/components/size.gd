@@ -18,6 +18,13 @@ extends PlayerComponent
 ## scaled before movement/shove use it); remote copies do it in `_process`.
 ## Rule for minigames: set tuning to absolute values (from what you read in `_setup`/`_start`),
 ## never `*=` mid-round, or the size factor compounds.
+##
+## Modifiers (game modes' mutators, `set_modifier`): extra multipliers that compose with the
+## size through the same bookkeeping, so a mutator, the size and a minigame's `_setup` tuning
+## multiply instead of fighting: value = base * size factor * every modifier's factor. A
+## modifier may scale any float property of any component ("jump:time_to_apex"), not only
+## STATS, and the body (`scale`: looks and capsule). Like the size factors, stat multipliers
+## are 1 while `frozen`; the body scale is not. `clear_modifier` restores the base exactly.
 
 const CatalogData := preload("res://cosmetics/catalog.gd")
 
@@ -50,6 +57,11 @@ var _shape_node: CollisionShape3D = null
 var _capsule: CapsuleShape3D = null
 var _capsule_base := Vector3(0.4, 1.0, 0.5)  # radius, height, centre y at scale 1
 var _capsule_scale: float = 1.0
+## source -> {"stats": {"<component>:<property>": multiplier}, "scale": float}
+var _modifiers: Dictionary = {}
+## Every "<component>:<property>" a modifier ever touched that is not in STATS (kept in sync
+## after the modifier goes, so its base comes back).
+var _extra_keys: Dictionary = {}
 
 
 func _ready() -> void:
@@ -79,6 +91,53 @@ func factor(key: String) -> float:
 static func effective(entry: Dictionary, key: String) -> float:
 	var f := float(entry.get(key, 1.0))
 	return sqrt(f) if CURVED.has(key) else f
+
+
+## Adds (or replaces) the modifier `source`: `stats` maps "<component>:<property>" to a
+## multiplier, `body_scale_factor` scales the body. Call it on every peer (looks) and on the
+## authority (stats); Session does both through its mutator RPC.
+func set_modifier(source: StringName, stats: Dictionary, body_scale_factor: float = 1.0) -> void:
+	var clean: Dictionary = {}
+	for key: Variant in stats:
+		clean[str(key)] = float(stats[key])
+		if not _is_size_stat(str(key)):
+			_extra_keys[str(key)] = true
+	_modifiers[source] = {"stats": clean, "scale": body_scale_factor}
+	if player:
+		_read_loadout()
+		_sync_stats()
+
+
+## Removes the modifier `source` (no-op if absent); its stats return to base * size factor.
+func clear_modifier(source: StringName) -> void:
+	if not _modifiers.has(source):
+		return
+	_modifiers.erase(source)
+	if player:
+		_read_loadout()
+		_sync_stats()
+
+
+func has_modifier(source: StringName) -> bool:
+	return _modifiers.has(source)
+
+
+## Product of every modifier's multiplier for `key` ("<component>:<property>"): 1 while frozen.
+func modifier_factor(key: String) -> float:
+	if player == null or player.frozen:
+		return 1.0
+	var f := 1.0
+	for m: Dictionary in _modifiers.values():
+		f *= float((m["stats"] as Dictionary).get(key, 1.0))
+	return f
+
+
+## Product of every modifier's body scale.
+func modifier_scale() -> float:
+	var f := 1.0
+	for m: Dictionary in _modifiers.values():
+		f *= float(m["scale"])
+	return f
 
 
 ## The base value (before the size factor) of `component_name`'s `property`, e.g.
@@ -111,11 +170,12 @@ func _process(delta: float) -> void:
 func _read_loadout() -> void:
 	var id: Variant = player.loadout.get("size", CatalogData.DEFAULT_SIZE)
 	var entry := CatalogData.size_entry(id)
-	if entry["id"] == size_id and _capsule_scale == body_scale:
+	var want := float(entry["scale"]) * modifier_scale()
+	if entry["id"] == size_id and _capsule_scale == want and body_scale == want:
 		return
 	size_id = entry["id"]
 	_entry = entry
-	body_scale = float(entry["scale"])
+	body_scale = want
 	_apply_capsule()
 
 
@@ -152,7 +212,19 @@ func _sync_stats() -> void:
 	for stat: Array in STATS:
 		var c := player.get_component(stat[0])
 		if c:
-			_sync(c, stat[1], stat[3], factor(stat[2]))
+			_sync(c, stat[1], stat[3], factor(stat[2]) * modifier_factor(stat[3]))
+	for key: String in _extra_keys:
+		var parts := key.split(":", true, 1)
+		var c := player.get_component(StringName(parts[0])) if parts.size() == 2 else null
+		if c and StringName(parts[1]) in c:
+			_sync(c, StringName(parts[1]), key, modifier_factor(key))
+
+
+static func _is_size_stat(key: String) -> bool:
+	for stat: Array in STATS:
+		if stat[3] == key:
+			return true
+	return false
 
 
 ## Writes `base * f` to `obj.property`; a value this component did not write is the new base.

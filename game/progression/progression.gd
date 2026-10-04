@@ -276,6 +276,9 @@ func local_session_award(final_ranking: Array) -> int:
 
 
 func _on_round_finished(ranking: Array, points: Dictionary) -> void:
+	if Session.practice:
+		last_round_award = 0  # practice rounds (game modes) pay nothing and count for no stats
+		return
 	var slot := Net.local_slot()
 	last_round_award = local_round_award(ranking, points)
 	if not _is_human(slot) or not ranking.has(slot):
