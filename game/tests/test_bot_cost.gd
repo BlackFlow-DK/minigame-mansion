@@ -34,6 +34,65 @@ func _measure(id: StringName, count: int, frames: int, seed_value: int) -> float
 	return us
 
 
+## Per physics frame: every brain's fill_intent time summed and the `is_safe` calls it made (bots
+## through their controllers, extras too), with the brain budget on or off. Returns
+## [mean ms, p99 ms, max ms, mean calls, p99 calls, max calls] over `frames` frames.
+func _frame_load(id: StringName, frames: int, seed_value: int, budget: bool) -> Array:
+	seed(seed_value)
+	spawn_arena(8, id, false)
+	BotBrain.profile_frames.clear()
+	BotBrain.profile_calls.clear()
+	BotBrain.budget_enabled = budget
+	BotBrain.profile = true
+	await step(frames)
+	BotBrain.profile = false
+	BotBrain.budget_enabled = true
+	var t := _stats(BotBrain.profile_frames.values(), 0.001)
+	var c := _stats(BotBrain.profile_calls.values(), 1.0)
+	print("  brains %s, budget %s (8 players, %d frames): %.2f ms mean, p99 %.2f, max %.2f; is_safe calls per frame mean %.0f, p99 %.0f, max %.0f" % [
+		id, "on" if budget else "off", frames, t[0], t[1], t[2], c[0], c[1], c[2]])
+	if stage:
+		stage.clear()
+		remove_child(stage)
+		stage.queue_free()
+		stage = null
+	players.clear()
+	Net.leave()
+	return t + c
+
+
+static func _stats(values: Array, scale: float) -> Array:
+	if values.is_empty():
+		return [0.0, 0.0, 0.0]
+	values.sort()
+	var mean := 0.0
+	for x: int in values:
+		mean += x * scale / values.size()
+	return [mean, values[int(values.size() * 0.99)] * scale, values[-1] * scale]
+
+
+func _load_ab(id: StringName) -> void:
+	var off: Array = await _frame_load(id, 600, 7, false)
+	var on: Array = await _frame_load(id, 600, 7, true)
+	assert_true(float(on[4]) <= float(off[4]), "%s: the budget does not add is_safe calls (p99 %d vs %d)" % [id, on[4], off[4]])
+	assert_true(float(on[5]) <= 400.0, "%s: at most 400 is_safe calls in any frame (%d)" % [id, on[5]])
+
+
+func test_frame_load_portrait_panic() -> void:
+	await _load_ab(&"portrait_panic")
+
+
+func test_frame_load_rising_tide() -> void:
+	await _load_ab(&"rising_tide")
+
+
+func test_frame_load_floor_is_lava() -> void:
+	await _load_ab(&"floor_is_lava")
+
+
+func test_frame_load_masquerade() -> void:
+	await _load_ab(&"masquerade")
+
 func test_cost_floor_is_lava() -> void:
 	var us := await _measure(&"floor_is_lava", 8, 900, 3)
 	assert_true(us < CEILING_US, "%.1f us per think" % us)
