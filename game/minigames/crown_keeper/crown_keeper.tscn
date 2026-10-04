@@ -1,0 +1,56 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://minigames/crown_keeper/crown_keeper.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://look/stage_look.tscn" id="2_look"]
+[ext_resource type="PackedScene" path="res://camera/arena_camera.tscn" id="3_cam"]
+
+[node name="CrownKeeper" type="Node3D"]
+script = ExtResource("1_script")
+title = "Crown Keeper"
+rule_text = "Wear the crown to score. Shove the wearer to knock it off!"
+time_limit = 60.0
+
+[node name="StageLook" parent="." instance=ExtResource("2_look")]
+preset = 0
+light_yaw = 25.0
+
+[node name="ArenaCamera" parent="." instance=ExtResource("3_cam")]
+current = true
+mode = 2
+pitch_degrees = 56.0
+fixed_focus = Vector3(0, 0, 0.9)
+fixed_distance = 22.5
+
+[node name="Spawns" type="Node3D" parent="."]
+
+[node name="Spawn0" type="Marker3D" parent="Spawns"]
+position = Vector3(2.4874, 0, 6.0052)
+rotation = Vector3(0, 3.534292, 0)
+
+[node name="Spawn1" type="Marker3D" parent="Spawns"]
+position = Vector3(-2.4874, 0, -6.0052)
+rotation = Vector3(0, 6.675884, 0)
+
+[node name="Spawn2" type="Marker3D" parent="Spawns"]
+position = Vector3(6.0052, 0, -2.4874)
+rotation = Vector3(0, 5.105088, 0)
+
+[node name="Spawn3" type="Marker3D" parent="Spawns"]
+position = Vector3(-6.0052, 0, 2.4874)
+rotation = Vector3(0, 8.246681, 0)
+
+[node name="Spawn4" type="Marker3D" parent="Spawns"]
+position = Vector3(6.0052, 0, 2.4874)
+rotation = Vector3(0, 4.319690, 0)
+
+[node name="Spawn5" type="Marker3D" parent="Spawns"]
+position = Vector3(-6.0052, 0, -2.4874)
+rotation = Vector3(0, 7.461283, 0)
+
+[node name="Spawn6" type="Marker3D" parent="Spawns"]
+position = Vector3(2.4874, 0, -6.0052)
+rotation = Vector3(0, 5.890486, 0)
+
+[node name="Spawn7" type="Marker3D" parent="Spawns"]
+position = Vector3(-2.4874, 0, 6.0052)
+rotation = Vector3(0, 9.032079, 0)
