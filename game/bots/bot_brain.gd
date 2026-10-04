@@ -162,7 +162,7 @@ const HOP_AIR_TIME := 0.6
 
 # Jump probes (physics).
 ## Seconds between probes while running on the floor (low skill, high skill).
-const PROBE_INTERVAL := Vector2(0.16, 0.08)
+const PROBE_INTERVAL := Vector2(0.2, 0.1)
 ## Physics layer mask the probes see (1 = world).
 const PROBE_MASK := 1
 ## Feet must clear a ledge top by this much (m): ledges up to apex - LEDGE_CLEARANCE are jumpable.
