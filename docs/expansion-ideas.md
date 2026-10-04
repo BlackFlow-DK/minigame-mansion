@@ -1,5 +1,7 @@
 # Minigame Mansion: expansion ideas
 
+> v0.3 plan (2026-10-04): see `docs/superpowers/specs/2026-10-04-v03-expansion-design.md`: eight to ten new minigames of new kinds (race, red-light-green-light, keep-away, hide and seek, team sport, hidden identity, infection tag, memory, throwing, climbing), game modes (playlist, vote, mutators, practice), lobby toys, animation and performance passes.
+
 Written 2026-09-30 after the first playable build. Marks: **[tonight]** being built now, **[next]** good candidates for the next session, **[later]** bigger or riskier, **[no]** considered and rejected, with the reason.
 
 ## Minigames
