@@ -418,14 +418,7 @@ func step_ball(delta: float) -> void:
 
 ## Blob capsule as (radius, axis bottom, axis top) above its origin, from its collision shape.
 func capsule_of(p: Player) -> Vector3:
-	var cs := p.get_node_or_null(^"CollisionShape3D") as CollisionShape3D
-	if cs and cs.shape is CapsuleShape3D:
-		var cap := cs.shape as CapsuleShape3D
-		var r := cap.radius * absf(cs.scale.x)
-		var half := cap.height * 0.5 * absf(cs.scale.y)
-		var c := cs.position.y
-		return Vector3(r, c - half + r, c + half - r)
-	return Vector3(0.4, 0.4, 0.6)
+	return BallSim.blob_capsule(p)
 
 
 func _on_local_touch(p: Player) -> void:
