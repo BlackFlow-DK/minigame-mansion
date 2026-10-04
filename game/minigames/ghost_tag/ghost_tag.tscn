@@ -1,0 +1,59 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://minigames/ghost_tag/ghost_tag.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://look/stage_look.tscn" id="2_look"]
+[ext_resource type="PackedScene" path="res://camera/arena_camera.tscn" id="3_cam"]
+
+[node name="GhostTag" type="Node3D"]
+script = ExtResource("1_script")
+title = "Ghost Tag"
+rule_text = "The ghost's touch turns you into a ghost. Survive the night!"
+time_limit = 60.0
+
+[node name="StageLook" parent="." instance=ExtResource("2_look")]
+preset = 3
+light_yaw = 200.0
+
+[node name="ArenaCamera" parent="." instance=ExtResource("3_cam")]
+current = true
+mode = 1
+pitch_degrees = 56.0
+follow_distance = 16.5
+fixed_focus = Vector3(0, 0, 1.4)
+fixed_distance = 19.5
+bounds_mode = 1
+bounds_box = AABB(-2.5, -1, -1.2, 5, 4, 4.4)
+
+[node name="Spawns" type="Node3D" parent="."]
+
+[node name="Spawn0" type="Marker3D" parent="Spawns"]
+position = Vector3(-9.9, 0, -6.9)
+rotation = Vector3(0, 0.000000, 0)
+
+[node name="Spawn1" type="Marker3D" parent="Spawns"]
+position = Vector3(9.9, 0, 6.9)
+rotation = Vector3(0, 3.141593, 0)
+
+[node name="Spawn2" type="Marker3D" parent="Spawns"]
+position = Vector3(9.9, 0, -6.9)
+rotation = Vector3(0, -1.570796, 0)
+
+[node name="Spawn3" type="Marker3D" parent="Spawns"]
+position = Vector3(-9.9, 0, 6.9)
+rotation = Vector3(0, 1.570796, 0)
+
+[node name="Spawn4" type="Marker3D" parent="Spawns"]
+position = Vector3(0.0, 0, -7.25)
+rotation = Vector3(0, -1.570796, 0)
+
+[node name="Spawn5" type="Marker3D" parent="Spawns"]
+position = Vector3(0.0, 0, 7.25)
+rotation = Vector3(0, 1.570796, 0)
+
+[node name="Spawn6" type="Marker3D" parent="Spawns"]
+position = Vector3(-10.25, 0, 0.0)
+rotation = Vector3(0, 0.000000, 0)
+
+[node name="Spawn7" type="Marker3D" parent="Spawns"]
+position = Vector3(10.25, 0, 0.0)
+rotation = Vector3(0, 3.141593, 0)
