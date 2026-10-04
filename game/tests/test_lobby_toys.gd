@@ -230,6 +230,20 @@ func test_bell_rings_on_a_shove_with_a_cooldown() -> void:
 	assert_eq(rings.size(), 2, "two rings")
 
 
+func test_running_into_the_bell_rings_it_softly() -> void:
+	var lobby := _spawn_lobby(1)
+	if lobby == null:
+		return
+	var p := players[0]
+	var bell := lobby.bell
+	var rings := watch(bell, &"rung")
+	p.place_at(Transform3D(Basis(), bell.position + Vector3(0.0, 0.0, 3.0)))
+	await step(60, func(_i: int) -> void: p.intent.move = Vector2(0.0, -1.0))
+	assert_eq(rings.size(), 1, "one ring from the bump (cooldown holds the rest)")
+	if rings.size() == 1:
+		assert_true(float(rings[0][0]) < 1.0, "a soft ring")
+
+
 func test_bell_ignores_a_shove_out_of_reach() -> void:
 	var lobby := _spawn_lobby(1)
 	if lobby == null:

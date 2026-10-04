@@ -453,30 +453,15 @@ func _build_board() -> void:
 	board.position = BOARD_POS
 	add_child(board)
 	for i in 2:
-		var l := Label3D.new()
-		l.name = "Count%s" % GOAL_NAMES[i].capitalize()
-		l.font_size = 96
-		l.pixel_size = 0.0055
-		l.outline_size = 18
-		l.modulate = Color("#fff6e0")
-		l.outline_modulate = Color(0.1, 0.05, 0.1)
-		l.shaded = false
+		var l := MansionLobby.make_label("Count%s" % GOAL_NAMES[i].capitalize(), 0.56)
 		l.double_sided = false
 		l.position = Vector3((-1.0 if i == 0 else 1.0) * 0.47, 0.45, 0.13)
-		l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		board.add_child(l)
 		_count_labels.append(l)
-	var title := Label3D.new()
-	title.name = "Title"
+	var title := MansionLobby.make_label("Title", 0.19, Color("#ffd98a"))
 	title.text = "GOALS TONIGHT"
-	title.font_size = 40
-	title.pixel_size = 0.005
-	title.outline_size = 10
-	title.modulate = Color("#ffd98a")
-	title.outline_modulate = Color(0.12, 0.06, 0.1)
-	title.shaded = false
+	title.double_sided = false
 	title.position = Vector3(0.0, 0.88, 0.13)
-	title.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	board.add_child(title)
 	_refresh_board()
 

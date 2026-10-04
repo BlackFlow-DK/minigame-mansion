@@ -152,6 +152,9 @@ const TOY_SOUNDS := {
 ## Chance that a bot's new plan is a toy (trampoline, see-saw, bell, photo spot), and that it
 ## goes after the football instead (it then follows the ball for a while).
 const BOT_TOY_CHANCE := 0.35
+## Toy labels: font size and outline in pixels of the glyph cache (see make_label).
+const TOY_FONT_SIZE := 32
+const TOY_OUTLINE_SIZE := 8
 const BOT_BALL_CHANCE := 0.2
 
 ## Upward speed (m/s) a cushion gives a blob that lands on it (a normal jump is ~7.4).
@@ -688,6 +691,26 @@ func add_solid_cylinder(body: StaticBody3D, base: Vector3, radius: float, height
 	ball_solids.append([&"cylinder", base, radius, height, bounce])
 
 
+## A Label3D for the toys in the name tags' font, all at one small font size (one small glyph
+## cache: at 64 px the toys' text cost ~11 MB of font textures, at 32 px ~2 MB); `height` is the
+## font height in metres.
+static func make_label(label_name: String, height: float, color: Color = Color("#fff6e0"),
+		outline: Color = Color(0.1, 0.05, 0.12)) -> Label3D:
+	var l := Label3D.new()
+	l.name = label_name
+	var theme := RoundStyle.get_theme()
+	if theme and theme.default_font:
+		l.font = theme.default_font
+	l.font_size = TOY_FONT_SIZE
+	l.outline_size = TOY_OUTLINE_SIZE
+	l.pixel_size = height / float(TOY_FONT_SIZE)
+	l.modulate = color
+	l.outline_modulate = outline
+	l.shaded = false
+	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return l
+
+
 ## The lobby's own copy of a kit emissive material (EmitPortal, EmitPortalDeep, ...), or null.
 func emit_material(mat_name: StringName) -> StandardMaterial3D:
 	return _emit.get(String(mat_name)) as StandardMaterial3D
@@ -832,7 +855,7 @@ func _build_furniture() -> void:
 	_place("portrait_frame_a", Vector3(-11.23, 2.55, -3.0), 90.0)
 	_place("rug_long", Vector3(-8.4, 0.005, -3.0), 90.0)
 	_furnish("sofa", Vector3(-5.9, 0.0, -3.0), -90.0, SOFA_BOXES, SOFA_CUSHION)
-	_furnish("armchair", Vector3(-8.6, 0.0, -5.3), -17.0, ARMCHAIR_BOXES, ARMCHAIR_CUSHION)
+	_furnish("armchair", Vector3(-9.0, 0.0, -4.85), -17.0, ARMCHAIR_BOXES, ARMCHAIR_CUSHION)
 	_furnish("armchair", Vector3(-8.6, 0.0, -0.7), -163.0, ARMCHAIR_BOXES, ARMCHAIR_CUSHION)
 	_furnish("side_table", Vector3(-5.9, 0.0, -4.75), 0.0, TABLE_BOXES)
 	_furnish("side_table", Vector3(-5.9, 0.0, -1.25), 0.0, TABLE_BOXES)

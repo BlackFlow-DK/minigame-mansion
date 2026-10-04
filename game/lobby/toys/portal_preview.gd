@@ -66,10 +66,10 @@ func setup(p_lobby: MansionLobby, pos: Vector3) -> void:
 	_emblem.material_override = _emblem_mat
 	_emblem.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_emblem)
-	_kind = _label("Kind", 40, Vector3(0.0, 0.0, 0.03))
-	_name = _label("Name", 64, Vector3(0.0, -0.82, 0.0))
+	_kind = _label("Kind", 0.18, Vector3(0.0, 0.0, 0.03))
+	_name = _label("Name", 0.29, Vector3(0.0, -0.82, 0.0))
 	_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_name.width = 400.0
+	_name.width = 1.8 / _name.pixel_size
 	if lobby.emit_material(&"EmitPortal"):
 		_base_portal = lobby.emit_material(&"EmitPortal").emission
 	if lobby.emit_material(&"EmitPortalDeep"):
@@ -77,17 +77,9 @@ func setup(p_lobby: MansionLobby, pos: Vector3) -> void:
 	_refresh(true)
 
 
-func _label(label_name: String, size: int, at: Vector3) -> Label3D:
-	var l := Label3D.new()
-	l.name = label_name
-	l.font_size = size
-	l.pixel_size = 0.0045
-	l.outline_size = 12
-	l.modulate = Color("#fff6e0")
-	l.outline_modulate = Color(0.08, 0.05, 0.12)
-	l.shaded = false
+func _label(label_name: String, height: float, at: Vector3) -> Label3D:
+	var l := MansionLobby.make_label(label_name, height)
 	l.position = at
-	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(l)
 	return l
 

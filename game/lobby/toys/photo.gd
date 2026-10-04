@@ -67,16 +67,8 @@ func setup(p_lobby: MansionLobby, pos: Vector3) -> void:
 		lobby.add_solid_box(body, Transform3D(Basis(), pos + Vector3(sx * 1.15, 0.06, 0.15)), Vector3(0.2, 0.12, 0.75), 0.6)
 	lobby.add_solid_cylinder(body, pos + BUTTON_OFFSET, 0.22, 0.98, 0.6)
 	_build_area()
-	_big = Label3D.new()
-	_big.name = "Sign"
-	_big.font_size = 120
-	_big.pixel_size = 0.006
-	_big.outline_size = 22
-	_big.modulate = Color("#fff3c4")
-	_big.outline_modulate = Color(0.25, 0.08, 0.2)
-	_big.shaded = false
+	_big = MansionLobby.make_label("Sign", 0.72, Color("#fff3c4"), Color(0.25, 0.08, 0.2))
 	_big.position = Vector3(0.0, 2.2, 0.3)
-	_big.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_big.visible = false
 	add_child(_big)
 	_flash_mesh = MeshInstance3D.new()
@@ -188,7 +180,7 @@ func host_tick(delta: float, live: Array[Player]) -> void:
 		var q := p.global_position
 		var to := Vector2(c.x - q.x, c.z - q.z)
 		var d := to.length()
-		if d > BUTTON_RADIUS + 0.5 or d < 0.001 or q.y > 1.0:
+		if d > BUTTON_RADIUS + 0.75 or d < 0.001 or q.y > 1.0:
 			continue
 		if Vector2(p.velocity.x, p.velocity.z).dot(to / d) > bump_speed:
 			host_press()

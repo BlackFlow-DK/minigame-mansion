@@ -100,7 +100,8 @@ func host_tick(delta: float, live: Array[Player]) -> void:
 			continue
 		var to := Vector2(position.x - q.x, position.z - q.z)
 		var d := to.length()
-		if d > BELL_RADIUS + 0.55 or d < 0.001:
+		# A wide window: once a blob touches the bell its slid velocity no longer points at it.
+		if d > BELL_RADIUS + 0.85 or d < 0.001:
 			continue
 		var v := Vector2(p.velocity.x, p.velocity.z)
 		if v.dot(to / d) > bump_speed:
