@@ -5,9 +5,10 @@ extends Node
 ## `fill_intent` every tick on the authority (docs/contract.md "Bot brain").
 ##
 ## It knows nothing about specific minigames. It reads the world only through the Player
-## API (positions, `alive`, `facing`, `velocity`, `is_on_floor`, the `got_hit` signal) and
-## the generic Minigame hooks `get_bot_goal(player)`, `is_safe(pos)` and the optional
-## `bot_rethink_requested` signal (raised by `Minigame.request_bot_rethink`).
+## API (positions, `alive`, `facing`, `velocity`, `is_on_floor`, the `got_hit` signal), the
+## player's own jump / movement tuning and collision capsule, physics ray probes against the
+## world layer, and the generic Minigame hooks `get_bot_goal(player)`, `is_safe(pos)` and the
+## optional `bot_rethink_requested` signal (raised by `Minigame.request_bot_rethink`).
 ##
 ## A small state machine: GOAL (walk to the minigame's goal), WANDER, CHASE (a player near
 ## the goal or in the way), RECOVER (after a knock, or when the ground underfoot turned
@@ -18,6 +19,15 @@ extends Node
 ## jump check hops when the bot is stuck against something. A bot that sees the ground
 ## turn unsafe right under its feet a few times learns the floor wears out and hops along.
 ##
+## Jumps (physics probes, every PROBE_INTERVAL while running on the floor): a ray at knee height
+## finds a wall ahead and a ray down onto it finds its top. A ledge up to the jump apex (from the
+## player's own `jump.jump_height` / `time_to_apex`, so size and mutators count) with safe ground
+## on top is jumped onto from a running take-off timed to clear it (held for full height); a
+## higher one is not hopped at (the bot side-steps and re-plans). Rays down ahead find holes the
+## minigame's `is_safe` says nothing about: one the bot can clear at its speed (the far side up to
+## the apex, the width up to its jump range) is jumped from its edge; a wider one stops the bot at
+## the edge. Low skill: later probes, take-off timing error, a short (missed) jump now and then.
+##
 ## Goals: the bot keeps its goal until it is reached, turns unsafe, gets stale (a few
 ## seconds), or the minigame calls `request_bot_rethink` (after the bot's reaction delay).
 ## `get_bot_goal` is called only then, so a goal function may be random or stateful.
@@ -25,16 +35,23 @@ extends Node
 ## Human-like imperfection: decisions are only re-made every "think" (a random interval,
 ## slower for low skill), which is also the perception delay for chase targets and goals;
 ## aim error per think; reaction delays before shoving and before reacting to unsafe
-## ground; a per-bot personality from the seed.
-## Deterministic for a given seed: all randomness comes from its own RandomNumberGenerator.
+## ground; a per-bot personality from the seed. Rolled skills land in `skill_range(difficulty)`
+## (`BotBrain.difficulty`, host-wide, 0.5 by default).
+## Deterministic for a given seed: all randomness comes from its own RandomNumberGenerators.
 ##
 ## Optional minigame hint: a minigame may declare `var bot_aggression_scale: float` (0..1,
 ## default 1). It scales how often bots chase, and at 0 they never shove (the lobby: calm).
+## Optional hint `var bot_reaction_scale: float` (default 1): multiplies the hold and action
+## reaction delays (a minigame whose clock runs faster in tests).
 ## Optional minigame hook: `func bot_should_hold(player: Player) -> bool`, polled every tick by
-## every brain (bots, extras, test brains). While it answers true the brain fills an EMPTY
-## intent: no move, jump or action, no wandering, personal-space nudges, hops or shoves (status
-## knockback still moves the blob). The minigame decides when; a bot's own reaction delay is
-## the minigame's to add (`reaction_time()`), so a bot can be late to stop.
+## every brain (bots, extras, test brains). While the brain holds it fills an EMPTY intent: no
+## move, jump or action, no wandering, personal-space nudges, hops or shoves (status knockback
+## still moves the blob). A change of the answer is noticed after this bot's hold reaction
+## (HOLD_STOP / HOLD_GO by skill, plus jitter): it is late to stop and late to go again; the
+## first answer after `configure` / `configure_extra` applies at once. Released: a fresh plan.
+## Optional action hooks (see "Action hooks" below): `bot_wants_action(player) -> bool`,
+## `bot_aim(player) -> Vector3`, `bot_action_cooldown() -> float`, `bot_action_reach() -> float`.
+## A minigame that has `bot_wants_action` decides every press: the default shove is off there.
 ## `Minigame.is_ally(a, b)` (teams): bots never chase an ally and never shove while one is in
 ## front of them.
 ## Bots ignore NPC extras (not in `Minigame.players`); a shove may still hit one in passing.
@@ -44,7 +61,22 @@ extends Node
 ## within `wander_radius` of home, pausing in between), `dance` (loose circles around `center`,
 ## or home: give a group the same centre for a crowd dance) or `idle` (stand, still reacting
 ## to knocks). Extras never shove or jump, keep a little space, re-plan after a knock, and are
-## deterministic for a seed.
+## deterministic for a seed. The action hooks are not polled for `is_extra` blobs unless the
+## minigame declares `var bot_extra_hooks := true`; a real player's brain in an extra mode (a
+## bot posing as an NPC) does poll them, every EXTRA_THINK.
+##
+## Action hooks. Each think (EXTRA_THINK in the extra modes) the brain asks
+## `bot_wants_action(player)`. On a yes it starts an act: after its action reaction
+## (ACTION_REACTION by skill, x jitter, x bot_reaction_scale) it presses `action` for one tick.
+## While the act runs it asks `bot_aim(player)` every tick: a world point to face before the
+## press (Vector3.ZERO = no preference: press as soon as the reaction is over). The bot turns to
+## it by steering a short stick toward it (facing follows movement), with an aim error rolled
+## per act (ACT_AIM_ERROR_DEG by skill), and presses once its facing has held within
+## AIM_TOLERANCE_DEG of that (erroneous) direction for AIM_SETTLE (by skill). With
+## `bot_action_reach()` > 0 the bot first walks to within that distance (centre to the aim
+## point; an extra-mode stroller at a brisk stroll). A no at a later think, a knock, a stun or
+## ACT_TIMEOUT (+ ACT_APPROACH_TIMEOUT with a reach) ends the act without a press. After a press
+## the hook is not acted on again for `bot_action_cooldown()` (at least ACT_COOLDOWN) x 1..1.25.
 
 enum State { NONE, GOAL, WANDER, CHASE, RECOVER }
 
@@ -111,7 +143,7 @@ const GAP_JUMP_REACH := Vector2(1.8, 3.0)
 ## Jump a gap only when its near edge is this close (m) and the bot runs this fast (m/s).
 const GAP_TAKEOFF := 0.45
 const GAP_MIN_SPEED := 3.5
-## Seconds the jump button stays held after a press (a full jump).
+## Seconds the jump button stays held after a press (a full jump; at least time_to_apex + 0.05).
 const JUMP_HOLD := 0.4
 ## Seconds between jump presses.
 const JUMP_COOLDOWN := 0.5
@@ -123,6 +155,52 @@ const CRUMBLE_WINDOW := 6.0
 const HOP_WILL := Vector2(0.6, 0.95)
 const HOP_MIN_SPEED := 2.5
 const HOP_AIR_TIME := 0.6
+
+# Jump probes (physics).
+## Seconds between probes while running on the floor (low skill, high skill).
+const PROBE_INTERVAL := Vector2(0.16, 0.08)
+## Physics layer mask the probes see (1 = world).
+const PROBE_MASK := 1
+## Feet must clear a ledge top by this much (m): ledges up to apex - LEDGE_CLEARANCE are jumpable.
+const LEDGE_CLEARANCE := 0.15
+## Lowest step (m) that counts as a ledge (lower ones the capsule rides over).
+const LEDGE_MIN := 0.2
+## Ground this far below the feet (m) still counts as floor (a step down), deeper is a hole.
+const MAX_DROP := 1.6
+## Take-off timing error (s, about this much, by skill) and the chance of a short, missed jump.
+const JUMP_TIMING_ERROR := Vector2(0.06, 0.012)
+const JUMP_MISS_CHANCE := Vector2(0.12, 0.01)
+## Share of its real jump range a bot believes it has (low skill is more careful).
+const JUMP_RANGE_TRUST := Vector2(0.8, 0.95)
+## Seconds pressed against a wall too high to jump before the bot side-steps and re-plans.
+const HIGH_WALL_GIVE_UP := 0.6
+
+# Hold and action hooks.
+## Seconds to notice a hold coming on (stop) / going off (go): by skill, plus random jitter.
+const HOLD_STOP := Vector2(1.04, 0.07)
+const HOLD_STOP_JITTER := 0.4
+const HOLD_GO := Vector2(0.73, 0.07)
+const HOLD_GO_JITTER := 0.25
+## Seconds from the action hook's yes (seen at a think) to the press, x 0.8..1.25.
+const ACTION_REACTION := Vector2(0.4, 0.1)
+## Aim error of an act (degrees, triangular distribution of about this width).
+const ACT_AIM_ERROR_DEG := Vector2(18.0, 2.5)
+## Facing must be within this of the act's aim direction for AIM_SETTLE seconds.
+const AIM_TOLERANCE_DEG := 7.0
+const AIM_SETTLE := Vector2(0.2, 0.04)
+## Stick length while turning to face the aim (facing follows movement), and near danger.
+const AIM_STICK := 0.3
+const AIM_STICK_MIN := 0.1
+## An act without a press ends after this long (s); a reach adds ACT_APPROACH_TIMEOUT.
+const ACT_TIMEOUT := 1.2
+const ACT_APPROACH_TIMEOUT := 6.0
+## Least seconds between two hook presses.
+const ACT_COOLDOWN := 0.25
+
+# Difficulty: where rolled skills land.
+const SKILL_EASY := Vector2(0.05, 0.55)
+const SKILL_NORMAL := Vector2(0.35, 0.95)
+const SKILL_HARD := Vector2(0.7, 1.0)
 
 # Extras.
 const EXTRA_MODES: Array[StringName] = [&"wander", &"dance", &"idle"]
@@ -140,6 +218,10 @@ const EXTRA_SPACE_WEIGHT := 0.8
 ## Dance circle radius (m, random in range per extra).
 const DANCE_RADIUS := Vector2(1.2, 2.6)
 
+## Host-wide bot difficulty 0..1 (no UI yet): rolled skills land in `skill_range(difficulty)`,
+## 0.5 = the normal spread. Brains read it when they configure (set it before a round).
+static var difficulty: float = 0.5
+
 # --- Configuration ----------------------------------------------------------------------
 
 ## The player this brain drives (set by the controller before it enters the tree).
@@ -156,8 +238,12 @@ var rng_seed: int = 0
 var extra_mode: StringName = &""
 ## Extras, wander: metres a target may lie from home (where the extra was at its first tick).
 var wander_radius: float = 4.0
+## Stats (tests): presses made for the action hook, physics-planned jumps taken.
+var acts: int = 0
+var planned_jumps: int = 0
 
 var _rng := RandomNumberGenerator.new()
+var _rng_b := RandomNumberGenerator.new()  # hooks and jump probes: keeps `_rng`'s sequence as it was
 var _configured: bool = false
 var _speed_scale: float = 1.0
 var _strafe_bias: float = 0.0   # radians; approach angle when chasing from afar
@@ -198,9 +284,36 @@ var _jump_hold: float = 0.0
 var _jump_cooldown: float = 0.0
 var _gap_jump: bool = false
 var _hooked: Minigame = null
-var _hold_game: Minigame = null    # minigame whose bot_should_hold was looked up
-var _hold_hook: bool = false       # it has one
+# Hooks (looked up once per minigame).
+var _hooks_game: Minigame = null
+var _hook_hold: bool = false
+var _hook_action: bool = false
+var _hook_aim: bool = false
+var _hook_cooldown: bool = false
+var _hook_reach: bool = false
+var _extra_hooks: bool = false
 var _held: bool = false
+var _hold_known: bool = false     # the first answer after configure applies at once
+var _hold_switch: float = -1.0    # seconds until a changed hold answer is noticed (-1 none)
+# Acts (action hook).
+var _act: bool = false
+var _act_time: float = 0.0
+var _act_delay: float = 0.0
+var _act_err: float = 0.0
+var _act_settle: float = 0.0
+var _act_reach: float = 0.0
+var _act_cd: float = 0.0
+var _act_fire: bool = false
+var _act_facing: bool = false
+# Jump probes.
+var _ray: PhysicsRayQueryParameters3D = null
+var _probe_timer: float = 0.0
+var _plan_at: Vector3 = Vector3.INF   # take-off point of a planned ledge / gap jump
+var _plan_dir: Vector2 = Vector2.ZERO
+var _plan_hold: float = 0.0
+var _hole_edge: Vector3 = Vector3.INF # near edge of a hole too wide to jump
+var _hole_dir: Vector2 = Vector2.ZERO
+var _wall_high: bool = false          # the wall ahead is higher than this blob can jump
 # Extras.
 var _home: Vector3 = Vector3.INF
 var _dance_center: Vector3 = Vector3.INF
@@ -221,19 +334,34 @@ func _ready() -> void:
 		player.got_hit.connect(_on_got_hit)
 
 
-## Seeds the brain and rolls its personality. `skill`/`aggression` < 0 = roll from the seed.
+## Where rolled skills land for difficulty `d` (0 easy, 0.5 normal, 1 hard): (min, max).
+static func skill_range(d: float) -> Vector2:
+	d = clampf(d, 0.0, 1.0)
+	if d <= 0.5:
+		return SKILL_EASY.lerp(SKILL_NORMAL, d / 0.5)
+	return SKILL_NORMAL.lerp(SKILL_HARD, (d - 0.5) / 0.5)
+
+
+## Seeds the brain and rolls its personality. `skill`/`aggression` < 0 = roll from the seed
+## (skill within `skill_range(difficulty)`).
 ## Without a call, the first `fill_intent` configures with a random seed.
 func configure(seed_value: int, skill_value: float = -1.0, aggression_value: float = -1.0) -> void:
 	rng_seed = seed_value
 	_rng.seed = seed_value
+	_rng_b.seed = hash(seed_value) ^ 0x5bd1e995
 	extra_mode = &""
-	skill = clampf(skill_value, 0.0, 1.0) if skill_value >= 0.0 else _rng.randf_range(0.35, 0.95)
+	var r := skill_range(difficulty)
+	skill = clampf(skill_value, 0.0, 1.0) if skill_value >= 0.0 else _rng.randf_range(r.x, r.y)
 	aggression = clampf(aggression_value, 0.0, 1.0) if aggression_value >= 0.0 else _rng.randf_range(0.2, 0.85)
 	_speed_scale = _rng.randf_range(0.9, 1.0)
 	_strafe_bias = _rng.randf_range(-0.4, 0.4)
 	_turn_sign = 1.0 if _rng.randf() < 0.5 else -1.0
 	_danger_reaction = _lerp_skill(DANGER_REACTION) * _rng.randf_range(0.8, 1.25)
 	_configured = true
+	_hold_known = false
+	_act_cd = 0.0
+	acts = 0
+	planned_jumps = 0
 	_reset()
 
 
@@ -250,6 +378,7 @@ func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector
 	extra_mode = mode if EXTRA_MODES.has(mode) else &"wander"
 	rng_seed = seed_value
 	_rng.seed = seed_value
+	_rng_b.seed = hash(seed_value) ^ 0x5bd1e995
 	skill = 0.5
 	aggression = 0.0
 	_x_speed = _rng.randf_range(EXTRA_SPEED.x, EXTRA_SPEED.y)
@@ -266,15 +395,20 @@ func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector
 	_clock = 0.0
 	state = State.NONE
 	_configured = true
+	_hold_known = false
+	_end_act()
 
 
 ## Fills `intent` for this tick. Dead or frozen: empty intent.
 func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	if not _configured:
 		configure(randi())
-	_held = _should_hold(_game())
-	if _held:
+	var game := _game()
+	_lookup_hooks(game)
+	_act_cd -= delta
+	if _update_hold(game, delta):
 		intent.clear()
+		_end_act()
 		return
 	if extra_mode != &"":
 		_fill_extra(intent, delta)
@@ -284,7 +418,6 @@ func fill_intent(intent: PlayerIntent, delta: float) -> void:
 		if state != State.NONE:
 			_reset()
 		return
-	var game := _game()
 	_hook(game)
 	if player.control_locked:
 		intent.clear()
@@ -340,36 +473,81 @@ func fill_intent(intent: PlayerIntent, delta: float) -> void:
 	var move := _desired_move(game, pos)
 	if state != State.RECOVER and move.length_squared() > 0.0001:
 		move = move.rotated(_aim_error)
-	if state != State.RECOVER and state != State.NONE:
-		move = _keep_space(game, pos, move)
+	_act_fire = false
+	_act_facing = false
+	if _act:
+		move = _act_move(game, pos, move, delta, maxf(_move_scale, 0.6))
 	_gap_jump = false
-	move = _safety_filter(game, pos, move, hvel)
+	if not _act_facing:
+		if state != State.RECOVER and state != State.NONE:
+			move = _keep_space(game, pos, move)
+		move = _safety_filter(game, pos, move, hvel)
+		move = _probe_ahead(game, pos, move, hvel, delta)
 	intent.move = move.limit_length(1.0)
 
 	_fill_jump(intent, delta, hvel, game, pos)
-	intent.action_pressed = _want_shove(delta, pos, game)
+	intent.action_pressed = _act_fire if _hook_action else _want_shove(delta, pos, game)
 	_prev_pos = pos
 
 
-## True while the minigame's `bot_should_hold` held this brain at its last tick.
+## True while the minigame's `bot_should_hold` held this brain at its last tick (after the
+## bot's hold reaction).
 func is_held() -> bool:
 	return _held
 
 
 ## This bot's own reaction delay (s), from its skill and personality: how late it acts on a
-## change it has to notice (unsafe ground, a rethink). Minigames may add it to a hold.
+## change it has to notice (unsafe ground, a rethink).
 func reaction_time() -> float:
 	return _danger_reaction
 
 
-## The minigame's optional `bot_should_hold(player)` answer (looked up once per minigame).
-func _should_hold(game: Minigame) -> bool:
-	if game != _hold_game:
-		_hold_game = game
-		_hold_hook = game != null and game.has_method(&"bot_should_hold")
-	if not _hold_hook or player == null or not is_instance_valid(game):
-		return false
-	return game.call(&"bot_should_hold", player) == true
+## True while an act (action hook) is under way: reacting, approaching or aiming.
+func is_acting() -> bool:
+	return _act
+
+
+## Looks the optional hooks up once per minigame.
+func _lookup_hooks(game: Minigame) -> void:
+	if game == _hooks_game:
+		return
+	_hooks_game = game
+	var ok := game != null and is_instance_valid(game)
+	_hook_hold = ok and game.has_method(&"bot_should_hold")
+	_hook_action = ok and game.has_method(&"bot_wants_action")
+	_hook_aim = ok and game.has_method(&"bot_aim")
+	_hook_cooldown = ok and game.has_method(&"bot_action_cooldown")
+	_hook_reach = ok and game.has_method(&"bot_action_reach")
+	_extra_hooks = ok and game.get(&"bot_extra_hooks") == true
+	_end_act()
+
+
+## The minigame's optional `bot_should_hold(player)` answer, noticed after the hold reaction:
+## true while this brain holds.
+func _update_hold(game: Minigame, delta: float) -> bool:
+	var want: bool = _hook_hold and player != null and is_instance_valid(game) \
+		and game.call(&"bot_should_hold", player) == true
+	if not _hold_known:
+		_hold_known = true
+		_held = want
+		_hold_switch = -1.0
+		return _held
+	if want == _held:
+		_hold_switch = -1.0
+		return _held
+	if _hold_switch < 0.0:
+		var base := _lerp_skill(HOLD_STOP) + _rng_b.randf() * HOLD_STOP_JITTER if want \
+			else _lerp_skill(HOLD_GO) + _rng_b.randf() * HOLD_GO_JITTER
+		_hold_switch = base * _reaction_scale(game)
+	_hold_switch -= delta
+	if _hold_switch <= 0.0:
+		_held = want
+		_hold_switch = -1.0
+		if not _held:
+			# Going again: with a fresh plan, now.
+			_rethink = true
+			_think_timer = 0.0
+	return _held
 
 
 # --- Decisions ------------------------------------------------------------------------------
@@ -382,6 +560,7 @@ func _think(game: Minigame, pos: Vector3) -> void:
 	if _rng.randf() < HESITATE_CHANCE * (1.0 - skill) and not _floor_crumbles:
 		_move_scale = 0.0
 	_update_goal(game, pos)
+	_poll_action(game)
 
 	# Perception snapshot: chase targets are only seen at think time (reaction delay).
 	_target = _chase_candidate(game, pos)
@@ -488,6 +667,8 @@ func _enter_recover(knocked: bool = true) -> void:
 	_recover_ground = not knocked
 	_recover_timer = _rng.randf_range(RECOVER_TIME.x, RECOVER_TIME.y) if knocked else 0.0
 	_think_timer = minf(_think_timer, _recover_timer)
+	_end_act()
+	_clear_plan()
 
 
 func _on_got_hit(_impulse: Vector3, _source_slot: int) -> void:
@@ -497,6 +678,7 @@ func _on_got_hit(_impulse: Vector3, _source_slot: int) -> void:
 		# Knocked: stand dazed a moment, then pick a fresh point from wherever it landed.
 		_x_target = Vector3.INF
 		_x_pause = maxf(_x_pause, _rng.randf_range(0.4, 1.0))
+		_end_act()
 		return
 	_enter_recover()
 
@@ -517,6 +699,81 @@ func _hook(game: Minigame) -> void:
 	_hooked = game
 	if game:
 		game.bot_rethink_requested.connect(_on_rethink_requested)
+
+
+# --- Action hooks -----------------------------------------------------------------------------
+
+## At a think: asks `bot_wants_action`; a yes starts an act (unless one runs, the cooldown is on
+## or the bot is recovering), a no ends the act under way.
+func _poll_action(game: Minigame) -> void:
+	if not _hook_action or game == null or player == null:
+		return
+	var want: bool = game.call(&"bot_wants_action", player) == true
+	if _act:
+		if not want:
+			_end_act()
+		return
+	if not want or _act_cd > 0.0 or state == State.RECOVER:
+		return
+	_act = true
+	_act_time = 0.0
+	_act_settle = 0.0
+	_act_delay = _lerp_skill(ACTION_REACTION) * _rng_b.randf_range(0.8, 1.25) * _reaction_scale(game)
+	var e := deg_to_rad(_lerp_skill(ACT_AIM_ERROR_DEG))
+	_act_err = e * (_rng_b.randf_range(-1.0, 1.0) + _rng_b.randf_range(-1.0, 1.0)) * 0.5
+	_act_reach = maxf(float(game.call(&"bot_action_reach")), 0.0) if _hook_reach else 0.0
+
+
+## One tick of the act under way: returns the move (unchanged without an aim point, toward it
+## while out of reach, a short stick toward the erroneous aim direction while facing it, then
+## `_act_facing` is set) and fires the press when the reaction is over and the aim has settled.
+func _act_move(game: Minigame, pos: Vector3, move: Vector2, delta: float, approach_stick: float) -> Vector2:
+	_act_time += delta
+	_act_delay -= delta
+	if _act_time > ACT_TIMEOUT + (ACT_APPROACH_TIMEOUT if _act_reach > 0.0 else 0.0):
+		_end_act()
+		return move
+	var aim := Vector3.ZERO
+	if _hook_aim and game != null:
+		var v: Variant = game.call(&"bot_aim", player)
+		if v is Vector3:
+			aim = v
+	if aim == Vector3.ZERO:
+		if _act_delay <= 0.0:
+			_fire(game)
+		return move
+	var to := _flat(aim - pos)
+	var d := to.length()
+	if _act_reach > 0.0 and d > _act_reach:
+		_act_settle = 0.0
+		return to / d * approach_stick
+	var face := _flat(player.facing)
+	var want := (to / d if d > 0.05 else face.normalized()).rotated(_act_err)
+	if face.length_squared() > 0.0001 and absf(face.angle_to(want)) <= deg_to_rad(AIM_TOLERANCE_DEG):
+		_act_settle += delta
+	else:
+		_act_settle = 0.0
+	if _act_delay <= 0.0 and _act_settle >= _lerp_skill(AIM_SETTLE):
+		_fire(game)
+	_act_facing = true
+	var safe := game == null or game.is_safe(pos + _to3(want * 0.6))
+	return want * (AIM_STICK if safe else AIM_STICK_MIN)
+
+
+## The press: one tick of `action`, then the cooldown.
+func _fire(game: Minigame) -> void:
+	_act_fire = true
+	_act = false
+	acts += 1
+	var cd := ACT_COOLDOWN
+	if _hook_cooldown and game != null:
+		cd = maxf(cd, float(game.call(&"bot_action_cooldown")))
+	_act_cd = cd * _rng_b.randf_range(1.0, 1.25)
+
+
+func _end_act() -> void:
+	_act = false
+	_act_settle = 0.0
 
 
 # --- Safety -----------------------------------------------------------------------------
@@ -654,6 +911,203 @@ func _toward_safety(game: Minigame, pos: Vector3) -> Vector2:
 	return home
 
 
+# --- Jump probes (physics) ----------------------------------------------------------------------
+
+## Probes the world ahead along `move` every PROBE_INTERVAL while running on the floor: plans a
+## jump onto a ledge or across a hole within this blob's jump, stops the bot short of a hole it
+## cannot clear, and notes a wall too high to jump. Returns the (possibly stopped) move.
+func _probe_ahead(game: Minigame, pos: Vector3, move: Vector2, hvel: Vector2, delta: float) -> Vector2:
+	_probe_timer -= delta
+	var mag := move.length()
+	if state == State.RECOVER or mag < 0.5 or not player.is_on_floor() or not player.is_inside_tree():
+		_wall_high = _wall_high and mag >= 0.5
+		return move
+	var dir := move / mag
+	if _plan_at != Vector3.INF and _plan_dir.dot(dir) < 0.9:
+		_clear_plan()
+	if _hole_edge != Vector3.INF and _hole_dir.dot(dir) < 0.7:
+		_hole_edge = Vector3.INF
+	if _probe_timer <= 0.0:
+		_probe_timer = _lerp_skill(PROBE_INTERVAL) * _rng_b.randf_range(0.85, 1.15)
+		_probe(game, pos, dir, hvel)
+	if _hole_edge != Vector3.INF:
+		# Never run off the edge of a hole too wide to jump: drop the part of the move into it.
+		var left := _flat(_hole_edge - pos).dot(_hole_dir)
+		var speed := maxf(hvel.dot(_hole_dir), 0.0)
+		var stop := _radius() * 0.5 + 0.3 + speed * speed / 180.0
+		if left < stop:
+			var into := move.dot(_hole_dir)
+			if into > 0.0:
+				move -= _hole_dir * into
+			if left < _radius() * 0.5 + 0.1:
+				move -= _hole_dir * 0.5
+	return move
+
+
+func _probe(game: Minigame, pos: Vector3, dir: Vector2, hvel: Vector2) -> void:
+	var jump := player.get_component(&"jump") as JumpComponent
+	if jump == null:
+		return
+	var space := player.get_world_3d().direct_space_state if player.get_world_3d() else null
+	if space == null:
+		return
+	if _ray == null:
+		_ray = PhysicsRayQueryParameters3D.new()
+		_ray.collision_mask = PROBE_MASK
+		_ray.exclude = [player.get_rid()]
+	var r := _radius()
+	var v := maxf(hvel.dot(dir), 0.0)
+	var can_jump := jump.jump_enabled
+	var apex := jump.jump_height
+	var max_up := apex - LEDGE_CLEARANCE
+	var up := Vector3.UP
+	# 1. A wall ahead at knee height: how high is its top?
+	var look := r + clampf(v * 0.45, 0.6, 2.6)
+	var knee := pos + up * 0.3
+	var hit := _cast(space, knee, knee + _to3(dir * look))
+	_wall_high = false
+	if not hit.is_empty() and (hit["normal"] as Vector3).y < 0.7:
+		_hole_edge = Vector3.INF
+		var at: Vector3 = hit["position"]
+		var top_from := Vector3(at.x, pos.y + apex + 0.6, at.z) + _to3(dir * 0.3)
+		var top := _cast(space, top_from, Vector3(top_from.x, pos.y - 0.2, top_from.z))
+		var h := INF
+		if not top.is_empty() and (top["normal"] as Vector3).y > 0.7:
+			h = (top["position"] as Vector3).y - pos.y
+		if h <= LEDGE_MIN * 0.6 or h > max_up or not can_jump:
+			_wall_high = true  # a ray that starts inside a tall wall finds the floor behind it
+			_clear_plan()
+			return
+		var land := (top["position"] as Vector3) + _to3(dir * 0.2)
+		if game and not game.is_safe(land):
+			_clear_plan()
+			return
+		# Take off so the feet are above the top (plus clearance) when the front reaches the wall.
+		var dw := _flat(at - pos).length() - r
+		var t_lo := _rise_time(jump, minf(h + LEDGE_CLEARANCE * 0.5, apex))
+		var t_hi := jump.time_to_apex + sqrt(2.0 * maxf(apex - h - 0.05, 0.0) / _fall_gravity(jump))
+		var t_go := lerpf(t_lo, t_hi, 0.35) + _timing_error()
+		var run := dw - v * t_go if v > 1.5 else dw - 0.15
+		_plan(pos + _to3(dir * maxf(run, 0.0)), dir, jump)
+		return
+	# 2. Floor ahead (two rays down): a hole the minigame does not mark unsafe?
+	# Only where `is_safe` says yes: ground the minigame marks unsafe is the safety filter's job.
+	var la := r + clampf(v * 0.4, 0.5, 2.2)
+	if _floor_or_known(space, game, pos, dir, la) and _floor_or_known(space, game, pos, dir, la + 0.35):
+		if _hole_edge != Vector3.INF and _flat(_hole_edge - pos).dot(dir) > la + 0.4:
+			_hole_edge = Vector3.INF
+		return
+	var edge := -1.0
+	var d := 0.25
+	while d <= la + 0.36:
+		if not _floor_or_known(space, game, pos, dir, d):
+			edge = d
+			break
+		d += 0.25
+	if edge < 0.0:
+		return
+	# The far side: floor again, no higher than the apex allows, safe to land on.
+	var vmax := _max_speed()
+	var t_air := jump.time_to_apex + sqrt(2.0 * apex / _fall_gravity(jump))
+	var reach_max := vmax * t_air * _lerp_skill(JUMP_RANGE_TRUST)
+	var far := -1.0
+	var far_h := 0.0
+	d = edge + 0.25
+	while d <= edge + reach_max + 0.5:
+		var hit_d := _floor_hit(space, pos, dir, d, apex)
+		if not hit_d.is_empty():
+			far = d
+			far_h = (hit_d["position"] as Vector3).y - pos.y
+			break
+		d += 0.25
+	var ok := far > 0.0 and can_jump and far_h <= max_up
+	if ok:
+		var t_land := jump.time_to_apex + sqrt(2.0 * maxf(apex - far_h, 0.01) / _fall_gravity(jump))
+		var reach := vmax * t_land * _lerp_skill(JUMP_RANGE_TRUST)
+		var landing := pos + _to3(dir * (far + r))
+		ok = far + r * 0.5 - edge <= reach and (game == null or game.is_safe(landing))
+	if not ok:
+		_clear_plan()
+		_hole_edge = pos + _to3(dir * edge)
+		_hole_dir = dir
+		return
+	_hole_edge = Vector3.INF
+	var take := edge - 0.25 - v * _timing_error()
+	_plan(pos + _to3(dir * maxf(take - 0.05, 0.0)), dir, jump)
+
+
+## Plans a jump taking off at `at` along `dir` (held for full height, or short when missed).
+func _plan(at: Vector3, dir: Vector2, jump: JumpComponent) -> void:
+	_plan_at = at
+	_plan_dir = dir
+	var full := maxf(JUMP_HOLD, jump.time_to_apex + 0.05)
+	_plan_hold = full * 0.4 if _rng_b.randf() < _lerp_skill(JUMP_MISS_CHANCE) else full
+
+
+func _clear_plan() -> void:
+	_plan_at = Vector3.INF
+
+
+## True on the tick the bot passes the planned take-off point.
+func _plan_due(pos: Vector3) -> bool:
+	if _plan_at == Vector3.INF:
+		return false
+	return _flat(pos - _plan_at).dot(_plan_dir) >= -0.05
+
+
+## A random take-off timing error (s), smaller for skilled bots.
+func _timing_error() -> float:
+	return _rng_b.randfn(0.0, _lerp_skill(JUMP_TIMING_ERROR))
+
+
+func _cast(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3) -> Dictionary:
+	_ray.from = from
+	_ray.to = to
+	return space.intersect_ray(_ray)
+
+
+## Floor `d` m ahead, or ground the minigame marks unsafe (not the probes' business).
+func _floor_or_known(space: PhysicsDirectSpaceState3D, game: Minigame, pos: Vector3, dir: Vector2, d: float) -> bool:
+	if game != null and not game.is_safe(pos + _to3(dir * d)):
+		return true
+	return _floor_at(space, pos, dir, d)
+
+
+## Floor (a walkable surface no deeper than MAX_DROP, no higher than a hop) `d` m ahead.
+func _floor_at(space: PhysicsDirectSpaceState3D, pos: Vector3, dir: Vector2, d: float) -> bool:
+	return not _floor_hit(space, pos, dir, d, LEDGE_MIN).is_empty()
+
+
+func _floor_hit(space: PhysicsDirectSpaceState3D, pos: Vector3, dir: Vector2, d: float, above: float) -> Dictionary:
+	var p := pos + _to3(dir * d)
+	var hit := _cast(space, p + Vector3.UP * (above + 0.3), p + Vector3.DOWN * MAX_DROP)
+	if hit.is_empty() or (hit["normal"] as Vector3).y < 0.6:
+		return {}
+	return hit
+
+
+## Seconds after take-off until the feet are `height` m up (on the way up).
+static func _rise_time(jump: JumpComponent, height: float) -> float:
+	var v0 := jump.get_jump_velocity()
+	var g := jump.get_gravity_strength()
+	return (v0 - sqrt(maxf(v0 * v0 - 2.0 * g * height, 0.0))) / g
+
+
+static func _fall_gravity(jump: JumpComponent) -> float:
+	return jump.get_gravity_strength() * jump.fall_gravity_multiplier
+
+
+func _radius() -> float:
+	var shape := player.get_node_or_null(^"CollisionShape3D") as CollisionShape3D
+	var cap := shape.shape as CapsuleShape3D if shape else null
+	return cap.radius if cap else 0.4
+
+
+func _max_speed() -> float:
+	var mv := player.get_component(&"movement") as MovementComponent
+	return mv.max_speed if mv else 6.0
+
+
 # --- Buttons ------------------------------------------------------------------------------
 
 func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2, game: Minigame, pos: Vector3) -> void:
@@ -662,7 +1116,19 @@ func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2, game: Minigam
 		_blocked_time += delta
 	else:
 		_blocked_time = 0.0
-	var want := _gap_jump or _blocked_time > BLOCKED_TIME * lerpf(1.6, 1.0, skill)
+	var blocked := _blocked_time > BLOCKED_TIME * lerpf(1.6, 1.0, skill)
+	if blocked and _wall_high:
+		# Pressed against a wall it cannot jump: hopping is pointless. Side-step, think again.
+		blocked = false
+		if _blocked_time > HIGH_WALL_GIVE_UP:
+			_blocked_time = 0.0
+			_wall_high = false
+			state = State.WANDER
+			_wander_dir = _flat(player.facing).orthogonal() * (1.0 if _rng_b.randf() < 0.5 else -1.0)
+			_rethink = true
+			_think_timer = minf(_think_timer, 0.4)
+	var planned := on_floor and _plan_due(pos)
+	var want := _gap_jump or blocked or planned
 	var commit := want  # gap jumps and hops over obstacles hold their line in the air
 	_hop_pause -= delta
 	if not want and _floor_crumbles and on_floor and _jump_cooldown <= 0.0 and _hop_pause <= 0.0 \
@@ -677,7 +1143,13 @@ func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2, game: Minigam
 		intent.jump_pressed = true
 		_air_dir = intent.move if commit else Vector2.ZERO
 		_air_time = 0.0
-		_jump_hold = JUMP_HOLD
+		var jump := player.get_component(&"jump") as JumpComponent
+		_jump_hold = maxf(JUMP_HOLD, jump.time_to_apex + 0.05) if jump else JUMP_HOLD
+		if planned:
+			planned_jumps += 1
+			_jump_hold = _plan_hold
+			_air_dir = _plan_dir
+		_clear_plan()
 		_jump_cooldown = JUMP_COOLDOWN
 		_blocked_time = 0.0
 	intent.jump_held = _jump_hold > 0.0
@@ -747,6 +1219,7 @@ func _is_ally(game: Minigame, other: Player) -> bool:
 func _fill_extra(intent: PlayerIntent, delta: float) -> void:
 	intent.clear()
 	if player == null or not player.alive or player.frozen or player.control_locked:
+		_end_act()
 		return
 	_clock += delta
 	var pos := player.global_position
@@ -755,16 +1228,28 @@ func _fill_extra(intent: PlayerIntent, delta: float) -> void:
 		if _dance_center == Vector3.INF and extra_mode == &"dance":
 			_dance_center = pos
 	var game := _game()
+	var hooks := _hook_action and (not player.is_extra or _extra_hooks)
 	_x_think -= delta
 	if _x_think <= 0.0:
 		_x_think = EXTRA_THINK * _rng.randf_range(0.8, 1.2)
 		_x_push = _crowd_push(game, pos)
+		if hooks:
+			_poll_action(game)
 	var move := Vector2.ZERO
 	match extra_mode:
 		&"dance":
 			move = _dance_move(pos, delta)
 		&"wander":
 			move = _wander_move(game, pos, delta)
+	if hooks and _act:
+		# An act (a bot posing as an NPC): close in at a brisk stroll, face, press.
+		_act_fire = false
+		_act_facing = false
+		var act_move := _act_move(game, pos, move, delta, EXTRA_SPEED.y)
+		intent.action_pressed = _act_fire
+		if _act or _act_fire or act_move != move:
+			intent.move = act_move.limit_length(1.0)
+			return
 	if move == Vector2.ZERO:
 		return
 	move = (move + _x_push * EXTRA_SPACE_WEIGHT).limit_length(maxf(move.length(), _x_speed))
@@ -863,6 +1348,14 @@ static func _aggression_scale(game: Minigame) -> float:
 	return clampf(float(v), 0.0, 1.0) if v is float or v is int else 1.0
 
 
+## The minigame's optional `bot_reaction_scale` hint (1 when it has none).
+static func _reaction_scale(game: Minigame) -> float:
+	if game == null or not is_instance_valid(game):
+		return 1.0
+	var v: Variant = game.get(&"bot_reaction_scale")
+	return maxf(float(v), 0.0) if v is float or v is int else 1.0
+
+
 ## Other living players in this round.
 func _others(game: Minigame) -> Array[Player]:
 	var out: Array[Player] = []
@@ -920,6 +1413,11 @@ func _reset() -> void:
 	_blocked_time = 0.0
 	_jump_hold = 0.0
 	_gap_jump = false
+	_end_act()
+	_clear_plan()
+	_hole_edge = Vector3.INF
+	_wall_high = false
+	_probe_timer = 0.0
 	# A short, personal delay before the first decision so bots do not start in lockstep.
 	_think_timer = _lerp_skill(START_DELAY) * _rng.randf_range(0.5, 1.5)
 
