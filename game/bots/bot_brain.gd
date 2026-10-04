@@ -30,8 +30,8 @@ extends Node
 ##
 ## Optional minigame hint: a minigame may declare `var bot_aggression_scale: float` (0..1,
 ## default 1). It scales how often bots chase, and at 0 they never shove (the lobby: calm).
-## Optional `Minigame.is_ally(a, b) -> bool` (teams; Players or slots, whichever its first
-## parameter is typed as): bots never chase an ally and never shove while one is in front.
+## `Minigame.is_ally(a, b)` (teams): bots never chase an ally and never shove while one is in
+## front of them.
 ## Bots ignore NPC extras (not in `Minigame.players`); a shove may still hit one in passing.
 ##
 ## NPC extras (`Stage.spawn_extras`) use a cheap separate mode instead of the state machine:
@@ -193,8 +193,6 @@ var _jump_hold: float = 0.0
 var _jump_cooldown: float = 0.0
 var _gap_jump: bool = false
 var _hooked: Minigame = null
-var _ally_game: Minigame = null
-var _ally_by_slot: bool = false
 # Extras.
 var _home: Vector3 = Vector3.INF
 var _dance_center: Vector3 = Vector3.INF
@@ -706,21 +704,9 @@ func _enemy_in_front(pos: Vector3, game: Minigame) -> bool:
 	return enemy
 
 
-## The minigame's optional `is_ally(a, b)` (teams) for this bot and `other`; false without it.
-## Called with Players, or with slots when its first parameter is typed int.
+## True when the minigame says this bot and `other` are on the same team.
 func _is_ally(game: Minigame, other: Player) -> bool:
-	if game == null or not game.has_method(&"is_ally"):
-		return false
-	if game != _ally_game:
-		_ally_game = game
-		_ally_by_slot = false
-		for m: Dictionary in game.get_method_list():
-			if m.get("name") == "is_ally":
-				var args: Array = m.get("args", [])
-				_ally_by_slot = not args.is_empty() and int((args[0] as Dictionary).get("type", TYPE_NIL)) == TYPE_INT
-				break
-	var v: Variant = game.call(&"is_ally", player.slot, other.slot) if _ally_by_slot else game.call(&"is_ally", player, other)
-	return v == true
+	return game != null and game.is_ally(player, other)
 
 
 # --- Extras -------------------------------------------------------------------------------

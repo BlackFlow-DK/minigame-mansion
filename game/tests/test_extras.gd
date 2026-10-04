@@ -187,7 +187,9 @@ func test_extras_never_reach_session_rankings() -> void:
 	assert_true(ok, "round playing")
 	var xs := arena.spawn_extras(3)
 	assert_eq(Session.current_minigame.players.size(), 4, "minigame players: no extras")
-	Session.current_minigame.knock_out(xs[0])  # a minigame that forgets the guard
+	Session.current_minigame.knock_out(xs[0])
+	assert_false(xs[0].alive, "knock_out eliminates an extra")
+	assert_false(Session.current_minigame.knocked_out.has(xs[0].slot), "but never records it")
 	assert_false(Session.current_minigame.is_finished(), "knocking out an extra does not end the round")
 	var r: Array[int] = [100, 2, 0, 101, 1, 3]
 	Session.current_minigame.finish(r)
@@ -342,12 +344,12 @@ func _ring(n: int, r: float, c: Vector3 = Vector3.ZERO) -> Array[Transform3D]:
 	return out
 
 
-## A dev-arena minigame with `is_ally` (first parameter typed `ally_arg`) and a goal in the middle.
-func _ally_arena(ally: bool, by_slot: bool) -> PackedScene:
+## A dev-arena minigame whose `is_ally` (the real signature) answers `ally` for everyone, with
+## the bots' goal in the middle.
+func _ally_arena(ally: bool) -> PackedScene:
 	var s := GDScript.new()
-	var t := "int" if by_slot else "Player"
-	s.source_code = "extends Minigame\nvar ally := %s\nfunc is_ally(a: %s, b: %s) -> bool:\n\treturn ally\nfunc get_bot_goal(_p: Player) -> Vector3:\n\treturn Vector3.ZERO\n" % [
-		"true" if ally else "false", t, t]
+	s.source_code = "extends Minigame\nvar ally := %s\nfunc is_ally(_a: Player, _b: Player) -> bool:\n\treturn ally\nfunc get_bot_goal(_p: Player) -> Vector3:\n\treturn Vector3.ZERO\n" % [
+		"true" if ally else "false"]
 	s.reload()
 	var root := DEV_ARENA.instantiate()
 	root.set_script(s)
@@ -357,13 +359,13 @@ func _ally_arena(ally: bool, by_slot: bool) -> PackedScene:
 	return packed
 
 
-func _bot_shoves(ally: bool, by_slot: bool) -> int:
+func _bot_shoves(ally: bool) -> int:
 	Net.start_offline()
 	Net.add_bot()
 	Net.add_bot()
 	stage = STAGE_SCENE.instantiate() as Stage
 	add_child(stage)
-	var m := stage.load_minigame_scene(_ally_arena(ally, by_slot))
+	var m := stage.load_minigame_scene(_ally_arena(ally))
 	players.assign(stage.players.values())
 	var count := [0]
 	for p in players:
@@ -384,10 +386,92 @@ func _bot_shoves(ally: bool, by_slot: bool) -> int:
 
 
 func test_bots_never_shove_allies() -> void:
-	var enemies := await _bot_shoves(false, false)
+	var enemies := await _bot_shoves(false)
 	assert_true(enemies > 0, "control: bots shove each other (%d)" % enemies)
-	assert_eq(await _bot_shoves(true, false), 0, "is_ally(Player, Player): no shoves")
-	assert_eq(await _bot_shoves(true, true), 0, "is_ally(int, int): no shoves")
+	assert_eq(await _bot_shoves(true), 0, "is_ally true: no shoves")
+
+
+## The real teams path: Minigame.assign_teams(2), then a bot facing a teammate never presses
+## shove, facing an opponent it does. The brain is driven by hand (no physics stepping), so only
+## the decision is tested.
+func test_bots_respect_real_teams() -> void:
+	var ps := spawn_arena(4)  # scripted: the controllers leave the brains to this test
+	var m := get_minigame()
+	m.assign_teams(2)
+	assert_true(m.has_teams(), "teams assigned")
+	var bot: Player = null
+	for p in ps:
+		if p.is_bot:
+			bot = p
+			break
+	var mate: Player = null
+	var foe: Player = null
+	for p in ps:
+		if p == bot:
+			continue
+		if m.team_of(p.slot) == m.team_of(bot.slot):
+			mate = p
+		elif foe == null:
+			foe = p
+	if not assert_true(mate != null and foe != null, "a teammate and an opponent"):
+		return
+	assert_true(m.is_ally(bot, mate) and not m.is_ally(bot, foe), "is_ally follows the teams")
+	var brain := BotBrain.of(bot)
+	brain.configure(5, 1.0, 1.0)
+	assert_eq(_presses(ps, bot, brain, mate), 0, "never shoves a teammate in front")
+	assert_true(_presses(ps, bot, brain, foe) > 0, "shoves an opponent in front")
+
+
+## Shove presses over 2 s of brain ticks with `front` 1 m in front of `bot` and the rest far off.
+func _presses(ps: Array[Player], bot: Player, brain: BotBrain, front: Player) -> int:
+	for p in ps:
+		p.place_at(Transform3D(Basis.IDENTITY, Vector3(6.0 + p.slot, 0, 6)))
+	bot.place_at(Transform3D(Basis.IDENTITY, Vector3.ZERO))
+	front.place_at(Transform3D(Basis.IDENTITY, Vector3(0, 0, 1.0)))
+	var n := 0
+	var intent := PlayerIntent.new()
+	for i in 120:
+		bot.facing = Vector3.MODEL_FRONT
+		brain.fill_intent(intent, 1.0 / 60.0)
+		if intent.action_pressed:
+			n += 1
+	return n
+
+
+# --- Hooks in other systems --------------------------------------------------------------------
+
+func test_hit_colour_tag_hiding_and_team_celebration() -> void:
+	var ps := spawn_arena(4)
+	var look: Array[Dictionary] = [{"primary": "#123456", "secondary": "#ffffff"}]
+	var x := stage.spawn_extras(1, look)[0]
+	var fx := ps[0].get_component(&"fx") as FxComponent
+	assert_near(fx.slot_color(x.slot).b, Color.html("#123456").b, 0.02, "hit colour of an extra: its own")
+	# RoundUI hides opted-in extra tags with the players' while results are up.
+	var ui := UI_SCENE.instantiate() as RoundUI
+	add_child(ui)
+	_extra_stages.append(ui)
+	var tag := NAME_TAG_SCENE.instantiate() as NameTag
+	tag.show_extras = true
+	tag.name = "NameTag"
+	x.add_child(tag)
+	tag.setup(x)
+	ui._hide_name_tags(true)
+	assert_false(tag.visible or tag.is_processing(), "extra tag hidden under the results")
+	ui._hide_name_tags(false)
+	assert_true(tag.is_processing(), "and back after")
+	# Feel: every member of a winning team (Session.round_groups[0]) cheers.
+	var feel := get_node(^"/root/Feel")
+	var celebrated := watch(feel, &"winner_celebrated")
+	var was: Array = Session.round_groups
+	Session.round_groups = [[2, 0], [1, 3]]
+	Session.round_finished.emit([2, 0, 1, 3] as Array[int], {})
+	Session.round_groups = was
+	var slots: Array = celebrated.map(func(a: Array) -> int: return a[0])
+	slots.sort()
+	assert_eq(slots, [0, 2], "every member of the winning group celebrated")
+	for s: int in [0, 2]:
+		assert_eq((stage.get_player(s).get_component(&"visuals") as VisualsComponent).get_emote(), &"cheer", "slot %d cheers" % s)
+	feel.call(&"reset_moment")
 
 
 # --- Cost --------------------------------------------------------------------------------------

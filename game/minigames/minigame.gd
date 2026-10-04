@@ -132,6 +132,9 @@ func is_finished() -> bool:
 func knock_out(player: Player, reason: StringName = &"") -> void:
 	if _finished or player == null or not player.alive:
 		return
+	if player.is_extra:
+		player.eliminate(reason if reason != &"" else &"knocked_out")  # NPC extras are never ranked
+		return
 	knocked_out.append(player.slot)
 	player.eliminate(reason if reason != &"" else &"knocked_out")
 	var alive_slots: Array[int] = []
