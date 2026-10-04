@@ -23,7 +23,7 @@ const SHOTS: Array[StringName] = [
 	&"sleep", &"look", &"flinch", &"gloat", &"wince",
 	&"emote_wave", &"emote_dance", &"emote_taunt", &"emote_cry",
 	&"pose_victory", &"pose_clap_nod", &"pose_clap", &"pose_sulk",
-	&"carry", &"throw", &"sizes", &"sizes_emote", &"crowd",
+	&"carry", &"throw", &"sizes", &"sizes_emote", &"crowd", &"lobby_bots",
 ]
 const ALL_ITEMS := {"hat": "top_hat", "face": "round_glasses", "neck": "scarf", "back": "cape"}
 const LOADOUTS: Array[Dictionary] = [
@@ -143,6 +143,7 @@ func _start(shot: StringName) -> void:
 	everyone.append_array(crowd)
 	for i in everyone.size():
 		var p := everyone[i]
+		p.is_bot = false
 		p.intent.clear()
 		if not p.alive:
 			p.respawn_at(Transform3D.IDENTITY)
@@ -267,6 +268,20 @@ func _start(shot: StringName) -> void:
 					_place(sizes[i], Vector3(1.4 * (i - 1), 0.0, 0.0), 0.0)
 			_cam_offset = Vector3(0.0, 2.6, 6.5) if shot == &"sizes" else Vector3(0.0, 1.3, 4.2)
 			_caps.assign([34, 40, 46, 52] if shot == &"sizes" else [30, 45, 60, 75])
+		&"lobby_bots":
+			# 8 bots in the "lobby" (no Stage here, Session LOBBY): they emote by themselves.
+			var ring: Array[Player] = [hero, partner]
+			ring.append_array(crowd)
+			for i in ring.size():
+				var a := TAU * i / ring.size()
+				_place(ring[i], Vector3(sin(a) * 2.6, 0.0, cos(a) * 2.6), 0.0)
+				ring[i].is_bot = true
+				var emote := ring[i].get_component(&"emote") as EmoteComponent
+				emote.bot_interval = Vector2(1.5, 3.0)
+				emote._bot_in = 0.3 + 0.25 * i
+			_cam_follow = false
+			_cam_fixed = _look_from(Vector3(0.0, 4.2, 7.8), Vector3(0.0, 0.4, 0.0))
+			_caps = [60, 110, 160, 210]
 		&"crowd":
 			var ring: Array[Player] = [hero, partner]
 			ring.append_array(crowd)

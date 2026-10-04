@@ -28,6 +28,7 @@ The first time you host or join, Windows Firewall asks whether to allow the game
 | Move | WASD or arrow keys | Left stick |
 | Jump | Space | A |
 | Action (shove) | E or left mouse button | X |
+| Emotes: wave / dance / taunt / cry (moving ends them; in a round only while you can move, always in the lobby and on the podium) | 1 / 2 / 3 / 4 | D-pad up / right / down / left |
 | Pause menu (Resume / Settings / Leave / Quit) | Esc | Start |
 | Use the lobby menu | Tab | Back / Select |
 | Menus: move / press / back | Arrow keys or Tab, Enter or Space, Esc | Left stick or D-pad, A, B |
