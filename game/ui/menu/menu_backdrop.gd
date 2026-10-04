@@ -6,6 +6,10 @@ extends Control
 ## Headless (tests) or without the lobby scene it falls back to the painted 2D backdrop: plum
 ## with soft diagonal stripes and slowly drifting confetti dots.
 ## While hidden the 3D view stops rendering and processing.
+## Startup: building the hall costs ~0.5 s, so it waits until the backdrop has been shown for two
+## drawn frames (the window opens on the title over a flat plum backdrop at once) and then fades
+## in over FADE_IN. A run that goes straight into a game (the backdrop never shown) never builds
+## it. The empty SubViewport exists from `_ready` on, so MenuRoot can tune its scale.
 
 const LOBBY_PATH := "res://lobby/lobby.tscn"
 const BLOB_PATH := "res://assets/models/character/blob.glb"
@@ -21,9 +25,17 @@ const CAM_BASE := Vector3(0.0, 7.0, 12.5)
 const CAM_LOOK := Vector3(0.0, -0.2, -2.5)
 const CAM_SWAY := Vector3(4.0, 0.25, 1.0)
 const CAM_PERIOD := 46.0
+## Seconds the hall takes to fade in over the flat backdrop once built.
+const FADE_IN := 0.6
+## The flat backdrop shown until the hall is built (close to the hall under the wash).
+const FLAT_COLOUR := Color("#3b2a40")
 
-## True when the 3D mansion view is in use (false headless / fallback).
+## True when the 3D mansion view is in use (false headless / fallback / not built yet).
 var is_3d: bool = false
+## True from `_ready` until the 3D hall is built (it will be, the first time the backdrop shows).
+var pending_3d: bool = false
+
+var _building: bool = false
 
 var _dots: Array[Dictionary] = []
 var _t: float = 0.0
@@ -47,21 +59,56 @@ func _ready() -> void:
 			"colour": DOT_COLOURS[i % DOT_COLOURS.size()],
 		})
 	if DisplayServer.get_name() != "headless" and ResourceLoader.exists(LOBBY_PATH):
-		_build_3d()
+		_make_view()
+		pending_3d = true
 	visibility_changed.connect(_on_visibility_changed)
 	_on_visibility_changed()
+
+
+## The (still empty, not rendering) SubViewport, the TextureRect showing it (transparent until
+## the hall fades in) and the wash and vignette over it.
+func _make_view() -> void:
+	_viewport = SubViewport.new()
+	_viewport.name = "MansionView"
+	_viewport.own_world_3d = true
+	_viewport.msaa_3d = Viewport.MSAA_2X
+	_viewport.audio_listener_enable_3d = false
+	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(_viewport)
+	_view = TextureRect.new()
+	_view.name = "View"
+	MenuUI.full_rect(_view)
+	_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_view.texture = _viewport.get_texture()
+	_view.modulate.a = 0.0
+	add_child(_view)
+	add_child(_shade(_wash_texture()))
+	add_child(_shade(_vignette_texture()))
+	get_viewport().size_changed.connect(_fit_viewport)
+	_fit_viewport()
+
+
+## After two drawn frames of the flat backdrop: builds the hall, then fades it in.
+func _build_later() -> void:
+	_building = true
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	if not is_inside_tree() or not pending_3d:
+		return
+	_build_3d()
+	pending_3d = false
+	queue_redraw()
+	_on_visibility_changed()
+	if is_3d:
+		create_tween().tween_property(_view, ^"modulate:a", 1.0, FADE_IN)
 
 
 func _build_3d() -> void:
 	var ps := load(LOBBY_PATH) as PackedScene
 	if ps == null:
 		return
-	_viewport = SubViewport.new()
-	_viewport.name = "MansionView"
-	_viewport.own_world_3d = true
-	_viewport.msaa_3d = Viewport.MSAA_2X
-	_viewport.audio_listener_enable_3d = false
-	add_child(_viewport)
 	_world = ps.instantiate() as Node3D
 	# The hall's own gameplay camera would fight ours.
 	var cam := _world.get_node_or_null(^"Camera")
@@ -74,21 +121,8 @@ func _build_3d() -> void:
 	_camera.current = true
 	_viewport.add_child(_camera)
 	_add_blobs()
-
-	_view = TextureRect.new()
-	_view.name = "View"
-	MenuUI.full_rect(_view)
-	_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	_view.texture = _viewport.get_texture()
-	add_child(_view)
-	add_child(_shade(_wash_texture()))
-	add_child(_shade(_vignette_texture()))
-	get_viewport().size_changed.connect(_fit_viewport)
-	_fit_viewport()
 	is_3d = true
-	_drift(0.0)
+	_drift(_t)
 
 
 func _add_blobs() -> void:
@@ -154,7 +188,9 @@ func _fit_viewport() -> void:
 
 func _on_visibility_changed() -> void:
 	var on := is_visible_in_tree()
-	if _viewport:
+	if on and pending_3d and not _building:
+		_build_later()
+	if _viewport and is_3d:
 		_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
 		_world.process_mode = Node.PROCESS_MODE_INHERIT if on else Node.PROCESS_MODE_DISABLED
 	set_process(on)
@@ -164,7 +200,7 @@ func _process(delta: float) -> void:
 	_t += delta
 	if is_3d:
 		_drift(_t)
-	else:
+	elif not pending_3d:
 		queue_redraw()
 
 
@@ -185,9 +221,10 @@ func _drift(t: float) -> void:
 
 
 func _draw() -> void:
-	if is_3d:
-		return
 	var s := size
+	if pending_3d or is_3d:
+		draw_rect(Rect2(Vector2.ZERO, s), FLAT_COLOUR)  # under the hall while it fades in
+		return
 	draw_rect(Rect2(Vector2.ZERO, s), MenuUI.PLUM)
 	var stripe := Color(MenuUI.CHARCOAL, 0.09)
 	var w := 70.0

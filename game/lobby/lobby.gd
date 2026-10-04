@@ -224,6 +224,7 @@ func _ready() -> void:
 	_build_decor()
 	_build_piano_keys()
 	_collect_emissives()
+	_merge_static()
 	_build_lights()
 	_apply_look()
 	_build_toys()
@@ -947,6 +948,24 @@ func _collect_emissives() -> void:
 				copy.emission_energy_multiplier = EMIT_ENERGY.get(mat.resource_name, 1.5)
 				_emit[mat.resource_name] = copy
 			mi.set_surface_override_material(s, _emit[mat.resource_name])
+
+
+## The hall's static kit (floor, walls, stairs, furniture, decor, keyboard frame) drawn as one
+## mesh per material (StaticMerge, docs/performance.md). The clock pendulums swing: kept apart.
+## The materials stay the same objects, so the emissive flicker and key glow still work.
+## Flat pieces on the floor (tiles, rugs, the keyboard) cast no sun shadow: nothing lies below
+## them. 16 m cells (2 x 2 over the hall) keep shadow-split and frustum culling working on the merged meshes.
+func _merge_static() -> void:
+	var skip: Array = []
+	for p in _pendulums:
+		skip.append(p)
+	for c: Node in _hall.find_children("*", "Node3D", false, false):
+		var flat := c.name.begins_with("floor_tile") or c.name.begins_with("rug") or c.name == "Floor" \
+			or c.name == "FloorKeyboard"
+		if flat:
+			for g: Node in c.find_children("*", "GeometryInstance3D", true, false):
+				(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	StaticMerge.merge(_hall, skip, 16.0, "HallMerged")
 
 
 func _build_lights() -> void:

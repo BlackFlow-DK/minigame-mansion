@@ -190,6 +190,10 @@ func _ready() -> void:
 	_build_colliders()
 	_build_movers()
 	_build_decor()
+	# Repeated static pieces (hedge blocks, borders, bumpers, plants, wall and pillar kit) as
+	# one MultiMesh per piece (docs/performance.md); the flags wave, the movers move: not batched.
+	for n: Node3D in [$Course, $Hedges, $Decor]:
+		StaticMerge.batch(n)
 	_update_movers(0.0)
 	_update_visuals(0.0)
 	if _camera:
@@ -1032,6 +1036,7 @@ func _build_course() -> void:
 		var cz: float = DashCourse.CHECKPOINT_Z[k]
 		for s: float in [-1.0, 1.0]:
 			var f := _place(root, FLAG_SCENE, Vector3(s * (DashCourse.HALF_W + 0.45), DashCourse.ground_y(cz), cz), 0.0 if s < 0 else PI)
+			f.set_meta(StaticMerge.SKIP_META, true)  # the cloth waves
 			var cloth := f.get_node_or_null(^"Pole/Flag") as MeshInstance3D
 			if cloth == null:
 				cloth = f.find_child("Flag", true, false) as MeshInstance3D

@@ -41,6 +41,8 @@ extends PlayerComponent
 ## Comfort and cost: `Settings.reduced_motion` halves the big amplitudes, drops the spins and
 ## spaces fidgets out; at LOW quality a blob further than LOD_DISTANCE from the camera skips
 ## fidgets, "zzz" and the face. NPC extras run a reduced set (no fidgets, sleep or teeter).
+## LOD (docs/performance.md): at LOW, far blobs and NPC extras pose every other frame; below
+## HIGH, NPC extras and blobs beyond LOD_MESH_DISTANCE draw blob_lod.glb (`is_lod()`).
 ##
 ## Materials: this component never colours the blob. It gives the model the house toon look
 ## once when it instances it (`BlobToon.apply`: shared Look toon materials); the cosmetics
@@ -90,6 +92,9 @@ const SPIN_TIME := 0.7
 const SLEEP_AFTER := 20.0
 ## LOW quality: blobs further than this from the camera skip fidgets and the face (m).
 const LOD_DISTANCE := 14.0
+## Below HIGH: blobs further than this from the camera (and NPC extras always) draw the
+## low-poly body (BlobRig.lod_mesh, ~40 % of the triangles) (m, by quality LOW / MEDIUM).
+const LOD_MESH_DISTANCE: Array[float] = [14.0, 20.0]
 ## Social reactions: a knockout within this distance makes a blob wince; a shove makes a blob
 ## in front of the shover within FLINCH_RANGE duck (m).
 const SOCIAL_RANGE := 7.0
@@ -154,6 +159,12 @@ var _camera_glancer: float = 0.12
 # Context and level of detail.
 var _lite: bool = false  # NPC extra: reduced set
 var _far: bool = false
+## Mesh LOD: [MeshInstance3D, full mesh, LOD mesh] per blob part that has a LOD; on or off.
+var _lod_parts: Array = []
+var _lod_on: bool = false
+## Animation LOD: time held back on a skipped frame, and the frame parity.
+var _lod_dt: float = 0.0
+var _lod_odd: bool = false
 var _calm: float = 1.0
 var _lod_in: float = 0.0
 var _cam_pos: Vector3 = Vector3.INF
@@ -312,6 +323,15 @@ func _ready() -> void:
 	_rig.root.name = "Blob"
 	_motion.add_child(_rig.root)
 	BlobToon.apply(_rig.root)
+	for part in BlobRig.PARTS:
+		var mi := _rig.root.get_node_or_null(NodePath(String(part))) as MeshInstance3D
+		if mi and BlobRig.FACE_PARTS.has(part):
+			# Shadow LOD: the face sits on the body; its own sun shadow never shows, but each
+			# part and surface was one more draw per blob in every shadow split.
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var lod := BlobRig.lod_mesh(part)
+		if mi and mi.mesh and lod:
+			_lod_parts.append([mi, mi.mesh, lod])
 	_hands = [_rig.hand_l, _rig.hand_r]
 	_feet = [_rig.foot_l, _rig.foot_r]
 	_hand_rest = PackedVector3Array([_rig.rest_of(&"HandL"), _rig.rest_of(&"HandR")])
@@ -325,6 +345,7 @@ func _ready() -> void:
 	if player == null:
 		return
 	_lite = player.is_extra
+	_lod_odd = player.slot % 2 == 0
 	_rng.seed = hash(player.slot) + 7919
 	_blink_in = _rng.randf_range(0.5, 3.0)
 	_roll_personality()
@@ -924,6 +945,15 @@ func _process(delta: float) -> void:
 		_reaction = &"eliminated"
 		return
 	_refresh_lod(real)
+	# Animation LOD (LOW only): crowd extras and far blobs pose every other frame with the summed
+	# time (the body still follows every frame in _place_pivot); staggered by slot.
+	if _far or (_lite and Look.is_low()):
+		_lod_dt += delta
+		_lod_odd = not _lod_odd
+		if _lod_odd:
+			return
+		delta = _lod_dt
+	_lod_dt = 0.0
 
 	# Facing.
 	var f := player.facing
@@ -1088,8 +1118,27 @@ func _refresh_lod(real_delta: float) -> void:
 	_calm = 0.5 if (_settings and bool(_settings.get(&"reduced_motion"))) else 1.0
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
 	_cam_pos = cam.global_position if cam else Vector3.INF
-	_far = Look.get_quality() == Look.Quality.LOW and cam != null \
-		and _cam_pos.distance_to(player.global_position) > LOD_DISTANCE
+	var q := Look.get_quality()
+	var dist := _cam_pos.distance_to(player.global_position) if cam != null else 0.0
+	_far = q == Look.Quality.LOW and cam != null and dist > LOD_DISTANCE
+	_set_lod_mesh(q != Look.Quality.HIGH and (_lite or (cam != null and dist > LOD_MESH_DISTANCE[q])))
+
+
+## True while the low-poly body is drawn (tests, docs/performance.md).
+func is_lod() -> bool:
+	return _lod_on
+
+
+## Swaps every part's mesh between blob.glb's and blob_lod.glb's (same surfaces and materials,
+## so tints, toon, outline and the flash overlay carry over).
+func _set_lod_mesh(on: bool) -> void:
+	if on == _lod_on or _lod_parts.is_empty():
+		return
+	_lod_on = on
+	for e: Array in _lod_parts:
+		var mi := e[0] as MeshInstance3D
+		if is_instance_valid(mi) and (mi.mesh == e[1] or mi.mesh == e[2]):
+			mi.mesh = e[2] if on else e[1]
 
 
 ## Run starts, skids, banking, panic, backpedal, idle time, sleep, fidgets, spins, emote
