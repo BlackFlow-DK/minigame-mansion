@@ -20,6 +20,7 @@ const MATERIAL: ShaderMaterial = preload("res://look/materials/blob_shadow.tres"
 static var _quad: PlaneMesh
 
 var _exclude: Array[RID] = []
+var _strength: float = -1.0
 
 
 func _ready() -> void:
@@ -45,19 +46,31 @@ func _physics_process(_delta: float) -> void:
 	if target == null or not target.is_inside_tree() or not is_inside_tree():
 		return
 	var feet := target.global_position
+	# Standing on something: the floor is right under the feet, no ray needed (most frames of
+	# most blobs; a crowd of 28 casts ~28 rays per tick otherwise).
+	var body := target as CharacterBody3D
+	if body and body.is_on_floor():
+		_place(feet, body.get_floor_normal(), 0.0)
+		return
 	var from := feet + Vector3.UP * 0.25
 	var q := PhysicsRayQueryParameters3D.create(from, feet + Vector3.DOWN * fade_height * 2.0, collision_mask, _exclude)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
 		visible = false
 		return
-	visible = true
 	var pos: Vector3 = hit["position"]
-	var n: Vector3 = hit["normal"]
-	var h := clampf((feet.y - pos.y) / fade_height, 0.0, 1.0)
+	_place(pos, hit["normal"], clampf((feet.y - pos.y) / fade_height, 0.0, 1.0))
+
+
+## Lies flat on the surface at `pos` (normal `n`), sized and faded for height fraction `h`.
+func _place(pos: Vector3, n: Vector3, h: float) -> void:
+	visible = true
 	var size := radius * 2.0 * lerpf(1.0, 0.55, h)
 	var basis := Basis.IDENTITY
 	if n.dot(Vector3.UP) < 0.999:
 		basis = Basis(Quaternion(Vector3.UP, n.normalized()))
 	global_transform = Transform3D(basis.scaled(Vector3(size, 1.0, size)), pos + n * 0.015)
-	set_instance_shader_parameter(&"strength", lerpf(near_strength, far_strength, h))
+	var strength := lerpf(near_strength, far_strength, h)
+	if strength != _strength:
+		_strength = strength
+		set_instance_shader_parameter(&"strength", strength)

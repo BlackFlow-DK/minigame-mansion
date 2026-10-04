@@ -947,6 +947,7 @@ func _build_room() -> void:
 		s.spot_range = 9.0
 		s.spot_angle = 32.0
 		s.shadow_enabled = false
+		s.visible = not Look.is_low()  # perf: the stage wash is decor; LOW keeps the pad spots
 		lights.add_child(s)
 		s.look_at_from_position(STAGE_POS + Vector3(sx * 2.5, 0.3, 3.5), STAGE_POS + Vector3(sx * 1.2, 2.2, 0.9), Vector3.UP)
 		_stage_spots.append(s)

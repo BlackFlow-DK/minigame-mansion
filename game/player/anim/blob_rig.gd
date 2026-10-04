@@ -8,11 +8,18 @@ extends RefCounted
 ## pupils may slide at most +-0.02 m in x/y; L is +X.
 
 const SCENE: PackedScene = preload("res://assets/models/character/blob.glb")
+## Low-poly twin (art/scripts/character/blob_lod.py): same parts, origins and material slots,
+## ~40 % of the triangles. Crowd extras and far blobs swap to it below HIGH (VisualsComponent).
+const LOD_PATH := "res://assets/models/character/blob_lod.glb"
 const PARTS: Array[StringName] = [
 	&"Body", &"EyeL", &"EyeR", &"PupilL", &"PupilR", &"LidL", &"LidR", &"Mouth",
 	&"CheekL", &"CheekR", &"HandL", &"HandR", &"FootL", &"FootR",
 ]
-const SOCKETS: Array[StringName] = [&"HatSocket", &"FaceSocket", &"NeckSocket", &"BackSocket"]
+## Parts lying on the body's surface (they cast no sun shadow of their own).
+const FACE_PARTS: Array[StringName] = [
+	&"EyeL", &"EyeR", &"PupilL", &"PupilR", &"LidL", &"LidR", &"Mouth", &"CheekL", &"CheekR",
+]
+const SOCKETS: Array[StringName] =[&"HatSocket", &"FaceSocket", &"NeckSocket", &"BackSocket"]
 
 const LID_OPEN := 0.0
 const LID_HALF := 1.2
@@ -38,6 +45,58 @@ var foot_r: Node3D
 var rest: Dictionary[StringName, Vector3] = {}
 ## Midpoint of the two eye centres at rest (model-root space).
 var eye_centre: Vector3 = Vector3(0.0, 0.665, 0.3)
+
+## Part name -> LOD mesh (outline-prepared, surface materials = blob.glb's), built once.
+static var _lod_meshes: Dictionary = {}
+static var _lod_loaded: bool = false
+
+
+## The low-poly mesh of `part` (null when blob_lod.glb is missing or has no such part). Its
+## surfaces carry the very materials of blob.glb's part, in the same order, so a swapped-in LOD
+## keeps the toon look, the cosmetics tint (surface overrides by index) and the outline.
+static func lod_mesh(part: StringName) -> Mesh:
+	if not _lod_loaded:
+		_lod_loaded = true
+		_load_lods()
+	return _lod_meshes.get(part)
+
+
+static func _load_lods() -> void:
+	if not ResourceLoader.exists(LOD_PATH):
+		return
+	var lod_scene := load(LOD_PATH) as PackedScene
+	if lod_scene == null:
+		return
+	var lod_root := lod_scene.instantiate() as Node3D
+	var full_root := SCENE.instantiate() as Node3D
+	for part in PARTS:
+		var lod_mi := lod_root.get_node_or_null(NodePath(String(part))) as MeshInstance3D
+		var full_mi := full_root.get_node_or_null(NodePath(String(part))) as MeshInstance3D
+		if lod_mi == null or full_mi == null or lod_mi.mesh == null or full_mi.mesh == null:
+			continue
+		var full := full_mi.mesh
+		var lod := lod_mi.mesh.duplicate() as Mesh
+		if lod.get_surface_count() != full.get_surface_count():
+			push_warning("BlobRig: blob_lod.glb part %s has %d surfaces, blob.glb %d: no LOD" % [part, lod.get_surface_count(), full.get_surface_count()])
+			continue
+		var same := true
+		for s in full.get_surface_count():
+			var fm := full.surface_get_material(s)
+			var lm := lod.surface_get_material(s)
+			if fm == null or lm == null or fm.resource_name != lm.resource_name:
+				same = false
+				break
+			lod.surface_set_material(s, fm)
+		if not same:
+			push_warning("BlobRig: blob_lod.glb part %s: material slots differ from blob.glb: no LOD" % part)
+			continue
+		var tmp := MeshInstance3D.new()
+		tmp.mesh = lod
+		Look.prepare_outline(tmp)  # smoothed normals for the outline pass (MEDIUM)
+		_lod_meshes[part] = tmp.mesh
+		tmp.free()
+	lod_root.free()
+	full_root.free()
 
 
 ## Instances the model. Returns null (and reports) if the scene is broken.

@@ -950,6 +950,13 @@ func _build_garden() -> void:
 			&"hedge":
 				_place(garden, HEDGE_SCENE, c, 0.0)
 				_box(body, c + Vector3(0.0, 0.6, 0.0), Vector3(2.0, 1.2, 0.92))
+	# Perf: the lawn strips cast no sun shadow; repeated pieces (hedges, topiaries, urns) as one
+	# MultiMesh each, the rest merged per 16 m.
+	for n: Node in garden.get_children():
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh is PlaneMesh:
+			(n as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	StaticMerge.batch(garden)
+	StaticMerge.merge(garden, [], 16.0)
 
 
 func _build_statue() -> void:
