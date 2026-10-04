@@ -599,8 +599,15 @@ func is_hat_hidden(p: Player) -> bool:
 ## Presentation, every peer, a few times a second: blobs near the crown turn to watch it
 ## (the wearer and the dead excepted; nearer = stronger).
 func _process(delta: float) -> void:
+	if not _hat_hidden.is_empty() and Session.state == Session.State.PODIUM:
+		# The podium hides the crown rig: the winner gets its own hat back.
+		for p in players:
+			if is_instance_valid(p) and p.is_inside_tree():
+				_set_crowned(p, false)
+		_hat_hidden.clear()
 	_interest_cd -= delta
-	if _interest_cd > 0.0 or _rig == null or _rig.mode == CrownRig.Mode.HIDDEN:
+	if _interest_cd > 0.0 or _rig == null or _rig.mode == CrownRig.Mode.HIDDEN \
+			or Session.state == Session.State.PODIUM:
 		return
 	_interest_cd = INTEREST_EVERY
 	var at := _rig.crown_position() + Vector3.UP * CROWN_CENTRE

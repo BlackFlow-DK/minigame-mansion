@@ -43,6 +43,7 @@ var camera: Camera3D
 ## slot -> the place passed to play_result_pose (read by tests).
 var posed: Dictionary[int, int] = {}
 var _stage: Stage = null
+var _hidden: Array[WeakRef] = []
 
 
 ## The tied groups of a final `ranking` (slots, best first): neighbours with the same total
@@ -86,7 +87,32 @@ static func spot_for(index: int) -> Vector3:
 
 func setup(stage: Stage) -> void:
 	_stage = stage
+	_hide_arena()
 	_build()
+
+
+## The last minigame's own 3D dressing (a crown rig, hit marks, lights) would follow its blobs
+## up here: every sibling Node3D is hidden while the podium stands, except whatever holds
+## the lighting (a StageLook, a WorldEnvironment or a sun). Shown again when it goes.
+func _hide_arena() -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	for c in parent.get_children():
+		var n := c as Node3D
+		if n == null or n == self or not n.visible or _holds_lighting(n):
+			continue
+		n.visible = false
+		_hidden.append(weakref(n))
+
+
+static func _holds_lighting(n: Node) -> bool:
+	if n is StageLook or n is WorldEnvironment or n is DirectionalLight3D:
+		return true
+	for c in n.get_children():
+		if _holds_lighting(c):
+			return true
+	return false
 
 
 ## Host only: respawns every ranked player onto its spot (facing the camera).
@@ -141,6 +167,11 @@ func _visuals(slot: int) -> VisualsComponent:
 
 func _exit_tree() -> void:
 	stop_poses()
+	for ref in _hidden:
+		var n := ref.get_ref() as Node3D
+		if n and is_instance_valid(n) and not n.is_queued_for_deletion():
+			n.visible = true
+	_hidden.clear()
 
 
 # --- Scenery -------------------------------------------------------------------------------
