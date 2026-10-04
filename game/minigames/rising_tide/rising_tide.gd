@@ -17,8 +17,9 @@ extends Minigame
 ## - Awnings launch the players this peer simulates (their own authority), like the dash's hazards.
 ##
 ## Bots: `get_bot_goal` walks a route graph section by section: along the walkway (front lane) past
-## the stairs, into the chosen route's lane beyond its low end, then up it (the bot brain hops onto
-## every step it walks into: steps are at most 0.9 m with no gap). The route (main stairs or the
+## the stairs, into the chosen route's lane beyond its low end, then up it (the bot brain's jump
+## probes see each step ahead and take off in time: steps are at most 0.9 m with no gap; a step it
+## bumps into anyway gets the blocked hop). The route (main stairs or the
 ## section's alt: awning, crumble, hanging) is picked per bot and section from its skill and the
 ## alt's risk, and re-planned when a crumble closes it. `is_safe` = over a platform (within a hop up
 ## or a short drop) whose top keeps a blob's centre above the water a moment from now, not inside a
@@ -102,6 +103,9 @@ const CAM_WATER_NEAR := 4.0
 var mutator_blocklist: Array[StringName] = [&"heavy", &"giant"]
 ## Bot brain hint: bots shove a bit less than in the brawls (they have to climb).
 var bot_aggression_scale: float = 0.8
+## Bot brain hint: bots climb with this share of their skill (later to see a step, rougher
+## take-offs, a stale line now and then), so the tide still catches some of them along the way.
+var bot_skill_scale: float = 0.45
 
 ## Every peer: crumble block state by crumble index (CrumbleState).
 var crumble_state: PackedInt32Array = PackedInt32Array()

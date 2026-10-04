@@ -106,7 +106,25 @@ Visuals, effects and sound never get called by mechanics. They listen to these s
 
 Controller (human): reads the input actions; `intent.move` is camera-relative (forward = away from the active camera, projected on XZ), expressed in world X,Z. `*_pressed` are edges of the held state. `scripted: bool` (tests): when true the controller leaves `intent` alone. The human controller in `controller.gd` belongs to the skeleton; the bot agent does not edit it.
 
-Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Player` (set before it enters the tree), `func fill_intent(intent: PlayerIntent, delta: float) -> void`. When that file exists, the controller of every bot instances it as its child `BotBrain` and calls `fill_intent` each tick on the authority (the host). Without it bots stand still. The brain reads the world through the Player API and `Minigame.get_bot_goal` / `is_safe`, plus the optional minigame hint `bot_aggression_scale` and hook `bot_should_hold(player)` (see "Minigame hooks").
+Bot brain (bot agent): `game/bots/bot_brain.gd`, `extends Node`, `var player: Player` (set before it enters the tree), `func fill_intent(intent: PlayerIntent, delta: float) -> void`. When that file exists, the controller of every bot instances it as its child `BotBrain` and calls `fill_intent` each tick on the authority (the host). Without it bots stand still. The brain reads the world through the Player API (including the player's own `jump` / `movement` tuning and capsule), ray probes against the `world` layer, and `Minigame.get_bot_goal` / `is_safe`, plus the optional minigame hints and hooks in "Bot hooks" below. `ControllerComponent.scripted` is a test seam only (a test or dev check driving a human slot with its own brain); minigames never set it.
+
+### Bot hooks (all optional, duck-typed on the Minigame; looked up once per minigame)
+
+| Hook / hint | Polled | Meaning |
+|---|---|---|
+| `var bot_aggression_scale: float` (0..1, 1) | each think | how often bots chase; 0 = never shove by default |
+| `var bot_skill_scale: float` (0..1, 1) | per minigame | bots play this minigame with `skill` x this: more misjudgements (late probes, aim and take-off errors, stale lines), not slower legs |
+| `var bot_reaction_scale: float` (1) | each roll | multiplies the hold and action reaction delays (a clock that runs faster in tests) |
+| `var bot_extra_hooks: bool` (false) | per minigame | NPC extras (`is_extra`) poll the action hooks too; otherwise extras never do |
+| `func bot_should_hold(player) -> bool` | every tick, every brain | true: the brain fills an EMPTY intent. A change of the answer is noticed after the bot's hold reaction (`BotBrain.HOLD_STOP` / `HOLD_GO` by skill + jitter): late to stop, late to go; the first answer after `configure` applies at once. Released: a fresh plan |
+| `func bot_wants_action(player) -> bool` | each think (+ once right after a press's cooldown) | yes = start an act: after the action reaction (`ACTION_REACTION` by skill) press `action` for one tick. **Present = it decides every press**: the default shove (enemy in front, in range, never with an ally in front) only runs for minigames without this hook. A no at a later think ends the act |
+| `func bot_aim(player) -> Vector3` | every tick of an act | world point to face before the press (`Vector3.ZERO` = no preference). The brain steers a short stick toward it (facing follows movement), with an aim error per act (`ACT_AIM_ERROR_DEG` by skill), and presses once the facing held within `AIM_TOLERANCE_DEG` for `AIM_SETTLE` |
+| `func bot_action_reach() -> float` | per act | > 0: first walk to within this distance of the aim point (an extra-mode stroller at a brisk stroll) |
+| `func bot_action_cooldown() -> float` | per press | no new act for this long (at least 0.25 s) x 1..1.25 |
+
+Jumps need no hook: the brain probes ahead while running and jumps onto ledges up to its apex (minus 0.15 m) with safe ground on top and across holes `is_safe` says nothing about when the far side is in range, holds for full height, does not hop at walls it cannot clear and stops at holes it cannot jump. `is_safe`-marked gaps keep the older gap jump (with a skill-based take-off error).
+
+Skill: `BotBrain.difficulty` (static, 0.5 default; host-wide, no UI yet) maps onto the range rolled skills land in (`skill_range`: 0 -> 0.05..0.55, 0.5 -> 0.35..0.95, 1 -> 0.7..1.0); an explicit `configure(seed, skill)` keeps its skill. `BotBrain.of(p)`: `is_held()`, `reaction_time()`, `is_acting()`, `skill`.
 
 ## Character model and cosmetics
 
@@ -344,9 +362,9 @@ func reaction_time() -> float                      # this bot's skill-based reac
 
 - Disguise colours: the fx component tints whooshes, poofs, rings and the hit stars a blob causes with its shown look (`FxComponent.primary_color()`, `slot_color(slot)`), so a disguised player's shove looks exactly like an NPC extra's whose loadout is the same look (an NPC fakes a shove with a plain `emit_event(&"shove_started")`).
 - Stun: locks control for exactly `seconds` (extends a running stun, never shortens it, not capped by `stun_chain_max`), raises `stunned(seconds)` through `emit_event`, so every peer sees it. Ignored while invulnerable, frozen or dead. To knock and stun: `stun()` first, then `apply_impulse()`: the impulse's own shorter stun is absorbed and `stunned` comes once.
-- Bot hold: a minigame may define `func bot_should_hold(player: Player) -> bool`; every brain (bots, extras, test brains) polls it each tick and, while it answers true, fills an empty intent (no move, jump or action: no wandering, personal-space nudges, hops or shoves; knockback still moves the blob). Release it and call `request_bot_rethink(slot)` for a fresh plan. The minigame decides when: a bot can be late to stop by the minigame's own reflex delay, or by `BotBrain.of(p).reaction_time()`.
+- Bot hold: a minigame may define `func bot_should_hold(player: Player) -> bool`; every brain (bots, extras, test brains) polls it each tick and, once it has noticed the answer (its own skill-based hold reaction; see "Bot hooks"), fills an empty intent while held (no move, jump or action: no wandering, personal-space nudges, hops or shoves; knockback still moves the blob). Answer with the plain rule (Statue Garden: WARNING or RED); do not add reflex delays of your own. On release the brain re-plans by itself.
 - Silence: any minigame may declare `var music_track := &"none"` (the director plays the StageLook preset's track under the title card, so no intro is silent, and fades it out within 0.4 s at GO: nothing through PLAYING); do not take the music over in `_start` just to silence it.
-- Not hooks: driving a bot from minigame code (Masquerade's suspicion hunts) still sets `ControllerComponent.scripted` and calls the brain itself; `bot_should_hold` only stops a bot.
+- Special actions are hooks too: a minigame never drives a bot's intent itself. Masquerade's hunts, Snowball Fight's scoops and throws and Hide and Sneak's pokes answer `bot_wants_action` / `bot_aim` (/ `bot_action_reach`), and the press reaches the minigame exactly like a human's `action`.
 
 ## Tests
 

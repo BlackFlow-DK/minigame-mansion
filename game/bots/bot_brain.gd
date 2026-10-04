@@ -145,6 +145,8 @@ const GAP_JUMP_REACH := Vector2(1.8, 3.0)
 ## Jump a gap only when its near edge is this close (m) and the bot runs this fast (m/s).
 const GAP_TAKEOFF := 0.45
 const GAP_MIN_SPEED := 3.5
+## Take-off point error (m, about this much, by skill) on those gap jumps: early or late.
+const GAP_TIMING_ERROR := Vector2(0.3, 0.04)
 ## Seconds the jump button stays held after a press (a full jump; at least time_to_apex + 0.05).
 const JUMP_HOLD := 0.4
 ## Seconds between jump presses.
@@ -287,6 +289,7 @@ var _blocked_time: float = 0.0
 var _jump_hold: float = 0.0
 var _jump_cooldown: float = 0.0
 var _gap_jump: bool = false
+var _gap_err: float = 0.0          # this bot's take-off error for the next gap jump (m)
 var _hooked: Minigame = null
 # Hooks (looked up once per minigame).
 var _hooks_game: Minigame = null
@@ -887,7 +890,7 @@ func _gap_check(game: Minigame, pos: Vector3, dir: Vector2, hvel: Vector2) -> in
 				return 0
 			if d - edge > reach - GAP_TAKEOFF:
 				return 0
-			if edge <= GAP_TAKEOFF + 0.15:
+			if edge <= GAP_TAKEOFF + 0.15 + _gap_err:
 				var speed := hvel.dot(dir)
 				var can_jump := player.is_on_floor() and _jump_cooldown <= 0.0
 				return 2 if speed >= GAP_MIN_SPEED and can_jump else 0
@@ -1070,6 +1073,10 @@ func _plan_due(pos: Vector3) -> bool:
 	return _flat(pos - _plan_at).dot(_plan_dir) >= -0.05
 
 
+func _roll_gap_err() -> void:
+	_gap_err = clampf(_rng_b.randfn(0.0, _lerp_skill(GAP_TIMING_ERROR)), -0.25, 0.6)
+
+
 ## A random take-off timing error (s), smaller for skilled bots.
 func _timing_error() -> float:
 	return _rng_b.randfn(0.0, _lerp_skill(JUMP_TIMING_ERROR))
@@ -1160,6 +1167,8 @@ func _fill_jump(intent: PlayerIntent, delta: float, hvel: Vector2, game: Minigam
 		_air_time = 0.0
 		var jump := player.get_component(&"jump") as JumpComponent
 		_jump_hold = maxf(JUMP_HOLD, jump.time_to_apex + 0.05) if jump else JUMP_HOLD
+		if _gap_jump:
+			_roll_gap_err()
 		if planned:
 			planned_jumps += 1
 			_jump_hold = _plan_hold
@@ -1432,6 +1441,7 @@ func _reset() -> void:
 	_blocked_time = 0.0
 	_jump_hold = 0.0
 	_gap_jump = false
+	_roll_gap_err()
 	_end_act()
 	_clear_plan()
 	_hole_edge = Vector3.INF

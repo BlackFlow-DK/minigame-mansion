@@ -9,10 +9,16 @@ extends GameTest
 
 const ID := &"mansion_dash"
 const BOT_BRAIN_PATH := "res://bots/bot_brain.gd"
-## The first bot should cross the line in this window (round clock seconds); bots run at
-## MansionDash.bot_speed of their top speed, so a decent human beats them.
+## Each checked race's first bot crosses the line in this window (round clock seconds)...
 const FIRST_MIN := 18.0
 const FIRST_MAX := 60.0
+## ...and over the twelve bias races the first finish averages in this window: the target. Bots run
+## flat out but play the course at MansionDash.bot_skill_scale of their skill (misjudged hammers,
+## mistimed raft jumps, stale lines), so a decent human beats them; a clean bot run is ~21 s.
+const FIRST_MEAN_MIN := 28.0
+const FIRST_MEAN_MAX := 45.0
+
+static var _firsts: Array[float] = []
 
 static var _wins: Dictionary = {}
 static var _races: int = 0
@@ -90,6 +96,12 @@ func _bias_batch(seeds: Array[int]) -> void:
 	for s in seeds:
 		var r: Dictionary = await _race(4, 100 + s, false)
 		var rk: Array = r["ranking"]
+		var ft: Dictionary = r["finish_times"]
+		if not ft.is_empty():
+			var first := INF
+			for fs: int in ft:
+				first = minf(first, float(ft[fs]))
+			_firsts.append(first)
 		if not rk.is_empty():
 			_wins[rk[0]] = int(_wins.get(rk[0], 0)) + 1
 			_races += 1
@@ -120,8 +132,13 @@ func test_slot_bias_races_9_10() -> void:
 
 func test_slot_bias_races_11_12() -> void:
 	await _bias_batch([11, 12])
-	print("  dash slot bias: %d races, wins by slot %s" % [_races, _wins])
+	var mean := 0.0
+	for f in _firsts:
+		mean += f / maxf(_firsts.size(), 1.0)
+	print("  dash slot bias: %d races, wins by slot %s; first finish mean %.1f s over %d races" % [_races, _wins, mean, _firsts.size()])
 	if _races < 12:
 		return  # a filtered run; the full run checks the whole batch
+	assert_true(_firsts.size() >= 10, "somebody finished in most races (%d of 12)" % _firsts.size())
+	assert_true(mean >= FIRST_MEAN_MIN and mean <= FIRST_MEAN_MAX, "first finish averages %.1f s, target %d-%d s" % [mean, FIRST_MEAN_MIN, FIRST_MEAN_MAX])
 	for s in 4:
 		assert_true(int(_wins.get(s, 0)) <= 6, "slot %d won %d of 12 (at most half)" % [s, int(_wins.get(s, 0))])
