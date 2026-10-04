@@ -45,7 +45,7 @@ const ENTRIES := {
 	&"portrait_panic": {"name": "Portrait Panic", "kind": &"memory", "min": 2, "max": 8, "color": "#2fa7a0",
 		"rule": "Stand on the tile that matches the portrait before the rest drop!"},
 	&"snowball_fight": {"name": "Snowball Fight", "kind": &"throwing", "min": 2, "max": 8, "color": "#e8f1f8",
-		"rule": "Scoop snow, throw it, score hits. Three hits and you sit out!"},
+		"rule": "Press to scoop snow, press again to throw. Three hits and you're snowed in!"},
 	&"rising_tide": {"name": "Rising Tide", "kind": &"climb", "min": 2, "max": 8, "color": "#009e73",
 		"rule": "The water is rising! Climb high and shove climbers off."},
 }
