@@ -78,6 +78,12 @@ const BLOB_RADIUS := 0.4
 ## Height above the crown's base that counts as its centre (pickups).
 const CROWN_CENTRE := 0.18
 const GOLD := Color(1.0, 0.8, 0.25)
+## The wearer's name tag rises this much (m) to clear the royal crown.
+const WEARER_TAG_RAISE := 0.5
+## Blobs within this distance (m) of the crown turn to watch it (presentation, every peer).
+const INTEREST_RANGE := 10.0
+## Seconds between interest-point updates (the visuals fade one ~0.6 s after the last call).
+const INTEREST_EVERY := 0.2
 
 # --- Rules (host) ---------------------------------------------------------------------------------
 @export_group("Rules")
@@ -156,6 +162,9 @@ var _blocked_slot: int = -1
 var _rethink_cd: float = 0.0
 var _dev_pose: String = ""
 var _dev_hold: float = 0.0
+## Every peer: slots whose own hat is hidden (a look override) while they wear the royal crown.
+var _hat_hidden: Dictionary[int, bool] = {}
+var _interest_cd: float = 0.0
 
 @onready var _camera: ArenaCamera = get_node_or_null(^"ArenaCamera") as ArenaCamera
 
@@ -419,9 +428,9 @@ func _rpc_wear(slot: int, from_throne: bool) -> void:
 	crown_state = CrownState.WORN
 	crown_changes += 1
 	_blocked_slot = -1
+	_set_faces()  # first: the wearer's hat comes off, so the crown sits on the bare head
 	if _rig:
 		_rig.show_worn(p)
-	_set_faces()
 	request_bot_rethink()
 	if p:
 		var at := p.global_position + Vector3.UP * 1.3
@@ -497,9 +506,9 @@ func _rpc_end(ranking: PackedInt32Array, snapshot: PackedInt32Array) -> void:
 	if _live(winner):
 		holder_slot = winner.slot
 		crown_state = CrownState.WORN
+		_set_faces()
 		if _rig:
 			_rig.celebrate(winner)
-		_set_faces()
 		var vis := winner.get_component(&"visuals") as VisualsComponent
 		if vis:
 			vis.play_emote(&"cheer", true)
@@ -542,12 +551,15 @@ func _physics_process(_delta: float) -> void:
 				vis.play_emote(&"wave")
 
 
-## Faces: the wearer beams; everyone else watches the crown.
+## Faces: the wearer beams; everyone else watches the crown. The wearer's own hat comes off
+## (so a cosmetic crown never stacks with, or passes for, the royal one) and its name tag rises
+## over the crown; both come back when the crown moves on.
 func _set_faces() -> void:
 	var crown := _rig.crown_node() if _rig else null
 	for p in players:
 		if not is_instance_valid(p):
 			continue
+		_set_crowned(p, p.slot == holder_slot and crown_state == CrownState.WORN)
 		var v := p.get_component(&"visuals") as VisualsComponent
 		if v == null:
 			continue
@@ -558,6 +570,58 @@ func _set_faces() -> void:
 			if v.get_expression() == BlobExpressions.HAPPY:
 				v.set_expression(&"")
 			v.set_look_target(crown)
+
+
+## Every peer: `p` wears the royal crown (`on`) or not: its own hat hidden through a look
+## override (only when it has one) and its name tag raised, or both restored.
+func _set_crowned(p: Player, on: bool) -> void:
+	var cos := p.get_component(&"cosmetics") as CosmeticsComponent
+	if cos:
+		if on and not _hat_hidden.has(p.slot) and not cos.has_look_override() \
+				and str(cos.shown_look().get("hat", "")) != "":
+			var look := cos.shown_look().duplicate(true)
+			look["hat"] = ""
+			cos.set_look_override(look)
+			_hat_hidden[p.slot] = true
+		elif not on and _hat_hidden.has(p.slot):
+			_hat_hidden.erase(p.slot)
+			cos.clear_look_override()
+	var tag := NameTag.of(p)
+	if tag:
+		tag.raise = WEARER_TAG_RAISE if on else 0.0
+
+
+## True while `p`'s own hat is hidden under the royal crown (tests).
+func is_hat_hidden(p: Player) -> bool:
+	return p != null and _hat_hidden.has(p.slot)
+
+
+## Presentation, every peer, a few times a second: blobs near the crown turn to watch it
+## (the wearer and the dead excepted; nearer = stronger).
+func _process(delta: float) -> void:
+	_interest_cd -= delta
+	if _interest_cd > 0.0 or _rig == null or _rig.mode == CrownRig.Mode.HIDDEN:
+		return
+	_interest_cd = INTEREST_EVERY
+	var at := _rig.crown_position() + Vector3.UP * CROWN_CENTRE
+	for p in players:
+		if not _live(p) or (p.slot == holder_slot and crown_state == CrownState.WORN):
+			continue
+		var d := p.global_position.distance_to(at)
+		if d > INTEREST_RANGE:
+			continue
+		var v := p.get_component(&"visuals") as VisualsComponent
+		if v:
+			v.set_interest_point(at, clampf(1.2 - d / INTEREST_RANGE, 0.35, 1.0))
+
+
+## Hats and name tags back on every exit (round over and the stage cleared, next load).
+func _exit_tree() -> void:
+	for p in players:
+		# Blobs leaving with the stage need nothing back (and cannot re-dress outside the tree).
+		if is_instance_valid(p) and p.is_inside_tree() and not p.is_queued_for_deletion():
+			_set_crowned(p, false)
+	_hat_hidden.clear()
 
 
 # --- Pure helpers (every peer) ----------------------------------------------------------------------------

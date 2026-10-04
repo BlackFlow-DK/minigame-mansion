@@ -63,6 +63,11 @@ const FAST_COLOR := Color(0.95, 0.2, 0.12)
 const STRIP_AHEAD := 1.0
 ## Round-clock times of the banners (every peer shows them from its own clock).
 const BANNERS: Array = [[20.0, "Faster!"], [34.0, "Barrage!"]]
+## Presentation (every peer): blobs within INTEREST_RANGE (m) of a cannon whose fuse burns or
+## that fired less than INTEREST_AFTER_FIRE s ago turn to the nearest one, every INTEREST_EVERY s.
+const INTEREST_RANGE := 11.0
+const INTEREST_AFTER_FIRE := 0.6
+const INTEREST_EVERY := 0.2
 
 @export_group("Hits")
 ## Confirmed hits that knock a player out.
@@ -114,6 +119,7 @@ var _rethink_cd: float = 0.0
 var _banner_next: int = 0
 var _shake_frame: int = -1
 var _anim: float = 0.0
+var _interest_cd: float = 0.0
 var _seg_cache_t: float = -1.0
 var _safe_x := PackedFloat32Array()
 var _safe_lo := PackedFloat32Array()
@@ -605,6 +611,39 @@ func _process(delta: float) -> void:
 	_update_strips()
 	_update_cannons()
 	_update_marks()
+	_interest_cd -= delta
+	if _interest_cd <= 0.0:
+		_interest_cd = INTEREST_EVERY
+		_update_interest()
+
+
+## Every living blob near a cannon that is about to fire (fuse burning) or just fired turns
+## to the nearest such muzzle (nearer = stronger). Local only.
+func _update_interest() -> void:
+	if not _running:
+		return
+	var hot: Array[Vector3] = []
+	for c in _barrels.size():
+		var fuse_on := _t_vis < _fuse_at[c] and _t_vis >= _fuse_at[c] - CannonSchedule.TELEGRAPH
+		var tau := _t_vis - _last_fire[c]
+		if fuse_on or (tau >= 0.0 and tau < INTEREST_AFTER_FIRE):
+			hot.append(_muzzle(c))
+	if hot.is_empty():
+		return
+	for p in players:
+		if not _live(p):
+			continue
+		var best := Vector3.INF
+		var best_d := INTEREST_RANGE
+		for m in hot:
+			var d := p.global_position.distance_to(m)
+			if d < best_d:
+				best_d = d
+				best = m
+		if best.is_finite():
+			var v := p.get_component(&"visuals") as VisualsComponent
+			if v:
+				v.set_interest_point(best, clampf(1.2 - best_d / INTEREST_RANGE, 0.35, 1.0))
 
 
 func _update_strips() -> void:

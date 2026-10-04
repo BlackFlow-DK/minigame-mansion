@@ -191,6 +191,47 @@ func test_fuse_expiry_knocks_out_the_holder_and_reassigns() -> void:
 	assert_false(mg.is_finished(), "round goes on")
 
 
+func test_holder_carries_the_bomb_overhead_and_hands_it_over() -> void:
+	var mg := await _arena_with_holder(3, 0)
+	var ps := players
+	var tags: Array[NameTag] = []
+	for p in ps:
+		var tag := NameTag.of(p)  # the Stage's, else one of our own
+		if tag == null:
+			tag = (load("res://ui/round/name_tag.tscn") as PackedScene).instantiate() as NameTag
+			p.add_child(tag)
+			tag.setup(p)
+		tags.append(tag)
+	mg.give_bomb(0, 60.0, 0.0)  # again, now that the tags exist
+	await step(2)
+	var vis := func(p: Player) -> VisualsComponent: return p.get_component(&"visuals") as VisualsComponent
+	assert_eq((vis.call(ps[0]) as VisualsComponent).get_carry_pose(), &"overhead", "holder: overhead carry pose")
+	assert_eq((vis.call(ps[1]) as VisualsComponent).get_carry_pose(), &"none", "others carry nothing")
+	assert_near(tags[0].raise, HotPotato.HOLDER_TAG_RAISE, 0.001, "holder's tag rises over the bomb")
+	assert_eq(tags[1].raise, 0.0, "others' tags stay")
+	var rig := mg.get_node(^"BombRig")
+	var carry: Vector3 = (vis.call(ps[0]) as VisualsComponent).get_carry_point()
+	var bomb: Vector3 = rig.call(&"bomb_position")
+	assert_near(Vector2(bomb.x, bomb.z), Vector2(carry.x, carry.z), 0.05, "bomb over the carry point")
+	assert_true(bomb.y > carry.y + 0.3 and bomb.y < carry.y + 0.7, "bomb sits on the hands (%.2f over)" % (bomb.y - carry.y))
+	# Shove hand-over: P0 lets go, P1 holds it up.
+	ps[1].place_at(Transform3D(Basis.IDENTITY, ps[0].global_position + Vector3(1.2, 0, 0)))
+	ps[0].facing = Vector3.RIGHT
+	await step(3, func(i: int) -> void: ps[0].intent.action_pressed = i == 0)
+	assert_eq(mg.holder_slot, 1, "P1 holds it")
+	assert_eq((vis.call(ps[0]) as VisualsComponent).get_carry_pose(), &"none", "old holder let go")
+	assert_eq((vis.call(ps[1]) as VisualsComponent).get_carry_pose(), &"overhead", "new holder: overhead")
+	assert_eq(tags[0].raise, 0.0, "old holder's tag back down")
+	assert_near(tags[1].raise, HotPotato.HOLDER_TAG_RAISE, 0.001, "new holder's tag up")
+	# It blows: nobody carries anything.
+	mg.give_bomb(1, 0.3, 0.0)
+	await step(30)
+	assert_false(ps[1].alive, "holder blown up")
+	for p in ps:
+		assert_eq((vis.call(p) as VisualsComponent).get_carry_pose(), &"none", "P%d carries nothing after the blast" % p.slot)
+	assert_eq(tags[1].raise, 0.0, "tag down after the blast")
+
+
 func test_urgency_rises_in_coarse_steps() -> void:
 	var mg := await _arena_with_holder(2, 0)
 	var levels := watch(mg, &"urgency_changed")

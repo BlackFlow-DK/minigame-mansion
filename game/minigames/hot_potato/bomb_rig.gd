@@ -1,5 +1,7 @@
 extends Node3D
-## Hot Potato presentation: the lit bomb floating over the holder, on every peer.
+## Hot Potato presentation: the lit bomb held up overhead by the holder (the minigame sets the
+## holder's overhead carry pose; the bomb sits on `VisualsComponent.get_carry_point()`), on
+## every peer.
 ## Pure presentation: the minigame tells it who holds the bomb (`show_on`) and how urgent
 ## it is (`set_level`, a coarse 0..3 step, never the real fuse time). It follows the holder
 ## each frame; the bomb throbs on every tick, the ticks and the throb speed up and the
@@ -11,9 +13,12 @@ const ARROW_SCENE: PackedScene = preload("res://assets/models/props/arrow_marker
 
 ## The bomb model is 0.45 m across; this makes it about as wide as a blob.
 const BOMB_SCALE := 2.0
-## Bomb centre above the holder's origin: above hats (~1.35 m) and the name tag (1.55 m).
+## Radius of the unscaled bomb body (its origin is the body centre).
+const BOMB_RADIUS := 0.225
+## Bomb centre above the holder's origin when nobody carries it up (no visuals): above hats
+## (~1.35 m) and the name tag (1.55 m). Normally the holder holds it overhead (carry pose).
 const BOMB_HEIGHT := 2.25
-const ARROW_HEIGHT := 3.1
+const ARROW_HEIGHT := 3.75
 ## Seconds between ticks per urgency level.
 const TICK_INTERVAL: Array[float] = [0.85, 0.5, 0.28, 0.14]
 ## Glow strength per urgency level.
@@ -174,6 +179,13 @@ func _process(delta: float) -> void:
 func _follow() -> void:
 	if target and is_instance_valid(target):
 		global_position = target.global_position
+		# Held up in both hands (the holder's overhead carry pose): the bomb's bottom sits on
+		# the carry point, which follows the arms, the squash and any hat.
+		var v := target.get_component(&"visuals") as VisualsComponent
+		if v and v.get_carry_pose() == &"overhead":
+			_bomb.global_position = v.get_carry_point() + Vector3.UP * (BOMB_RADIUS * _bomb.scale.y)
+		else:
+			_bomb.position = Vector3(0.0, BOMB_HEIGHT, 0.0)
 
 
 func _stop_loop() -> void:

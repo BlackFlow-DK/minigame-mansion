@@ -130,6 +130,47 @@ func test_wearer_is_slower_and_cannot_shove() -> void:
 	assert_true((ps[1].get_component(&"shove") as ShoveComponent).enabled, "shove back once the crown is off")
 
 
+func test_wearer_hat_hidden_under_the_crown_and_restored() -> void:
+	var ps := spawn_arena(3, ID)
+	var mg := _mg()
+	var wearer := ps[1]
+	wearer.loadout["hat"] = "crown"  # a cosmetic crown: it must never stack with the royal one
+	var cos := wearer.get_component(&"cosmetics") as CosmeticsComponent
+	cos.refresh()
+	var hat_node := func() -> Node:
+		var root := (wearer.get_component(&"visuals") as VisualsComponent).get_model_root()
+		var socket := root.find_child("HatSocket", true, false) if root else null
+		return socket.get_node_or_null(^"Cosmetic_hat") if socket else null
+	assert_true(hat_node.call() != null, "the cosmetic crown is on before")
+	var tag := NameTag.of(wearer)
+	mg.give_crown(1)
+	await step(2)
+	assert_true(mg.is_hat_hidden(wearer), "hat hidden while wearing the royal crown")
+	assert_eq(str(cos.shown_look().get("hat", "")), "", "shown look has no hat")
+	assert_true(hat_node.call() == null, "no hat model under the crown")
+	assert_eq(str(wearer.loadout.get("hat", "")), "crown", "the real loadout is untouched")
+	if tag:
+		assert_near(tag.raise, CrownKeeper.WEARER_TAG_RAISE, 0.001, "name tag raised over the crown")
+	assert_false(mg.is_hat_hidden(ps[0]), "nobody else loses a hat")
+	mg.knock_off(wearer, Vector3.LEFT)
+	await step(2)
+	assert_false(mg.is_hat_hidden(wearer), "hat back once the crown is off")
+	assert_false(cos.has_look_override(), "override cleared")
+	assert_true(hat_node.call() != null, "the cosmetic crown is back")
+	if tag:
+		assert_eq(tag.raise, 0.0, "name tag back down")
+	# Wearing at the end of the round, then the stage clears: the hat still comes back.
+	mg.give_crown(2)
+	await step(2)
+	var cos2 := ps[2].get_component(&"cosmetics") as CosmeticsComponent
+	var had_hat := str(ps[2].loadout.get("hat", "")) != ""
+	assert_eq(mg.is_hat_hidden(ps[2]), had_hat, "P2's hat hidden if it has one")
+	var parent := mg.get_parent()
+	parent.remove_child(mg)
+	assert_false(cos2.has_look_override(), "leaving the tree restores the hat")
+	parent.add_child(mg)
+
+
 # --- Points ----------------------------------------------------------------------------------------------
 
 func test_points_accrue_once_per_second_for_the_wearer_only() -> void:
