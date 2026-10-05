@@ -371,6 +371,45 @@ func test_portal_preview_shows_a_minigame_and_flares_on_start() -> void:
 	assert_true(pv.get_flare() > 0.9, "flares when a session starts")
 
 
+func test_portal_flares_on_the_launch_beat_once() -> void:
+	var lobby := _spawn_lobby(2)
+	if lobby == null:
+		return
+	await step(5)
+	var pv := lobby.portal_preview
+	assert_near(pv.get_flare(), 0.0, 0.001, "calm")
+	Session.session_launching.emit(0.75)  # START (every peer gets it before the lobby is left)
+	assert_true(pv.get_flare() > 0.9, "flares on START, while still in the lobby")
+	await step(45)  # the beat
+	var left := pv.get_flare()
+	assert_true(left > 0.1 and left < 0.9, "still glowing as the lobby is left (%.2f)" % left)
+	lobby._on_session_state_changed(Session.State.INTRO)
+	assert_near(pv.get_flare(), left, 0.001, "no second flare when the beat already flared")
+
+
+func test_camera_eases_to_the_portal_during_the_beat_and_back_on_abort() -> void:
+	var lobby := _spawn_lobby(2)
+	if lobby == null:
+		return
+	var cam := lobby.get_node(^"Camera") as ArenaCamera
+	Session.scene_override = load("res://dev/dev_arena.tscn") as PackedScene
+	await step(30)
+	var hall_focus := cam.focus
+	Session.start_session(1, 0.75)
+	if not assert_true(Session.is_launching(), "launching"):
+		Session.scene_override = null
+		return
+	assert_true(cam.is_focusing(), "the camera turns to the portal")
+	await step(20)
+	var portal := lobby.portal_preview.global_position
+	assert_true(cam.focus.distance_to(portal) < hall_focus.distance_to(portal) - 2.0,
+			"eased toward the portal (%s -> %s)" % [hall_focus, cam.focus])
+	Session.abort_session()
+	await step(2)
+	assert_false(cam.is_focusing(), "a cancelled launch gives the hall framing back")
+	Session.scene_override = null
+
+
 # --- Everything together -------------------------------------------------------------------------
 
 func test_eight_bots_for_a_minute_nobody_out_and_toys_used() -> void:

@@ -592,7 +592,7 @@ func _on_session_state_changed(state: int) -> void:
 
 func _on_start(rounds: int) -> void:
 	if Net.is_host() and Net.roster.size() >= MenuLobbyOverlay.MIN_PLAYERS:
-		Session.start_session(rounds)
+		Session.start_session(rounds, Session.launch_time)  # the portal flares first
 
 
 func _on_add_bot() -> void:

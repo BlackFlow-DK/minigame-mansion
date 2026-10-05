@@ -300,12 +300,24 @@ at HIGH (1.17 s) is under 1.0 s after the first round. What is left per round (`
 the resource load 0.4-0.85 s, `_ready` building the arena 0.03-0.7 s (Hide and Sneak: merge
 0.33 s, `_setup` 0.3 s). A shader warm-up was not needed: no first-use hitch above 30 ms
 showed after the first round (Godot 4.7's ubershaders compile pipelines in the background).
-**Not done, needs Session/Stage (not mine):** preloading the next round's scene with
-`ResourceLoader.load_threaded_request(MinigameRegistry.scene_path(next_id))` while RESULTS
-(or VOTE) shows would hide the 0.4-0.85 s resource load: start it where the host picks the
-next round (`game/session/session.gd:446-449`, `_begin_vote` at :506 for VOTE once the winner
-is known), and in `Stage.load_minigame` (`game/stage/stage.gd:126-130`) take
-`ResourceLoader.load_threaded_get(path)` when a request for that path is pending.
+**Next-round preload (branch `preload`):** every peer loads the next round's scene on a worker
+thread (`Stage.preload_minigame`) as soon as it is known: during the 0.75 s launch beat after
+START, at RESULTS (the host's `_rpc_upcoming`) and at the vote result; `Stage.load_minigame`
+takes it. `perf-run -Transitions`, LOW, 6 minigames, 2 runs each (ms, stage load -> first
+frame's load part; machine shared with other agents):
+
+| minigame | before | after |
+|---|---|---|
+| first round of the session | 1753, 2133 | 172, 862 |
+| bumper_sumo | 212, 213 | 95 |
+| cannon_alley | 260, 332 | 163, 129 |
+| mansion_dash | 460, 501 | 181, 193 |
+| crown_keeper | 329, 417 | 218, 235 |
+| rising_tide | 511 | 185, 216 |
+| hide_and_sneak (not first) | 750 | 682 |
+
+Hide and Sneak's remainder is `_ready` building the arena (merge, `_setup`), not the resource
+load. Not measured: frame times during RESULTS while the worker thread loads.
 
 ### Startup, memory, exe
 

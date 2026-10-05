@@ -4,7 +4,8 @@ extends Node3D
 ## one is ticked, else every playable minigame that fits the player count; from
 ## `MinigameCatalog`), and the portal's glow takes on that minigame's colour. The cycle runs on
 ## the wall clock, so every peer on the LAN shows the same one without any traffic.
-## `flare()` (the host pressed START: every peer sees Session leave LOBBY) makes the portal blaze.
+## `flare()` (the host pressed START: every peer gets `Session.session_launching` before the lobby
+## is left) makes the portal blaze.
 
 signal shown(id: StringName)
 

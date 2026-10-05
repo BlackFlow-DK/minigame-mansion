@@ -61,7 +61,7 @@ func test_offline_profile() -> void:
 func test_check_join_reasons() -> void:
 	assert_eq(NetProtocol.check_join(_hello(), 1, 8, false), "", "accept")
 	assert_eq(NetProtocol.check_join(_hello(NetProtocol.VERSION + 1), 1, 8, false), "version mismatch", "newer version")
-	assert_eq(NetProtocol.VERSION, 2, "v0.2 wire format (loadout size, end grace, new minigames)")
+	assert_eq(NetProtocol.VERSION, 3, "v0.3 wire format (game modes, teams, extras, round preload notice)")
 	assert_eq(NetProtocol.check_join(_hello(1), 1, 8, false), "version mismatch", "v0.1 client refused")
 	assert_eq(NetProtocol.check_join({}, 1, 8, false), "version mismatch", "garbage hello")
 	assert_eq(NetProtocol.check_join({"game": "other", "version": NetProtocol.VERSION}, 1, 8, false), "version mismatch", "other game")

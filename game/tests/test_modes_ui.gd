@@ -244,11 +244,15 @@ func test_practice_from_the_panel() -> void:
 	panel.set_player_count(Net.roster.size())
 	assert_false(panel.start_practice_button.disabled, "2 players: go")
 	panel.practice_mutator_buttons[&"tiny"].button_pressed = true
+	var launches := watch(Session, &"session_launching")
 	panel.start_practice_button.pressed.emit()
 	await step(1)
 	assert_eq(pressed, [[&"bumper_sumo", &"tiny"]], "practice_pressed")
 	assert_false(panel.is_open(), "panel closed")
-	assert_eq(Session.state, S.State.INTRO, "practice round started")
+	assert_eq(launches.size(), 1, "the launch beat first (portal flare)")
+	assert_eq(Session.state, S.State.LOBBY, "still in the lobby during the beat")
+	assert_true(await _wait_until(func() -> bool: return Session.state == S.State.INTRO,
+			int(Session.launch_time * 60.0) + 10), "practice round started after the beat")
 	assert_true(Session.practice, "as practice")
 	assert_eq(Session.round_mutator, &"tiny", "with the mutator")
 

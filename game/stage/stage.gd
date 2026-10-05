@@ -50,6 +50,9 @@ const EXTRA_PRIMARIES: Array[String] = ["#9aa5b1", "#b5a48c", "#8fa89b", "#a99bb
 ## Extras a client builds per frame from a manifest that came over the network.
 const CLIENT_EXTRA_BATCH := 4
 
+## Scene paths requested with `preload_minigame` and not taken yet (every peer, all stages).
+static var _preloads: Dictionary[String, bool] = {}
+
 ## Lobby mode: spawn/remove players as `Net.roster` changes (host decides; clients follow the
 ## host's manifest). Set it before or after loading; the host resends the manifest.
 ## Players spawn frozen, as always: the lobby unfreezes them (listen to `players_spawned`).
@@ -123,11 +126,56 @@ func _ready() -> void:
 
 ## Frees the current minigame and players, loads minigame `id` (see MinigameRegistry)
 ## and spawns the players. Returns the minigame, or null if the id is unknown.
+## Takes the scene from `preload_minigame(id)` when one was requested (waiting for it here if
+## it is still loading), else loads it now.
 func load_minigame(id: StringName) -> Minigame:
 	if not MinigameRegistry.has(id):
 		push_error("Stage.load_minigame: unknown minigame '%s'" % id)
 		return null
-	return load_minigame_scene(load(MinigameRegistry.scene_path(id)) as PackedScene)
+	return load_minigame_scene(take_scene(MinigameRegistry.scene_path(id)))
+
+
+## Any peer: starts loading minigame `id`'s scene on a worker thread so a later
+## `load_minigame(id)` does not stall on it. Never blocks. False (nothing requested) for an
+## unknown id or a scene that is in memory already; true when it is (or already was) requested.
+static func preload_minigame(id: StringName) -> bool:
+	if not MinigameRegistry.has(id):
+		return false
+	var path := MinigameRegistry.scene_path(id)
+	if _preloads.has(path):
+		return true
+	if ResourceLoader.has_cached(path):
+		return false
+	if ResourceLoader.load_threaded_request(path, "PackedScene") != OK:
+		return false
+	_preloads[path] = true
+	return true
+
+
+## True while a preload of `path` is requested and not taken yet.
+static func is_preloading(path: String) -> bool:
+	return _preloads.has(path)
+
+
+## The PackedScene at `path`: a requested preload's result (blocks until it is loaded), else
+## (none requested, or it failed) a plain load.
+static func take_scene(path: String) -> PackedScene:
+	if _preloads.has(path):
+		_preloads.erase(path)
+		if ResourceLoader.load_threaded_get_status(path) != ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+			var scene := ResourceLoader.load_threaded_get(path) as PackedScene
+			if scene:
+				return scene
+	return load(path) as PackedScene
+
+
+## Lets go of finished preloads nobody took (Session calls it on the way back to LOBBY);
+## ones still loading stay listed (a later take or drop collects them). Never blocks.
+static func drop_preloads() -> void:
+	for path: String in _preloads.keys():
+		if ResourceLoader.load_threaded_get_status(path) != ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			_preloads.erase(path)
+			ResourceLoader.load_threaded_get(path)
 
 
 ## Like load_minigame, from a scene whose root extends Minigame (dev arenas, tests).
@@ -565,7 +613,7 @@ func apply_manifest(load_id: Variant, scene_path: Variant, follow: Variant, entr
 			push_warning("Stage: host manifest names an unknown scene '%s'" % path)
 			return
 		_clear_local()
-		if not _instance_scene(load(path) as PackedScene):
+		if not _instance_scene(take_scene(path)):
 			return
 	net_load_id = load_id
 	for slot: int in players.keys():
