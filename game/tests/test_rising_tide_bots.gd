@@ -2,8 +2,8 @@ extends GameTest
 ## Rising Tide bot-only rounds: every slot is a BotBrain driven from the test (so every slot ticks
 ## the same way); the round seed and the brains are seeded, so every round here is deterministic.
 ## Each round must end validly (every slot ranked once, within the time limit); the checked rounds
-## must neither see everybody drown in the first 15 s nor everybody survive, with the drownings
-## spread over the round. Twelve seeded 4-bot rounds (two per test, to stay inside the runner's time
+## must neither see everybody drown in the first 15 s nor everybody survive, with the drownings on
+## the climb (not those knocked off the roof) spread over the round. Twelve seeded 4-bot rounds (two per test, to stay inside the runner's time
 ## limit) check that no slot wins more than half of them.
 
 const ID := &"rising_tide"
@@ -77,9 +77,14 @@ func _round(count: int, seed_value: int, check: bool = true) -> Dictionary:
 				early += 1
 		assert_true(early < count, "not everybody drowned in the first 15 s (seed %d)" % seed_value)
 		assert_true(m.drown_times.size() >= 1, "not everybody survived (seed %d)" % seed_value)
-		if m.drown_times.size() >= 3:
-			var ts: Array = m.drown_times.values()
-			assert_true(float(ts.max()) - float(ts.min()) >= 10.0, "drownings spread over the round (%s)" % [times])
+		# The climb's drownings spread over the round (no single wave takes everyone). A bot that
+		# had reached the roof and was knocked off in the summit scramble is not a climb drowning.
+		var climb: Array = []
+		for s: int in m.drown_times:
+			if not m.roof_times.has(s):
+				climb.append(m.drown_times[s])
+		if climb.size() >= 3:
+			assert_true(float(climb.max()) - float(climb.min()) >= 10.0, "climb drownings spread over the round (%s)" % [times])
 	return {"seconds": seconds, "ranking": ranking.duplicate(), "drowned": m.drown_times.duplicate(), "roof": m.roof_times.size()}
 
 
