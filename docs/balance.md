@@ -110,6 +110,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\balance-batch.ps1 -Min
   `-Set` (override exported tuning after `_setup`: `minigame.<prop>` or
   `<component>.<prop>`, `;`-separated, Godot value syntax), `-Size small|big` (every seat's
   body), `-Out` (report file). Each block ends with a machine-readable `BALANCE_JSON` line.
+- `-Size mixed`: small/normal/big rotate over the seats (seat s plays size (s + block) mod 3 in
+  each personality block of N rounds), so a size bias can show; use round counts that are
+  multiples of 3N for a balanced rotation. `-Verbose` names each seat's size.
+- `-RoundJson`: one `ROUND_JSON {...}` line per round (kept by `-Out`): `r`, `sec`, `timeout`,
+  `rank`, `win`, `groups` (ties), `pts` (Session points), `sizes` (s/n/b per seat), `kos`
+  ([slot, seconds, shover or -1, reason]) and `x`, the minigame's role and score state at the
+  end (`seekers`, `hider_slots`, `original_ghosts`, `caught_at`, `scores`, ... when it has them:
+  `ROUND_PROPS` in the runner). Per-role and per-size numbers are computed from these lines.
+- Bot personalities are set when the Stage spawns the players, before the minigame's `_setup`,
+  so a minigame that configures its own bots there (Hide and Sneak: sharp hiders) keeps them.
+  Before 2026-10-05 they were set at the round intro and overwrote that; other minigames' rounds
+  are unchanged (same seed, same report).
 - Cost on an idle machine: ~3 minutes for all five minigames at 2+4 players x 24 rounds,
   ~3 at 8 players. Same seed, same rounds (deterministic). Presentation components are
   paused while measuring (`--full` keeps them; the rankings are identical either way).

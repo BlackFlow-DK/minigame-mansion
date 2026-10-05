@@ -5,6 +5,11 @@
 # Usage:
 #   tools/balance-batch.ps1 [-Minigame id|all] [-Players N|"2,4,8"] [-Rounds M] [-Seed S]
 #                           [-Parallel] [-Verbose] [-Out build\balance\report.txt] [-TimeoutSec 3600]
+#                           [-Set "target.prop=value;..."] [-Size normal|small|big|mixed] [-RoundJson]
+# -Size mixed rotates small/normal/big over the seats (seat s plays size (s + block) mod 3 in each
+# personality block of N rounds; use round counts that are multiples of 3N). -RoundJson prints one
+# ROUND_JSON line per round: ranking, tied groups, points, sizes, KOs with the shover and the
+# minigame's roles and scores (seekers/hiders, starting ghosts, catches, scores); -Out keeps them.
 # -Parallel runs each minigame in its own Godot process (much faster with -Minigame all).
 # Exit code non-zero when Godot fails, errors, or a round never ended.
 param(
@@ -15,7 +20,9 @@ param(
     [switch]$Parallel,
     [switch]$Verbose,
     [string]$Set = '',
+    [ValidateSet('normal', 'small', 'big', 'mixed')]
     [string]$Size = 'normal',
+    [switch]$RoundJson,
     [string]$Out = '',
     [int]$TimeoutSec = 3600
 )
@@ -34,6 +41,7 @@ function Get-BatchArgs([string]$ids) {
     if ($Verbose) { $a += '--verbose' }
     if ($Set -ne '') { $a += "--set=$Set" }
     if ($Size -ne 'normal') { $a += "--size=$Size" }
+    if ($RoundJson) { $a += '--round-json' }
     return $a
 }
 
@@ -86,7 +94,7 @@ $errors = Get-GodotErrors $lines
 if ($Out -ne '') {
     $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $RepoRoot $Out }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outPath) | Out-Null
-    $lines | Where-Object { $_ -match '^(==|   |BALANCE_JSON)' } | Set-Content -LiteralPath $outPath -Encoding utf8
+    $lines | Where-Object { $_ -match '^(==|   |BALANCE_JSON|ROUND_JSON)' } | Set-Content -LiteralPath $outPath -Encoding utf8
     Write-Host "balance-batch: report written to $outPath"
 }
 if ($failed -or $errors.Count -gt 0) {

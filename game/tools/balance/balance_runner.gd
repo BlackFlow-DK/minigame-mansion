@@ -9,6 +9,8 @@ extends Node
 ## often and a slot's win rate measures only its seat: spawn point, slot-ordered rules.
 ## Rounds run at 60 physics ticks per game second (no time scaling: the lengths are real);
 ## headless with --fixed-fps 60 that is as fast as the CPU allows.
+## The personalities are set when the Stage spawns the round's players, before the minigame's
+## `_setup`, so a minigame that sets its bots up in `_setup` (Hide and Sneak) keeps its own.
 ##
 ##   var runner := preload("res://tools/balance/balance_runner.gd").new()
 ##   add_child(runner)
@@ -35,11 +37,29 @@ var overrides: Dictionary = {}
 ## Speed: pause the players' presentation components (LEAN_PAUSED). They only listen and
 ## draw, so the rounds play out identically (same seed, same rankings), just faster.
 var lean: bool = true
-## Body size of every seat ("normal"; "small"/"big" to measure a size on its own).
+## Body size of every seat ("normal"; "small"/"big" to measure a size on its own; "mixed":
+## the sizes rotate over the seats, seat s plays SIZE_IDS[(s + block) % 3] in personality block
+## `block`, so over 3 blocks every seat plays every size with every personality).
 var body_size: String = "normal"
+## Prints one ROUND_JSON line per round (see round_json_line): roles, scores, sizes, KOs.
+var round_json: bool = false
+
+const SIZE_IDS: Array[String] = ["small", "normal", "big"]
+## Minigame properties copied into ROUND_JSON when the minigame has them: roles (seekers,
+## hiders, starting ghosts), catches and scores.
+const ROUND_PROPS: Array[StringName] = [
+	&"seekers", &"hider_slots", &"finds", &"caught_time",
+	&"original_ghosts", &"caught_at", &"credit", &"own_catches",
+	&"points", &"unmask_log", &"wrong_log",
+	&"scores", &"hits_taken", &"snowed_count", &"throws", &"hits_landed",
+	&"coins", &"loop_index",
+]
 
 var _stage: Stage = null
 var _saved: Dictionary = {}
+var _batch_id: String = ""
+var _batch_players: int = 0
+var _round_index: int = 0
 
 # Per-round scratch, filled by signal handlers.
 var _round: Dictionary = {}
@@ -56,6 +76,8 @@ func run_batch(id: StringName, players: int, rounds: int, seed_value: int) -> Di
 		push_error("balance: no scene for '%s'" % id)
 		return stats
 	_begin()
+	_batch_id = String(id)
+	_batch_players = players
 	var personalities: Array[int] = []
 	var block_rng := RandomNumberGenerator.new()
 	for r in rounds:
@@ -68,8 +90,11 @@ func run_batch(id: StringName, players: int, rounds: int, seed_value: int) -> Di
 		for s in players:
 			brain_seeds.append(personalities[(s + r) % players])
 		var round_seed: int = hash([seed_value, id, players, r, "round"])
+		_round_index = r
 		var result: Dictionary = await _play_round(scene, players, round_seed, brain_seeds)
 		_add_round(stats, result)
+		if round_json:
+			print(round_json_line(result, r))
 		if verbose:
 			print("  %s p=%d r=%d: %.1f s, ranking %s, winners %s%s" % [id, players, r,
 				result["seconds"], str(result["ranking"]), str(result["winners"]),
@@ -159,17 +184,22 @@ func _play_round(scene: PackedScene, count: int, round_seed: int, brain_seeds: A
 		Net.add_bot()
 	(Net.roster[0] as PlayerInfo).is_bot = true  # the host's seat is a bot like the rest
 	for s: int in Net.roster:
-		# Same body for every seat (the host's saved profile could carry another size).
+		# Every seat's body set here (the host's saved profile could carry another size).
 		var info := Net.roster[s] as PlayerInfo
 		info.loadout = Cosmetics.default_loadout(s)
-		info.loadout["size"] = body_size
+		info.loadout["size"] = size_of_seat(s)
 	Session.scene_override = scene
 	_round = {
 		"seconds": 0.0, "ranking": [], "points": {}, "winners": [], "timeout": false, "never": false,
 		"time_limit": 0.0, "ko_times": [] as Array[float], "leader": [], "holds": [] as Array[float],
 		"explode_holds": [] as Array[float], "ko_shoved": 0, "done": false, "start_frame": -1, "brain_seeds": brain_seeds,
 		"round_seed": round_seed, "last_hand": -1.0, "leader_taken": false,
+		"kos": [], "groups": [], "extra": {}, "sizes": [],
 	}
+	for s in count:
+		(_round["sizes"] as Array).append(size_of_seat(s))
+	var on_spawned := func(spawned: Array[Player]) -> void: _configure_brains(spawned)
+	_stage.players_spawned.connect(on_spawned)
 	var on_intro := func(_info: Dictionary, _index: int) -> void: _on_intro()
 	var on_start := func() -> void: _round["start_frame"] = Engine.get_physics_frames()
 	var on_finish := func(ranking: Array[int], points: Dictionary) -> void: _on_finished(ranking, points)
@@ -195,6 +225,7 @@ func _play_round(scene: PackedScene, count: int, round_seed: int, brain_seeds: A
 			_round["never"] = true
 			_round["seconds"] = t
 			break
+	_stage.players_spawned.disconnect(on_spawned)
 	Session.round_intro.disconnect(on_intro)
 	Session.round_started.disconnect(on_start)
 	Session.round_finished.disconnect(on_finish)
@@ -209,7 +240,25 @@ func _now() -> float:
 	return float(Engine.get_physics_frames() - int(_round["start_frame"])) / Engine.physics_ticks_per_second
 
 
-## Every round: seed the minigame and the brains, hook the per-round measurements.
+## The body size of `seat` this round (see `body_size`).
+func size_of_seat(seat: int) -> String:
+	if body_size != "mixed":
+		return body_size
+	var block := floori(float(_round_index) / maxi(_batch_players, 1))
+	return SIZE_IDS[posmod(seat + block, 3)]
+
+
+## When the Stage spawns the round's players (before the minigame's `_setup`): the rotated
+## personalities. A minigame that sets its bots up in `_setup` overrides them, as in a real game.
+func _configure_brains(spawned: Array[Player]) -> void:
+	var seeds: Array[int] = _round["brain_seeds"]
+	for p in spawned:
+		var c := p.get_component(&"controller") as ControllerComponent
+		if c and c.brain and c.brain.has_method(&"configure"):
+			c.brain.call(&"configure", seeds[p.slot % seeds.size()])
+
+
+## Every round: seed the minigame, hook the per-round measurements.
 func _on_intro() -> void:
 	var mg := Session.current_minigame
 	if mg == null:
@@ -237,23 +286,24 @@ func _on_intro() -> void:
 				var comp := p.get_component(comp_name)
 				if comp:
 					comp.process_mode = Node.PROCESS_MODE_DISABLED
-	var seeds: Array[int] = _round["brain_seeds"]
 	for p in mg.players:
 		var c := p.get_component(&"controller") as ControllerComponent
-		if c and c.brain and c.brain.has_method(&"configure"):
-			c.brain.call(&"configure", seeds[p.slot % seeds.size()])
-			if verbose:
-				print("    seat %d: skill %.2f aggression %.2f" % [p.slot, c.brain.get(&"skill"), c.brain.get(&"aggression")])
-		var last_hit := [-INF]
+		if verbose and c and c.brain:
+			print("    seat %d (%s): skill %.2f aggression %.2f" % [p.slot, size_of_seat(p.slot),
+				c.brain.get(&"skill"), c.brain.get(&"aggression")])
+		var last_hit := [-INF, -1]
 		p.got_hit.connect(func(_impulse: Vector3, source_slot: int) -> void:
 			if source_slot >= 0:
-				last_hit[0] = _now())
+				last_hit[0] = _now()
+				last_hit[1] = source_slot)
 		p.eliminated.connect(func(reason: StringName) -> void:
 			if int(_round["start_frame"]) >= 0:
 				var t := _now()
 				(_round["ko_times"] as Array).append(t)
-				if t - float(last_hit[0]) <= SHOVED_WINDOW:
+				var shoved := t - float(last_hit[0]) <= SHOVED_WINDOW
+				if shoved:
 					_round["ko_shoved"] = int(_round["ko_shoved"]) + 1
+				(_round["kos"] as Array).append([p.slot, snappedf(t, 0.1), int(last_hit[1]) if shoved else -1, String(reason)])
 				if verbose:
 					print("    out: slot %d at %.1f s (%s%s)" % [p.slot, t, reason,
 						", shoved %.1f s before" % (t - float(last_hit[0])) if t - float(last_hit[0]) <= SHOVED_WINDOW else ""]))
@@ -282,6 +332,14 @@ func _on_finished(ranking: Array[int], points: Dictionary) -> void:
 		limit = Session.current_minigame.time_limit
 		_round["time_limit"] = limit
 	_round["timeout"] = limit > 0.0 and t >= limit - 0.05
+	_round["groups"] = _plain(Session.round_groups)
+	var extra := {}
+	var mg := Session.current_minigame
+	if is_instance_valid(mg):
+		for k in ROUND_PROPS:
+			if k in mg:
+				extra[String(k)] = _plain(mg.get(k))
+	_round["extra"] = extra
 	_round["done"] = true
 
 
@@ -411,6 +469,40 @@ static func report(stats: Dictionary) -> String:
 		lines.append("   bomb holds before a pass s: mean %.2f  median %.2f (%d passes); held to the blast: mean %.2f s" % [
 			mean(holds), median(holds), holds.size(), mean(stats["explode_holds"])])
 	return "\n".join(lines)
+
+
+## One machine-readable line per round (prefix ROUND_JSON): `r` round index, `sec`, `timeout`,
+## `never`, `rank` (flat ranking), `win` (winners), `groups` (tied groups), `pts` (Session points),
+## `sizes` per seat (s/n/b), `kos` [slot, seconds, shover or -1, reason] and `x`: the minigame's
+## ROUND_PROPS at round_finished (roles, catches, scores; Dictionary keys become strings).
+func round_json_line(r: Dictionary, index: int) -> String:
+	var sizes: Array = []
+	for s: String in r.get("sizes", []):
+		sizes.append(s.substr(0, 1))
+	var d := {
+		"id": _batch_id, "n": _batch_players, "r": index, "sec": snappedf(r["seconds"], 0.01),
+		"timeout": r["timeout"], "never": r["never"], "rank": r["ranking"], "win": r["winners"],
+		"groups": r.get("groups", []), "pts": _plain(r["points"]), "sizes": sizes,
+		"kos": r.get("kos", []), "x": r.get("extra", {}),
+	}
+	return "ROUND_JSON " + JSON.stringify(d)
+
+
+## Plain JSON-able copy (typed Dictionaries/packed arrays -> plain, floats rounded to 0.01).
+static func _plain(v: Variant) -> Variant:
+	if v is Dictionary:
+		var d := {}
+		for k: Variant in v:
+			d[str(k)] = _plain(v[k])
+		return d
+	if v is Array or v is PackedInt32Array or v is PackedFloat32Array:
+		var a := []
+		for x: Variant in v:
+			a.append(_plain(x))
+		return a
+	if v is float:
+		return snappedf(v, 0.01)
+	return v
 
 
 ## One machine-readable line (prefix BALANCE_JSON) with the headline numbers.
