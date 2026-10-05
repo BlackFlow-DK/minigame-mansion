@@ -2,7 +2,8 @@ class_name BlobBall
 extends Minigame
 ## Blob Ball. Two teams, one huge light beach ball, two goals. Walk into the ball to nudge
 ## it, shove it to launch it. First to 3 goals wins, else most goals at 50 s; a draw then goes
-## to a 15 s golden goal, and if nobody scores it is a tie (everyone one tied group).
+## to a 25 s golden goal (the ball rolls further, bots all attack), and if nobody scores it is a
+## tie (everyone one tied group). A lone blob (1 v 2) starts 1-0 up.
 ##
 ## Teams: `assign_teams(2)` in `_setup` (host). Team 0 (ORANGE) defends the left goal (x < 0)
 ## and attacks +X; team 1 (BLUE) the other way. With an odd player count the smaller team's
@@ -64,10 +65,11 @@ const GOAL_WIDTHS: Array[float] = [4.4, 4.6, 4.8]
 # --- Rules -----------------------------------------------------------------------------------
 ## Balance (bots, 48 rounds a cell): 90 s + 20 s golden goal ran 4-8 player rounds 92-101 s on
 ## average (1.9-2.4 goals); 60 s + 15 s with the wider GOAL_WIDTHS ~69-71 s; 50 s + 15 s
-## ~58-61 s (median 58). First to 2 instead allowed 15 s blowouts. docs/balance-v03-a.md.
+## ~58-61 s (median 58) but 13-31 % all-tied rounds; the golden goal is now 25 s and sharper
+## (see golden_*). First to 2 instead allowed 15 s blowouts. docs/balance-v03-a.md.
 @export var match_time: float = 50.0
 @export var goals_to_win: int = 3
-@export var golden_goal_time: float = 15.0
+@export var golden_goal_time: float = 25.0
 ## Seconds everyone is frozen after a goal (the celebration), then the kick-off reset.
 @export var celebrate_time: float = 2.0
 ## Seconds frozen at the kick-off spots before play resumes.
@@ -88,6 +90,18 @@ const GOAL_WIDTHS: Array[float] = [4.4, 4.6, 4.8]
 ## bots' smaller side wins ~1 in 3 decided odd-count rounds, 1 v 2 about 1 in 4; scaling the
 ## bonus with the size ratio, up to x1.41 for a 1 v 2, did not move that.)
 @export var small_team_kick_bonus: float = 1.15
+## Golden goal: shoves launch the ball up to (1 + this) times harder by its end (linear ramp),
+## so a level match gets decided.
+@export var golden_kick_boost: float = 0.0
+## Golden goal: the ball's rolling slow-down is scaled by this (it rolls further, into goals).
+@export var golden_roll_scale: float = 0.4
+## Bots, golden goal: nobody stays back as keeper (all-out attack).
+@export var golden_all_attack: bool = true
+## Uneven teams: a team of ONE (3 players, 1 v 2) starts with this many goals. Balance (bots):
+## the lone blob's side won 22-27 % of decided 1 v 2 rounds even with a x1.41 kick; with a 1-0
+## head start 50 %. 2 v 3 and 3 v 4 keep only `small_team_kick_bonus` (a head start there put
+## the smaller side at 61-74 %).
+@export var lone_blob_head_start: int = 1
 ## A ball coming in faster than this (m/s) bumps the blob it hits.
 @export var bump_speed: float = 6.0
 @export var bump_scale: float = 0.55
@@ -233,6 +247,9 @@ func _start() -> void:
 	clock = 0.0
 	golden = false
 	score = [0, 0]
+	var short := short_team()
+	if short >= 0 and team_slots(short).size() == 1:
+		score[short] = lone_blob_head_start
 	goals_by_slot.clear()
 	for p in players:
 		if is_instance_valid(p):
@@ -462,11 +479,20 @@ func _process_kicks(delta: float) -> void:
 			if _is_host():
 				_host_kick(slot, p.facing)
 			else:
-				sim.kick(ball, p.facing, kick_power(slot))
+				_kick_ball(slot, p.facing)
 				_hold_states = own_touch_hold
 				_rpc_kick_request.rpc_id(1, slot, p.global_position, p.facing)
 		elif _kick_open[slot] <= 0.0:
 			_kick_open.erase(slot)
+
+
+## The smaller team's index with an odd split, else -1 (every peer: teams are replicated).
+func short_team() -> int:
+	if not has_teams():
+		return -1
+	var a := team_slots(0).size()
+	var b := team_slots(1).size()
+	return -1 if a == b else (0 if a < b else 1)
 
 
 ## Shove strength factor of `slot` (the smaller team's shoves are a bit stronger).
@@ -477,9 +503,27 @@ func kick_power(slot: int) -> float:
 	return small_team_kick_bonus if team_slots(t).size() < team_slots(1 - t).size() else 1.0
 
 
+## Golden goal: how much of it has run (0..1), 0 outside it.
+func golden_progress() -> float:
+	if not golden or golden_goal_time <= 0.0:
+		return 0.0
+	return clampf((clock - match_time) / golden_goal_time, 0.0, 1.0)
+
+
+## A shove by `slot` on the ball along `facing` (every peer that applies one): its kick power,
+## and in golden goal up to (1 + golden_kick_boost) times the speed with the normal lift (so the
+## harder shot stays under the crossbar).
+func _kick_ball(slot: int, facing: Vector3) -> void:
+	var g := 1.0 + golden_kick_boost * golden_progress()
+	var lift := sim.kick_lift
+	sim.kick_lift = lift / g
+	sim.kick(ball, facing, kick_power(slot) * g)
+	sim.kick_lift = lift
+
+
 ## Host: a shove on the ball by `slot` along `facing`.
 func _host_kick(slot: int, facing: Vector3) -> void:
-	sim.kick(ball, facing, kick_power(slot))
+	_kick_ball(slot, facing)
 	_note_touch(slot)
 	_rpc_kicked.rpc(slot, ball.pos, ball.vel, ball.spin, clock)
 	request_bot_rethink()
@@ -612,6 +656,7 @@ func _rpc_resume(t: float) -> void:
 func _rpc_golden(t: float) -> void:
 	golden = true
 	clock = t
+	sim.roll_decel *= golden_roll_scale  # every peer simulates the ball
 	RoundUI.push_banner("GOLDEN GOAL! Next goal wins", 2.5)
 	Sfx.play(&"countdown_go")
 	_refresh_scoreboard()
@@ -835,7 +880,7 @@ func bot_role(player: Player, team: int) -> Role:
 		return _flat(a.global_position).distance_to(approach) < _flat(c.global_position).distance_to(approach))
 	var chasers := 1 if n <= 2 else 2
 	var att := attack_dir(team)
-	if b.x * att < 0.0:
+	if b.x * att < 0.0 and not (golden and golden_all_attack):
 		var own_goal := Vector3(-att * sim.half_length, 0.0, 0.0)
 		var keeper: Player = null
 		var best := INF

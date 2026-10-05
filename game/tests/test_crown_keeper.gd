@@ -397,9 +397,31 @@ func test_wearer_leaving_sends_the_crown_home() -> void:
 func test_rank_by_points_and_tie_break() -> void:
 	var slots: Array[int] = [0, 1, 2, 3]
 	var ranking := CrownKeeper.rank_by_points(slots, {0: 5, 1: 9, 2: 5, 3: 0}, {0: 10.0, 1: 30.0, 2: 41.0, 3: -1.0})
-	assert_eq(ranking, [1, 2, 0, 3] as Array[int], "points, then who wore it last")
+	assert_eq(ranking, [[1], [2], [0], [3]], "points, then who wore it last")
 	ranking = CrownKeeper.rank_by_points(slots, {0: 0, 1: 0, 2: 0, 3: 0}, {0: -1.0, 1: -1.0, 2: -1.0, 3: -1.0})
-	assert_eq(ranking, [0, 1, 2, 3] as Array[int], "nobody scored: by slot")
+	assert_eq(ranking, [[0, 1, 2, 3]], "nobody scored: one tied group, not slot order")
+	ranking = CrownKeeper.rank_by_points(slots, {0: 5, 1: 0, 2: 0, 3: 3}, {0: 10.0, 1: -1.0, 2: -1.0, 3: 5.0})
+	assert_eq(ranking, [[0], [3], [1, 2]], "the two who never wore it share last place")
+
+
+## A leaver is recorded; when it leaves one player the round ends through end_round on every peer
+## (round_over, the winner's moment), with the leavers last (latest first).
+func test_leavers_end_the_round_through_end_round() -> void:
+	var ps := spawn_arena(3, ID)
+	var mg := _mg()
+	var over := watch(mg, &"round_over")
+	mg.give_crown(1)
+	await step(80)
+	mg.knock_out(ps[1])  # the wearer leaves
+	assert_false(mg.is_finished(), "two left: the round goes on")
+	await step(2)
+	assert_eq(mg.crown_state, CrownKeeper.CrownState.THRONE, "the leaver's crown went home")
+	mg.knock_out(ps[2])
+	assert_true(mg.is_finished(), "one left: the round ended")
+	assert_eq(over.size(), 1, "round_over once (end_round ran)")
+	assert_eq(mg.finish_groups, [[0], [2], [1]], "the stayer, then the leavers, latest first")
+	assert_eq(mg.final_ranking, [0, 2, 1] as Array[int], "every peer gets the ranking")
+	assert_near(mg.finish_grace, mg.end_grace, 0.001, "the winner's moment")
 
 
 func test_round_ends_at_the_time_limit_with_a_ranking() -> void:

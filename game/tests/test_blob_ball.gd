@@ -74,6 +74,27 @@ func test_small_pitch_and_odd_teams() -> void:
 	assert_near(mg.kick_power(mg.team_slots(1 - small)[0]), 1.0, 0.001, "bigger team normal")
 
 
+## Uneven teams: a lone blob (1 v 2) starts a goal up; golden goal: the ball rolls further and
+## a harder golden shove keeps the normal lift.
+func test_lone_blob_head_start_and_sharper_golden_goal() -> void:
+	spawn_arena(3, ID)
+	var mg := _mg()
+	var lone := mg.short_team()
+	assert_true(lone >= 0 and mg.team_slots(lone).size() == 1, "3 players: a lone blob")
+	assert_eq(mg.score[lone], mg.lone_blob_head_start, "the lone blob's side starts a goal up")
+	assert_eq(mg.score[1 - lone], 0, "the pair starts at 0")
+	var roll := mg.sim.roll_decel
+	mg._rpc_golden(mg.match_time)
+	assert_near(mg.sim.roll_decel, roll * mg.golden_roll_scale, 0.0001, "golden goal: the ball rolls further")
+	mg.golden_kick_boost = 0.5
+	mg.clock = mg.match_time + mg.golden_goal_time  # the end of the golden goal: full boost
+	var s := mg.team_slots(1 - lone)[0]
+	mg.ball = mg.sim.kickoff_state()
+	mg._kick_ball(s, Vector3.RIGHT)
+	assert_near(mg.ball.vel.x, mg.sim.kick_speed * 1.5, 0.01, "1.5x the shot speed")
+	assert_near(mg.ball.vel.y, mg.sim.kick_lift, 0.01, "the normal lift (under the bar)")
+
+
 func test_teams_split_evenly_for_every_count() -> void:
 	for n: int in [2, 4, 6]:
 		var ids: Array[int] = []
