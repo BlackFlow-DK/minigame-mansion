@@ -331,3 +331,41 @@ func test_a_driven_bot_leaving_mid_round_is_fine() -> void:
 	assert_eq(mg.players.size(), 3, "leaver removed")
 	assert_eq(mg.knocked_out, [3], "leaver knocked out")
 	assert_false(mg.is_finished(), "three still play")
+
+
+# --- Review fixes ----------------------------------------------------------------------------
+
+## Mutators reach the players only, never the NPC dancers: every size and movement mutator is
+## blocked (the script default, as Session reads it), so no human stands out of the crowd.
+func test_mutators_that_unmask_are_blocked() -> void:
+	var blocked: Array = Session._blocklist_for(ID)
+	for id: StringName in [&"giant", &"tiny", &"turbo", &"slippery", &"heavy"]:
+		assert_true(blocked.has(id), "%s blocked" % id)
+		assert_true(Mutators.has(id), "%s is a real mutator id" % id)
+	for id: StringName in Mutators.allowed(blocked):
+		var m := Mutators.get_mutator(id)
+		assert_near(m.body_scale, 1.0, 0.001, "allowed %s keeps the body size" % id)
+		for key: String in m.stats:
+			# air control only matters in a jump (a jump gives a player away anyway)
+			var walking := key.begins_with("movement:") and key != "movement:air_accel"
+			assert_false(walking or key.begins_with("status:"),
+				"allowed %s changes no walking or knockback (%s)" % [id, key])
+
+
+## A leaver that leaves one unfound player ends the round through the minigame's own finish:
+## the end grace, survivors first, the leaver after the unmasked.
+func test_leaver_ends_the_round_with_the_grace_and_the_ranking() -> void:
+	var mg := await _arena(3, {"tags": true})
+	_put(players[0], Vector3(0.0, 0.0, 0.0))
+	_put(players[1], Vector3(1.0, 0.0, 0.0))
+	await _shove(players[0])
+	assert_true(mg.found.has(1), "P1 unmasked")
+	await step(int((mg.reveal_hold + 0.1) / physics_delta()))
+	assert_false(players[1].alive, "P1 out after the reveal")
+	assert_false(mg.is_finished(), "two unfound")
+	Net.remove_bot(2)
+	await step(2)
+	assert_true(mg.is_finished(), "one unfound left: over")
+	assert_eq(mg.finish_groups, [[0], [1], [2]], "winner, the unmasked, then the leaver")
+	assert_near(mg.finish_grace, mg.end_grace, 0.001, "with the end grace")
+	assert_true(mg.over, "the round-over RPC ran")

@@ -68,6 +68,8 @@ const BALL_MESH_R := 0.24
 const TRAIL := 4
 const TRAIL_GAP := 0.024
 const CARRY_Y := 1.32
+## Name tag lift (m) while a ball is held over the head (NameTag.raise), so the name clears it.
+const CARRY_TAG_RAISE := 0.6
 const BALL_COLOR := Color(0.97, 0.99, 1.0)
 const TRAIL_COLOR := Color(0.62, 0.84, 1.0)
 
@@ -176,6 +178,8 @@ var _host_last_throw: Dictionary[int, float] = {}
 var _host_snowed_until: Dictionary[int, float] = {}
 var _host_invuln_until: Dictionary[int, float] = {}
 var _dev_snow_slot: int = -1
+## Dev (`--snow-closeup`, screenshots): slot 0 gets a ball at GO and the camera looks at it up close.
+var _closeup: bool = false
 # Visuals.
 var _ball_pool: Array = []
 var _ball_mat: StandardMaterial3D
@@ -202,6 +206,8 @@ func _ready() -> void:
 			_dev_snow_slot = arg.trim_prefix("--snow-snowed=").to_int()
 		elif arg.begins_with("--snow-time-scale="):
 			time_scale = maxf(arg.trim_prefix("--snow-time-scale=").to_float(), 0.01)
+		elif arg == "--snow-closeup":
+			_closeup = true
 	var built := SnowYard.build($Yard as Node3D, Look.is_low())
 	_lights.assign(built["lights"])
 	_ball_mat = Look.toon_material(BALL_COLOR, 0.5).duplicate() as StandardMaterial3D
@@ -264,6 +270,8 @@ func _start() -> void:
 		return
 	_ai_base_seed = ai_seed if ai_seed >= 0 else randi() % 1000000
 	begin(start_time)
+	if _closeup and _player(0) != null:
+		_rpc_scoop.rpc(0, _sim)  # dev: a ready ball in hand for the close-up
 
 
 ## Host: (re)starts both clocks on every peer, the round clock at `t0`.
@@ -322,12 +330,29 @@ func end_round() -> void:
 	finish(groups, end_grace)
 
 
+## Host: a player who left mid-round (Stage knocks them out, then removes them). Recorded and
+## out like the base does, but when one player (or none) is left the round ends through
+## end_round (points ranking, the end RPC on every peer), not the base's flat ranking.
+func knock_out(player: Player, reason: StringName = &"") -> void:
+	if is_finished() or player == null or not player.alive or player.is_extra:
+		super(player, reason)
+		return
+	knocked_out.append(player.slot)
+	player.eliminate(reason if reason != &"" else &"knocked_out")
+	var left := 0
+	for p in players:
+		if is_instance_valid(p) and p.alive and not p.is_extra:
+			left += 1
+	if left <= 1:
+		end_round()
+
+
 ## The ranking as tied groups: points (more first), then fewer snow-ins, then the earlier last
-## hit; blobs equal on all three share a place.
+## hit; blobs equal on all three share a place. Players who left come last (last out first).
 func ranking_groups() -> Array:
 	var slots: Array[int] = []
 	for p in players:
-		if is_instance_valid(p) and not p.is_extra:
+		if is_instance_valid(p) and not p.is_extra and not knocked_out.has(p.slot):
 			slots.append(p.slot)
 	slots.sort_custom(func(a: int, b: int) -> bool:
 		var c := _compare(a, b)
@@ -339,6 +364,9 @@ func ranking_groups() -> Array:
 		else:
 			var g: Array[int] = [s]
 			groups.append(g)
+	for i in range(knocked_out.size() - 1, -1, -1):
+		var gone: Array[int] = [knocked_out[i]]
+		groups.append(gone)
 	return groups
 
 
@@ -656,12 +684,33 @@ func _update_speeds() -> void:
 			var mv := p.get_component(&"movement") as MovementComponent
 			if mv and _base_speed.has(slot):
 				mv.max_speed = _base_speed[slot] * f
-		var kind: StringName = &"snowball" if a > 0 else &""
-		if _carry_kind.get(slot, &"") != kind:
-			_carry_kind[slot] = kind
-			var vis := p.get_component(&"visuals")
-			if vis and vis.has_method(&"set_carry_pose"):
-				vis.call(&"set_carry_pose", kind)
+		_set_carry(p, &"overhead" if a > 0 and p.alive else &"none")
+
+
+## Every peer: `p`'s carry pose (VisualsComponent.CARRY_KINDS: &"overhead" while it holds a
+## ball, &"none" otherwise); sent to the visuals only when it changes.
+func _set_carry(p: Player, kind: StringName) -> void:
+	if not is_instance_valid(p) or _carry_kind.get(p.slot, &"none") == kind:
+		return
+	_carry_kind[p.slot] = kind
+	var vis := p.get_component(&"visuals") as VisualsComponent
+	if vis:
+		vis.set_carry_pose(kind)
+	var tag := NameTag.of(p)
+	if tag:
+		tag.raise = CARRY_TAG_RAISE if kind != &"none" else 0.0
+
+
+## Every peer: every carry pose this minigame set goes back to none (round over, leaving the tree).
+func _clear_carry() -> void:
+	for p in players:
+		if is_instance_valid(p) and _carry_kind.get(p.slot, &"none") != &"none":
+			_set_carry(p, &"none")
+	_carry_kind.clear()
+
+
+func _exit_tree() -> void:
+	_clear_carry()
 
 
 func _start_blizzard() -> void:
@@ -743,6 +792,10 @@ func _rpc_launch(id: int, slot: int, origin: Vector3, dir: Vector3, t0: float, a
 		var vis := p.get_component(&"visuals")
 		if vis and vis.has_method(&"play_throw"):
 			vis.call(&"play_throw")
+		# play_throw ended the carry pose: with balls left, _update_speeds sets it again (the
+		# throw action shows over it until it is done).
+		if _carry_kind.has(slot):
+			_carry_kind[slot] = &"none"
 	ball_launched.emit(id, slot)
 
 
@@ -848,6 +901,7 @@ func _rpc_pile_taken(slot: int, new_ammo: int) -> void:
 func _rpc_end(winners: Array) -> void:
 	_running = false
 	_ended = true
+	_clear_carry()  # hands down for the cheer and the results (the carried balls hide too)
 	for s: Variant in winners:
 		var p := _player(int(s))
 		if p == null or not p.alive or is_snowed(p.slot):
@@ -922,6 +976,12 @@ func _process(delta: float) -> void:
 				mi.position = b.position(sk)
 	_update_carry()
 	_update_shields()
+	if _closeup and _camera and _player(0) != null:
+		_camera.mode = ArenaCamera.Mode.FIXED
+		_camera.min_distance = 2.0
+		_camera.fixed_focus = _player(0).global_position + Vector3(0.0, 0.9, 0.0)
+		_camera.fixed_distance = 4.2
+		_camera.pitch_degrees = 22.0
 	if _pile and _pile.visible:
 		_pile.rotation.y = _anim * 0.6
 		_pile.position.y = 0.04 * absf(sin(_anim * 3.0))
@@ -934,7 +994,7 @@ func _update_carry() -> void:
 		var slot := p.slot
 		var n := mini(ammo_of(slot), 3)
 		var c: Node3D = _carry.get(slot)
-		if n <= 0 or not p.alive or is_snowed(slot):
+		if n <= 0 or not p.alive or is_snowed(slot) or _ended:
 			if c:
 				c.visible = false
 			continue
@@ -944,7 +1004,13 @@ func _update_carry() -> void:
 		var grow := 1.0
 		if _sim_vis < ready_at.get(slot, 0.0) and scoop_time > 0.0:
 			grow = clampf(1.0 - (ready_at[slot] - _sim_vis) / scoop_time, 0.15, 1.0)
-		c.global_position = p.global_position + Vector3(0.0, CARRY_Y + 0.04 * sin(_anim * 5.0 + slot), 0.0)
+		# On the raised hands (the overhead carry pose; follows size, hat and bob), else a fixed
+		# height over the feet.
+		var vis := p.get_component(&"visuals") as VisualsComponent
+		if vis and vis.get_carry_pose() == &"overhead":
+			c.global_position = vis.get_carry_point()
+		else:
+			c.global_position = p.global_position + Vector3(0.0, CARRY_Y + 0.04 * sin(_anim * 5.0 + slot), 0.0)
 		c.rotation.y = atan2(p.facing.x, p.facing.z)
 		for k in c.get_child_count():
 			var mi := c.get_child(k) as Node3D

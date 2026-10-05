@@ -418,3 +418,72 @@ func test_bot_hooks() -> void:
 	var goal := mg.get_bot_goal(players[1])
 	assert_true(mg.is_safe(goal), "a bot goal is walkable (%s)" % goal)
 	assert_near(mg.bot_aggression_scale, 0.0, 0.001, "bots never shove")
+
+
+# --- Carry pose and leavers (review fixes) ------------------------------------------------------
+
+## Holding a ball shows the overhead carry pose (a valid VisualsComponent kind) with the ball on
+## the raised hands; a throw that leaves balls in hand keeps it; empty hands and the round end
+## put the hands down.
+func test_carry_pose_while_holding_a_ball() -> void:
+	var mg: SnowballFight = await _arena(2)
+	var p := players[0]
+	_put(p, Vector3(-3.0, 0.0, 0.0), Vector3.RIGHT)
+	await step(3)
+	var vis := p.get_component(&"visuals") as VisualsComponent
+	assert_eq(vis.get_carry_pose(), &"none", "empty hands: no carry pose")
+	await _arm(mg, p)
+	await step(2)
+	assert_eq(vis.get_carry_pose(), &"overhead", "holding a ball: overhead")
+	var c: Node3D = mg._carry.get(0)
+	if assert_true(c != null and c.visible, "the carried ball shows"):
+		assert_near(c.global_position, vis.get_carry_point(), 0.01, "on the raised hands")
+	assert_true(mg.press(p), "throw")
+	await step(2)
+	assert_eq(vis.get_carry_pose(), &"none", "thrown, hands empty: pose off")
+	# Three balls from the pile: the pose comes back after a throw while balls are left.
+	mg._rpc_pile_taken(0, 3)
+	await step(2)
+	assert_eq(vis.get_carry_pose(), &"overhead", "pile balls: overhead")
+	await step(20)
+	assert_true(mg.press(p), "throw one of three")
+	await step(2)
+	assert_eq(mg.ammo_of(0), 2, "two left")
+	assert_eq(vis.get_carry_pose(), &"overhead", "still carrying after the throw")
+	mg.end_round()
+	await step(2)
+	assert_eq(vis.get_carry_pose(), &"none", "round over: hands down")
+	assert_false(c.visible, "carried balls hidden at the end")
+
+
+## Leaving the tree mid-round (stage cleared) takes the carry pose off too.
+func test_carry_pose_cleared_when_the_minigame_leaves() -> void:
+	var mg: SnowballFight = await _arena(2)
+	var p := players[0]
+	_put(p, Vector3(-3.0, 0.0, 0.0), Vector3.RIGHT)
+	await step(3)
+	await _arm(mg, p)
+	await step(2)
+	var vis := p.get_component(&"visuals") as VisualsComponent
+	assert_eq(vis.get_carry_pose(), &"overhead", "carrying")
+	stage.minigame = null
+	stage.remove_child(mg)
+	assert_eq(vis.get_carry_pose(), &"none", "pose cleared when the minigame leaves")
+	mg.queue_free()
+
+
+## A leaver that leaves one player ends the round through end_round: points ranking with the
+## leaver last, the end grace and the end RPC (every peer stops), not the base's flat finish.
+func test_leavers_end_the_round_through_end_round() -> void:
+	var mg: SnowballFight = await _arena(3)
+	mg.scores[2] = 3
+	Net.remove_bot(1)
+	await step(2)
+	assert_false(mg.is_finished(), "two left: the round goes on")
+	assert_eq(mg.knocked_out, [1] as Array[int], "leaver recorded")
+	Net.remove_bot(2)
+	await step(2)
+	assert_true(mg.is_finished(), "one left: over")
+	assert_eq(mg.finish_groups, [[0], [2], [1]], "the one who stayed, then the leavers, last out first")
+	assert_near(mg.finish_grace, mg.end_grace, 0.001, "with the end grace")
+	assert_false(mg.is_running(), "the end RPC ran")

@@ -639,6 +639,22 @@ func _close_drop_group() -> void:
 	_drop_group.clear()
 
 
+## Host: a player who left mid-round (Stage knocks them out, then removes them). Recorded as
+## the earliest out (they rank last) and out as in the base, but when that leaves one player
+## (or none) the round ends through `_end_round`: the tied DROP groups keep their places and
+## every peer gets the end RPC (winner banner, freeze), unlike the base's flat finish.
+func knock_out(player: Player, reason: StringName = &"") -> void:
+	if is_finished() or player == null or not player.alive or player.is_extra:
+		super(player, reason)
+		return
+	knocked_out.append(player.slot)
+	var g: Array[int] = [player.slot]
+	out_groups.insert(0, g)
+	player.eliminate(reason if reason != &"" else &"knocked_out")
+	if _alive_count() <= _end_count():
+		_end_round()
+
+
 ## Players alive at which the round ends: 1, or 0 when playing alone.
 func _end_count() -> int:
 	return 1 if players.size() > 1 else 0

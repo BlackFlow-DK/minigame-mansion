@@ -405,3 +405,45 @@ func test_is_safe_and_bot_goals() -> void:
 		assert_true(c >= 0 and g.layout[c] == g.target, "P%d's goal is a target tile" % p.slot)
 		cells[c] = true
 	assert_true(cells.size() >= 5, "8 bots spread over the 8 targets (%d tiles used)" % cells.size())
+
+
+# --- Leavers (review fixes) ----------------------------------------------------------------------
+
+## Two fall together in one DROP (a tied group), then a leaver leaves one standing: the round
+## ends through the minigame's own end, keeping the tied group, the leaver last, the end RPC
+## (winner banner, round_over) and the grace; not the base's flat ranking.
+func test_leaver_ends_the_round_keeping_the_tied_groups() -> void:
+	var ps := _spawn(4)
+	var g := _game()
+	var over := watch(g, &"round_over")
+	assert_true(await _until(_phase_is(PortraitPanic.Phase.SHOW)), "SHOW comes")
+	var wrong := _non_target_cells()
+	var targets := g.target_cells()
+	_put(ps[0], targets[0])
+	_put(ps[1], targets[1])
+	_put(ps[2], wrong[3])
+	_put(ps[3], wrong[9])
+	assert_true(await _until(func() -> bool: return not ps[2].alive and not ps[3].alive, 60 * 12), "two fell")
+	assert_true(await _until(_phase_is(PortraitPanic.Phase.SHUFFLE)), "the DROP closes")
+	assert_false(g.is_finished(), "two still stand")
+	Net.remove_bot(1)
+	await step(2)
+	assert_true(g.is_finished(), "one left: over")
+	assert_eq(str(g.finish_groups), str([[0], [2, 3], [1]]), "the survivor, the tied fallers, the leaver last")
+	assert_near(g.finish_grace, g.end_grace, 0.001, "with the end grace")
+	assert_eq(over.size(), 1, "the end RPC ran")
+	if not over.is_empty():
+		assert_eq(Array(over[0][0]), [0], "P0 wins")
+	assert_eq(g.phase, PortraitPanic.Phase.OVER, "phase over on this peer")
+
+
+## A leaver while others are still in: recorded, the round goes on.
+func test_leaver_with_several_left_is_recorded() -> void:
+	_spawn(3)
+	var g := _game()
+	await step(10)
+	Net.remove_bot(2)
+	await step(2)
+	assert_false(g.is_finished(), "two left: on")
+	assert_eq(g.knocked_out, [2] as Array[int], "recorded")
+	assert_eq(str(g.out_groups), str([[2]]), "an out group of its own")
