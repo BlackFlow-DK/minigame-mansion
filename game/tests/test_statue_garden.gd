@@ -249,11 +249,15 @@ func test_bot_goals_go_up_the_lane_then_stand_still() -> void:
 	await step(2)
 	var g := mg.get_bot_goal(ps[1])
 	assert_true(absf(g.x) > 1.6 and mg.is_safe(g), "round the fountain: %s" % g)
-	# Close to the statue: straight at the plinth face.
+	# Close to the statue: straight at the plinth face, aiming into it (so the bot does not count
+	# its goal reached and stop short of the touch distance).
 	_place(ps[2], Vector3(5.0, 0.0, -9.5))
 	await step(2)
 	g = mg.get_bot_goal(ps[2])
-	assert_near(g.z, StatueGarden.STATUE_POS.z + StatueGarden.PLINTH_HALF.y + 0.05, 0.01, "at the plinth face")
+	var face := StatueGarden.STATUE_POS.z + StatueGarden.PLINTH_HALF.y
+	assert_near(g.z, face - StatueGarden.BOT_TOUCH_PUSH, 0.01, "into the plinth face")
+	assert_true(face + StatueGarden.TOUCH_DIST - 0.4 - g.z > BotBrain.ARRIVE_RADIUS,
+		"a blob pressed against the face (centre 0.4 m out) is still short of the goal: it keeps walking")
 	assert_true(absf(g.x) < StatueGarden.PLINTH_HALF.x, "within the plinth's width")
 	# WARNING and RED: every bot is told to hold (its brain stops after its own hold reaction);
 	# GREEN lets them go again.
@@ -265,9 +269,30 @@ func test_bot_goals_go_up_the_lane_then_stand_still() -> void:
 	assert_true(await _reach(mg, StatueGarden.Phase.RED), "RED")
 	for p in ps:
 		assert_true(mg.bot_should_hold(p), "P%d: hold in RED" % p.slot)
-	assert_near(mg.bot_reaction_scale, 1.0, 0.001, "hold reactions at the real clock")
+	assert_near(mg.bot_reaction_scale, mg.bot_hold_reaction, 0.001, "hold reactions at the real clock")
 	assert_false(mg.is_safe(Vector3(7.0, 0.0, 0.0)), "the hedge is not safe")
 	assert_false(mg.is_safe(Vector3(0.0, 0.0, 15.5)), "behind the start hedge is not safe")
+
+
+## Balance: a race to the plinth, so body size does not change the tiptoe pace.
+func test_walk_pace_ignores_body_size() -> void:
+	var ps := spawn_arena(3, ID)
+	var mg := _mg()
+	assert_near(mg.size_speed_share, 0.0, 0.001, "no size speed on the lawn")
+	(ps[0].get_component(&"size") as SizeComponent).set_size_override("small")
+	(ps[2].get_component(&"size") as SizeComponent).set_size_override("big")
+	for i in 3:
+		_place(ps[i], Vector3(-4.0, 0.0, 11.5 - 1.5 * i))
+	await step(10)
+	await step(60, func(_i: int) -> void:
+		for p in ps:
+			p.intent.move = Vector2.RIGHT)
+	var run: Array[float] = []
+	for p in ps:
+		run.append(p.global_position.x + 4.0)
+	assert_near(run[0], run[1], 0.03, "small walks as far as normal (%s)" % str(run))
+	assert_near(run[2], run[1], 0.03, "big walks as far as normal (%s)" % str(run))
+	assert_near(run[1], StatueGarden.WALK_SPEED, 0.25, "at the tiptoe pace (%s)" % str(run))
 
 
 func test_lanes_are_shuffled_by_the_host() -> void:

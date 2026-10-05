@@ -26,6 +26,7 @@ static var _races: int = 0
 
 ## One bot-only race; returns {seconds, ranking, finish_times, falls}.
 func _race(count: int, seed_value: int, check: bool = true) -> Dictionary:
+	seed(seed_value * 7919 + count)  # the host's start-layout shuffle (global RNG) replays too
 	var ps := spawn_arena(count, ID, false)
 	var m := get_minigame() as MansionDash
 	m.course_seed = seed_value * 7 + 3

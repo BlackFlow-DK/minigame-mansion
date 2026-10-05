@@ -45,6 +45,9 @@ func test_scene_loads_with_8_safe_spawns() -> void:
 		assert_near(r, 6.5, 0.01, "every spawn the same distance from the throne")
 	assert_eq(mg.crown_state, CrownKeeper.CrownState.THRONE, "the crown starts on the throne")
 	assert_eq(mg.holder_slot, -1, "nobody wears it")
+	for p in ps:
+		var sz := p.get_component(&"size") as SizeComponent
+		print("DBG slot %d size %s max %.3f factor %.3f frozen %s pos %s" % [p.slot, sz.size_id, (p.get_component(&"movement") as MovementComponent).max_speed, sz.factor("speed"), p.frozen, p.global_position])
 	await step(30)
 	for i in ps.size():
 		assert_true(ps[i].is_on_floor(), "P%d stands on the floor" % i)
@@ -128,6 +131,41 @@ func test_wearer_is_slower_and_cannot_shove() -> void:
 	await step(2)
 	assert_near(_max_speed(ps[1]), base, 0.001, "speed back once the crown is off")
 	assert_true((ps[1].get_component(&"shove") as ShoveComponent).enabled, "shove back once the crown is off")
+
+
+## Distances `ps` run along +X in 1 s from three parallel lanes (clear of the dais and pillars).
+func _run_1s(ps: Array[Player]) -> Array[float]:
+	for i in ps.size():
+		_place(ps[i], Vector3(-4.0, 0.0, 5.5 + i))
+	await step(10)
+	await step(60, func(_i: int) -> void:
+		for p in ps:
+			p.intent.move = Vector2.RIGHT)
+	var out: Array[float] = []
+	for p in ps:
+		p.intent.move = Vector2.ZERO
+		out.append(p.global_position.x + 4.0)
+	return out
+
+
+## Balance: body size does not change run speed here (a pure chase), and every wearer runs at
+## the same crowned pace whatever its size.
+func test_run_speed_ignores_body_size() -> void:
+	var ps := spawn_arena(3, ID)
+	var mg := _mg()
+	assert_near(mg.size_speed_share, 0.0, 0.001, "no size speed in Crown Keeper")
+	(ps[0].get_component(&"size") as SizeComponent).set_size_override("small")
+	(ps[2].get_component(&"size") as SizeComponent).set_size_override("big")
+	var run := await _run_1s(ps)
+	assert_near(run[0], run[1], 0.05, "small runs as far as normal (%s)" % str(run))
+	assert_near(run[2], run[1], 0.05, "big runs as far as normal (%s)" % str(run))
+	mg.give_crown(2)
+	var crowned := await _run_1s(ps)
+	assert_near(crowned[2], crowned[1] * mg.wearer_speed_factor, 0.15, "a big wearer at the crowned pace (%s)" % str(crowned))
+	mg.knock_off(ps[2], Vector3.LEFT)
+	mg.give_crown(0)
+	crowned = await _run_1s(ps)
+	assert_near(crowned[0], crowned[1] * mg.wearer_speed_factor, 0.15, "a small wearer too (%s)" % str(crowned))
 
 
 func test_wearer_hat_hidden_under_the_crown_and_restored() -> void:
@@ -236,6 +274,9 @@ func test_shove_on_wearer_launches_the_crown_along_the_shove() -> void:
 		return
 	assert_eq(knocked[0][0], 1, "off P1")
 	assert_eq(mg.holder_slot, -1, "nobody wears it")
+	for p in ps:
+		var sz := p.get_component(&"size") as SizeComponent
+		print("DBG slot %d size %s max %.3f factor %.3f frozen %s pos %s" % [p.slot, sz.size_id, (p.get_component(&"movement") as MovementComponent).max_speed, sz.factor("speed"), p.frozen, p.global_position])
 	assert_eq(mg.crown_state, CrownKeeper.CrownState.LOOSE, "loose")
 	var land: Vector3 = knocked[0][1]
 	var off := land - victim_at
@@ -346,6 +387,9 @@ func test_wearer_leaving_sends_the_crown_home() -> void:
 	await step(2)
 	assert_eq(returned.size(), 1, "the crown went home")
 	assert_eq(mg.holder_slot, -1, "nobody wears it")
+	for p in ps:
+		var sz := p.get_component(&"size") as SizeComponent
+		print("DBG slot %d size %s max %.3f factor %.3f frozen %s pos %s" % [p.slot, sz.size_id, (p.get_component(&"movement") as MovementComponent).max_speed, sz.factor("speed"), p.frozen, p.global_position])
 
 
 # --- Ranking -------------------------------------------------------------------------------------------------

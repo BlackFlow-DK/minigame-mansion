@@ -97,6 +97,11 @@ try {
     if ($h.seed -lt 0) { throw 'no layout seed' }
     Write-Host "PASS same layout seed on all peers ($($h.seed))"
 
+    # Start layout: the host's shuffled spawn order, applied identically on every peer.
+    Assert-Same 'spawn layouts' @($All | ForEach-Object { "$($states[$_].layout)" })
+    if ("$($h.layout)" -eq '' -or @("$($h.layout)".Split(',')).Count -ne 4) { throw "no 4-slot spawn layout ($($h.layout))" }
+    Write-Host "PASS same spawn layout on all peers ($($h.layout))"
+
     # Hazard positions at the sampled round times: identical on every peer that reached them.
     $common = 0
     $logs = 0

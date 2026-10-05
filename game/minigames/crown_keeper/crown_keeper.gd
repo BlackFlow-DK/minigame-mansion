@@ -91,8 +91,17 @@ const INTEREST_EVERY := 0.2
 @export var points_per_second: float = 1.0
 ## The last this-many seconds score double.
 @export var double_window: float = 15.0
-## The wearer's run speed, as a fraction of normal.
+## The wearer's run speed, as a fraction of a NORMAL-size blob's, whatever its own size: the
+## crown weighs every wearer down to the same pace (balance: with the body size's speed on top,
+## a small wearer outran normal chasers and small blobs won 47 % of 4-player rounds, big 8 %).
 @export var wearer_speed_factor: float = 0.92
+## Share of the body size's speed factor that non-wearers keep here (1 = all of it, 0 = every
+## size runs at normal speed; shove, reach, jump and knockback still follow the size). A pure
+## chase: speed decides almost everything. Balance (4 / 8 players, mixed sizes, 48 rounds each,
+## wins small / normal / big): share 1 with a neutral wearer 30/31/14 % and 20/9/8 %; share 0.5
+## 31/19/25 % and 17/13/7 % (big still last on mean place); share 0 27/30/19 % and 15/7/16 %,
+## mean places within 0.04 of each other.
+@export var size_speed_share: float = 0.0
 ## Crown centre to the blob's capsule core (m) that counts as a touch.
 @export var pickup_reach: float = 0.95
 ## On the throne: anyone on the upper step within this flat distance (m) of the crown takes it.
@@ -165,6 +174,9 @@ var _dev_hold: float = 0.0
 ## Every peer: slots whose own hat is hidden (a look override) while they wear the royal crown.
 var _hat_hidden: Dictionary[int, bool] = {}
 var _interest_cd: float = 0.0
+## Host: per-round salt of the bots' chase tastes, drawn from `rng` at the first chase (so a
+## test that seeds `rng` after _start still replays the same round); -1 until then.
+var _taste_salt: int = -1
 
 @onready var _camera: ArenaCamera = get_node_or_null(^"ArenaCamera") as ArenaCamera
 
@@ -349,10 +361,14 @@ func _try_pickup() -> void:
 			continue
 		if not on_throne and p.slot == _blocked_slot and _loose_t < rewear_block:
 			continue
-		var d := touch_distance(p.global_position, centre)
+		# Measured to the blob's surface (normal-size equivalent): nearest wins a contested grab,
+		# and a big body cannot get its centre as close as a small one (balance: big blobs won
+		# 16 % of 4-player rounds, small 30 %, with run speeds already size-neutral).
+		var grow := _body_grow(p)
+		var d := touch_distance(p.global_position, centre) - grow
 		var ok := d <= pickup_reach
 		if on_throne and not ok and p.global_position.y >= DAIS_H2 - 0.1:
-			var flat := Vector2(p.global_position.x - centre.x, p.global_position.z - centre.z).length()
+			var flat := Vector2(p.global_position.x - centre.x, p.global_position.z - centre.z).length() - grow
 			ok = flat <= throne_reach
 			d = flat
 		if ok and d < best_d:
@@ -541,7 +557,10 @@ func _physics_process(_delta: float) -> void:
 		var wearing := p.slot == holder_slot and crown_state == CrownState.WORN and not _over
 		var move := p.get_component(&"movement") as MovementComponent
 		if move:
-			move.max_speed = _base_speed[p.slot] * (wearer_speed_factor if wearing else 1.0)
+			# The size component multiplies what is written here by the size's speed factor.
+			var s := _size_speed(p)
+			var k := (wearer_speed_factor if wearing else lerpf(1.0, s, size_speed_share)) / s
+			move.max_speed = _base_speed[p.slot] * k
 		var shove := p.get_component(&"shove") as ShoveComponent
 		if shove:
 			shove.enabled = not wearing
@@ -549,6 +568,18 @@ func _physics_process(_delta: float) -> void:
 			var vis := p.get_component(&"visuals") as VisualsComponent
 			if vis and vis.get_emote() == &"":
 				vis.play_emote(&"wave")
+
+
+## How much further `p`'s body reaches than a normal blob's (m, negative when smaller).
+func _body_grow(p: Player) -> float:
+	var size := p.get_component(&"size") as SizeComponent
+	return BLOB_RADIUS * (size.body_scale - 1.0) if size else 0.0
+
+
+## The speed factor `p`'s body size applies now (1 while frozen).
+func _size_speed(p: Player) -> float:
+	var size := p.get_component(&"size") as SizeComponent
+	return maxf(size.factor("speed"), 0.01) if size else 1.0
 
 
 ## Faces: the wearer beams; everyone else watches the crown. The wearer's own hat comes off
@@ -763,7 +794,10 @@ func _throne_goal(me: Player) -> Vector3:
 
 func _chase_goal(me: Player, h: Player) -> Vector3:
 	# Each bot leads the wearer by its own amount, so they come at it from different sides.
-	var lead := 0.2 + 0.35 * _hash01(me.slot * 7919 + crown_changes * 104729)
+	# Salted per round: unsalted, a slot led by the same amounts every round.
+	if _taste_salt < 0:
+		_taste_salt = rng.randi() % 1000003
+	var lead := 0.2 + 0.35 * _hash01(me.slot * 7919 + crown_changes * 104729 + _taste_salt)
 	var aim := h.global_position + h.velocity * lead
 	var to := aim - me.global_position
 	to.y = 0.0
