@@ -227,11 +227,40 @@ func test_early_finish_with_one_player_left() -> void:
 	Session.start_session(3)
 	if not assert_true(await _wait_state(S.State.PLAYING), "PLAYING"):
 		return
+	_finish([1, 0])
+	if not assert_true(await _wait_state(S.State.PLAYING), "round 2 PLAYING"):
+		return
 	Net.remove_bot(1)
 	assert_eq(Session.state, S.State.PODIUM, "straight to PODIUM")
-	assert_eq(finishes.size(), 0, "unfinished round not scored")
+	assert_eq(finishes.size(), 1, "only the finished round is scored")
 	assert_eq(ends, [[[0]]], "final ranking of who is left")
+	assert_eq(Session.scores, {0: 2, 1: 3} as Dictionary[int, int], "this session's totals")
 	assert_true(await _wait_state(S.State.LOBBY), "then LOBBY")
+
+
+## Too few players before the first round is scored: nothing to rank, no session coins, LOBBY
+## (INTRO and PLAYING of round 1; the launch beat cancels itself, see test_preload).
+func test_too_few_players_before_the_first_result_returns_to_the_lobby() -> void:
+	_offline(2)
+	var ends := _rec(Session.session_finished)
+	var states := _rec(Session.state_changed)
+	var coins := Progression.coins
+	for wait_for: int in [S.State.INTRO, S.State.PLAYING]:
+		Session.scores = {0: 30, 1: 12}  # the last session's, kept for the lobby UI
+		Session.round_wins = {0: 5, 1: 2}
+		Session.start_session(3)
+		if not assert_true(await _wait_state(wait_for), "state %d" % wait_for):
+			return
+		assert_eq(Session.scores, {0: 0, 1: 0} as Dictionary[int, int], "the new session starts at 0")
+		Net.remove_bot(1)
+		assert_eq(Session.state, S.State.LOBBY, "LOBBY, not the podium (left in %d)" % wait_for)
+		assert_false(Net.session_in_progress, "joiners welcome again")
+		await step(5)
+		assert_eq(Session.state, S.State.LOBBY, "stays in the lobby")
+		Net.add_bot()
+	assert_eq(ends.size(), 0, "no session_finished")
+	assert_false(states.has([S.State.PODIUM]), "never PODIUM")
+	assert_eq(Progression.coins, coins, "no session coins")
 
 
 func test_start_ignored_outside_lobby_and_when_too_few() -> void:
