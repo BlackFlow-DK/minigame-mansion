@@ -126,6 +126,8 @@ var summit_slot: int = -1
 var drown_groups: Array = []
 ## Host: slot -> round time it drowned.
 var drown_times: Dictionary[int, float] = {}
+## Host: slots that left the round (disconnected), in order.
+var left_slots: Array[int] = []
 
 var _t: float = 0.0
 var _t_vis: float = 0.0
@@ -216,6 +218,7 @@ func _setup(setup_players: Array[Player]) -> void:
 	summit_slot = -1
 	drown_groups.clear()
 	drown_times.clear()
+	left_slots.clear()
 	_route_alt.clear()
 	_heights.clear()
 	for p in setup_players:
@@ -319,6 +322,26 @@ func _drown(sinking: Array[Player]) -> void:
 		p.eliminate(&"drowned")
 	group.sort()
 	drown_groups.append(group)
+	_end_if_last()
+
+
+## Host: a player left (Stage knocks it out): recorded in `left_slots` (ranked after everyone,
+## latest leaver first) and the round ends through the tide's own end (`_end_if_last`: tied
+## drown groups, the celebration) instead of the base class's flat ranking.
+func knock_out(player: Player, reason: StringName = &"") -> void:
+	if is_finished() or player == null or not player.alive or player.is_extra:
+		super(player, reason)
+		return
+	knocked_out.append(player.slot)
+	left_slots.append(player.slot)
+	player.eliminate(reason if reason != &"" else &"knocked_out")
+	_end_if_last()
+
+
+## Host: ends the round once nobody, or one blob of several, is left dry.
+func _end_if_last() -> void:
+	if is_finished():
+		return
 	var alive := 0
 	for p in players:
 		if _live(p):
@@ -339,7 +362,10 @@ func current_ranking() -> Array:
 			"roof_t": roof_times.get(p.slot, -1.0) if TideTower.on_roof(pos) else -1.0,
 		}
 	var summit := summit_slot if survivors.has(summit_slot) else -1
-	return TideTower.rank(survivors, summit, drown_groups)
+	var groups := TideTower.rank(survivors, summit, drown_groups)
+	for i in range(left_slots.size() - 1, -1, -1):
+		groups.append([left_slots[i]])
+	return groups
 
 
 func _on_finished(_ranking: Array[int]) -> void:

@@ -238,6 +238,26 @@ func test_last_blob_dry_wins_and_drowned_rank_by_lateness() -> void:
 	assert_near(mg.finish_grace, 2.0, 0.001, "a closing moment for the flag wave")
 
 
+## A leaver (Stage knocks it out) is recorded and ranked last; when it leaves one blob dry the
+## round ends through the tide's own end (tied drown groups kept, the closing moment).
+func test_leaver_ends_the_round_through_the_tide_end() -> void:
+	var t_flood := _time_at_height(1.5)
+	var mg: RisingTide = await _arena(4, 6, t_flood)
+	for i in 4:
+		_put(players[i], Vector3(-6.0 + i, TideTower.floor_y(1) + 0.05, TideTower.LANE_FRONT))
+	await step(5)
+	# 1 and 2 drown in the same tick: a tied group
+	_put(players[1], Vector3(-1.0, 0.05, TideTower.LANE_FRONT))
+	_put(players[2], Vector3(-2.0, 0.05, TideTower.LANE_MID))
+	assert_true(await _step_until(func() -> bool: return not players[1].alive and not players[2].alive, 90), "1 and 2 drowned")
+	assert_false(mg.is_finished(), "two still dry: the round goes on")
+	mg.knock_out(players[0])  # P0 leaves
+	assert_true(mg.is_finished(), "one blob left: the round ended")
+	assert_eq(mg.left_slots, [0] as Array[int], "the leaver is recorded")
+	assert_eq(mg.finish_groups, [[3], [1, 2], [0]], "the survivor, the tied drowned, the leaver last")
+	assert_near(mg.finish_grace, 2.0, 0.001, "the tide's own closing moment")
+
+
 func test_crumbling_block_falls_0_8_s_after_standing_and_grows_back() -> void:
 	var mg: RisingTide = await _arena(2, 2, 0.0)
 	var ids := TideTower.ids_of(TideTower.Kind.CRUMBLE)

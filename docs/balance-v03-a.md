@@ -158,7 +158,7 @@ Change: `TideTower.WATER_RATE1` 0.5 -> 0.6 m/s. The water topped out at 64.2 s, 
 4-8 player round ran 66 s; now 57.9 s (60 s with the end grace). Only the late climb is faster
 (+1 m of water at 30 s); drownings barely moved. Every other number is unchanged.
 
-Not fixed: big blobs win 2-3 player rounds too often (+10 to +20 points, two seeds; 4-8 players
+Accepted for this release (coordinator): big blobs win 2-3 player rounds too often (+10 to +20 points, two seeds; 4-8 players
 are fine). Ruled out by experiment, not kept: drowning at a fixed 0.5 m above the feet instead
 of the blob's own centre (0.61 m for big) and neutralising shove force and knockback by size;
 neither moved it (3 players big 54 -> 56 / 52 %). Left: the body itself (a bigger capsule on
@@ -183,6 +183,40 @@ Seat 7 (8 players) 8.3 % here, 9.4 % over the earlier 96 (`docs/balance.md`): ab
 low each time, mean place 4.49 now. Seat 0 14.6 %. A chi-square over the 8 seats is far from
 significant (p ~ 0.6). Cleared; the spawns are mirror-symmetric.
 
+## Correction round (after the merge into main)
+
+Measured with `toolsalance-batch.ps1 -Size mixed -RoundJson` (main), ties and smaller-team
+wins counted from the per-round tied groups (`buildalj.py`).
+
+1. Crown Keeper ranking ties: `rank_by_points` now returns tied groups (equal points AND equal
+   `last_worn`, e.g. no points and never wore it), never ordered by slot; `end_round` passes them
+   to `finish`.
+2. Leavers: Crown Keeper and Rising Tide override `knock_out` for players (Stage's leaver path).
+   The leaver is recorded (`knocked_out`; Rising Tide also `left_slots`) and ranked last, latest
+   leaver first; when it leaves one player (or none), the round ends through the minigame's own
+   end: `end_round` (`_rpc_end` on every peer: points, banner, winner's crown) and
+   `_end_if_last` (tied drown groups, the closing moment, `_rpc_celebrate`). Extras and finished
+   rounds go to the base class as before. Crown Keeper's wearer leaving still sends the crown home.
+3. Statue Garden: `mutator_blocklist = [&"slippery"]`.
+4. Blob Ball golden goal: 25 s (was 15) and sharper: the ball's rolling slow-down x0.4
+   (`golden_roll_scale`, set on every peer by `_rpc_golden`) and bots all attack
+   (`golden_all_attack`, no keeper). Measured, 96 rounds each (seed 13): all-tied rounds 4 players
+   2 %, 8 players 6 % (were 31 / 15 % on seed 11 with 15 s); mean length 58.6 / 59.5 s (median
+   56). Tried: 25 s alone (ties 25 / 8 %, 48 rounds); a harder golden kick (`golden_kick_boost`,
+   left at 0: the kick's lift grows with its power, so harder shots cleared the bar; with the lift
+   held it changed nothing measurable, 0 / 4 %); roll x0.4 alone 12 / 19 %; all-attack alone
+   12 / 10 % (48 rounds each).
+5. Blob Ball uneven teams. An NPC teammate from the extras framework is not clean here: extras
+   are not in `players` or `teams`, so the ball contacts (host and client prediction), kicks,
+   team rings and bot roles all skip them, and the shared brain never lets an extra shove (a
+   blob ball kick IS a shove); it would need a football mode in `game/bots/` and extras in the
+   ball code on every peer. Instead: a team of ONE (3 players, 1 v 2) starts 1-0 up
+   (`lone_blob_head_start`). The lone side's share of decided rounds: 22-27 % before (124
+   rounds over 3 seeds, with kick bonuses up to x1.41), 50 % (42, seed 11) and 65 % (82, seed
+   13) with the head start: pooled 60 %. 2 v 3: 44 % (80 rounds), in range, unchanged. 3 v 4:
+   35 % (78 rounds; 25-41 % on earlier seeds), below the 40 % target and left: a head start there
+   gave 61 % (36 rounds), and 2 v 3 with one 74 %, so a goal is too coarse for those splits.
+
 ## Tests touched
 
 - `test_crown_keeper.gd`: run speed ignores body size (1 s runs; wearers of any size at the
@@ -193,6 +227,10 @@ significant (p ~ 0.6). Cleared; the spawns are mirror-symmetric.
 - `test_statue_garden.gd`: last-stretch goal inside the plinth; walk pace ignores body size;
   `bot_reaction_scale` follows `bot_hold_reaction`. `test_statue_garden_bots.gd`: see above.
 - `test_rising_tide.gd`: water end time 52-60 s, late rate 0.6 m/s.
+- Correction round: `test_crown_keeper.gd` (tied groups; leavers end the round through
+  `end_round`), `test_rising_tide.gd` (a leaver ends the round through the tide's end, drown
+  ties kept, leaver last), `test_statue_garden.gd` (slippery blocked), `test_blob_ball.gd` (lone
+  blob head start; golden roll and kick lift).
 - Crown Keeper's per-round taste salt is drawn from `rng` at the first chase, not in `_start`,
   so `test_crown_keeper_bots` (which seeds `rng` after spawning) stays deterministic.
 
@@ -210,17 +248,13 @@ significant (p ~ 0.6). Cleared; the spawns are mirror-symmetric.
   tallies would let the size and team targets be measured without a side driver
   (`build\bal\mixed_runner.gd` here is the sketch: one override of `_play_round` and a
   tally after each round).
-- Shared (`SizeComponent`, catalog): the size speed factors (small 1.15, big 0.88) decide races
+- Shared (`SizeComponent`, catalog; deferred to the backlog by the coordinator): the size speed factors (small 1.15, big 0.88) decide races
   and chases outright; three minigames (Crown Keeper, Mansion Dash, Statue Garden) now carry the same "write base / factor each frame"
   code to opt out. A minigame hint (`size_speed_share`) read by the size component would be
   simpler and avoids a bookkeeping corner: a minigame value that happens to equal what the size
   component wrote last is taken as its own write and not rescaled.
-- Blob Ball 1 v 2 (3 players): the lone blob's side wins about a quarter of decided rounds
-  even with a x1.41 kick. Each player still wins equally often over a session (teams are drawn
-  at random), but in that round the lone blob is the underdog. Options: accept, a lone-blob
-  goal that counts double, or a narrower goal behind the lone blob (BallSim has one goal width).
-- Blob Ball ties: a level match after the golden goal makes everyone a tied winner, 13-31 % of
-  bot rounds. A longer golden goal (20 s) or a penalty shoot-out would cut it.
+- Blob Ball uneven teams and ties: see the correction round (1 v 2 head start, 3 v 4 still
+  ~35 %; ties 2-6 %).
 - Rising Tide: big blobs in 2-3 player rounds (above); the shortest 2-player rounds are 13 s
   (a bot shoved into the water early; rare, as before).
 - Statue Garden with humans: bots now stop on the tune with 0.9x the brain's reaction; humans

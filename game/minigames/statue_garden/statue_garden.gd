@@ -115,6 +115,9 @@ const WALK_SPEED := 1.5
 @export var size_speed_share: float = 0.0
 const SHOVE_COOLDOWN := 0.5
 
+## Mutators that break the stop: on `slippery` ice a walker cannot stop within WARNING plus the
+## RED grace, so nearly everyone is caught every RED.
+var mutator_blocklist: Array[StringName] = [&"slippery"]
 ## Bots walk to a point this far ahead in their lane, curving to the plinth at the end.
 const BOT_LOOKAHEAD := 5.0
 ## Bots aim this far inside the plinth's face on the last stretch, so they walk into it.

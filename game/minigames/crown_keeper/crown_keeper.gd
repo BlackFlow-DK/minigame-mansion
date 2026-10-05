@@ -274,13 +274,37 @@ func _host_tick(delta: float) -> void:
 		end_round()
 
 
-## Host: ends the round now with the points ranking (also called at the time limit).
+## Host: ends the round now with the points ranking (also called at the time limit, and when a
+## leaver leaves one player): ties as groups, players who left the round last (latest first).
 func end_round() -> void:
 	if _over or is_finished():
 		return
-	var ranking := rank_by_points(_slots, _points_now(), _last_worn)
-	_rpc_end.rpc(PackedInt32Array(ranking), _score_snapshot())
-	finish(ranking, end_grace)
+	var staying: Array[int] = []
+	for s in _slots:
+		if not knocked_out.has(s):
+			staying.append(s)
+	var groups := rank_by_points(staying, _points_now(), _last_worn)
+	for i in range(knocked_out.size() - 1, -1, -1):
+		groups.append([knocked_out[i]])
+	_rpc_end.rpc(PackedInt32Array(Minigame.flatten_groups(groups)), _score_snapshot())
+	finish(groups, end_grace)
+
+
+## Host: a player left (Stage knocks it out): recorded as out, and with one player (or none)
+## left the round ends through `end_round` (banner, celebration and points on every peer), not
+## the base class's flat ranking. A wearer who leaves sends the crown home (`_host_tick`).
+func knock_out(player: Player, reason: StringName = &"") -> void:
+	if is_finished() or _over or player == null or not player.alive or player.is_extra:
+		super(player, reason)
+		return
+	knocked_out.append(player.slot)
+	player.eliminate(reason if reason != &"" else &"knocked_out")
+	var alive := 0
+	for p in players:
+		if is_instance_valid(p) and p.alive and not p.is_extra:
+			alive += 1
+	if alive <= 1:
+		end_round()
 
 
 ## Host: puts the crown on `slot` now (tests, dev poses; normal play picks up by touch).
@@ -734,20 +758,28 @@ static func _push_off_obstacles(p: Vector3, margin: float) -> Vector3:
 	return out
 
 
-## `slots` by points (desc), then whoever wore the crown last (later first), then slot.
-static func rank_by_points(slots: Array[int], points: Dictionary, last_worn: Dictionary) -> Array[int]:
+## `slots` by points (desc), then whoever wore the crown last (later first), as groups best
+## first (`Minigame.finish` form): slots equal on both (e.g. no points, never wore it) share one
+## tied group, never ordered by slot (members listed in slot order).
+static func rank_by_points(slots: Array[int], points: Dictionary, last_worn: Dictionary) -> Array:
 	var out: Array[int] = slots.duplicate()
+	var key := func(s: int) -> Vector2: return Vector2(int(points.get(s, 0)), float(last_worn.get(s, -1.0)))
 	out.sort_custom(func(a: int, b: int) -> bool:
-		var pa: int = points.get(a, 0)
-		var pb: int = points.get(b, 0)
-		if pa != pb:
-			return pa > pb
-		var la: float = last_worn.get(a, -1.0)
-		var lb: float = last_worn.get(b, -1.0)
-		if la != lb:
-			return la > lb
+		var ka: Vector2 = key.call(a)
+		var kb: Vector2 = key.call(b)
+		if ka.x != kb.x:
+			return ka.x > kb.x
+		if ka.y != kb.y:
+			return ka.y > kb.y
 		return a < b)
-	return out
+	var groups: Array = []
+	for i in out.size():
+		if i > 0 and key.call(out[i]) == key.call(out[i - 1]):
+			(groups[groups.size() - 1] as Array).append(out[i])
+		else:
+			var g: Array[int] = [out[i]]
+			groups.append(g)
+	return groups
 
 
 # --- Bots ------------------------------------------------------------------------------------------------

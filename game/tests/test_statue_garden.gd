@@ -295,6 +295,13 @@ func test_walk_pace_ignores_body_size() -> void:
 	assert_near(run[1], StatueGarden.WALK_SPEED, 0.25, "at the tiptoe pace (%s)" % str(run))
 
 
+## Slippery ice cannot stop within WARNING plus the grace: the mutator is blocked here.
+func test_slippery_is_blocked() -> void:
+	var probe := StatueGarden.new()
+	assert_true(probe.mutator_blocklist.has(&"slippery"), "slippery blocked")
+	probe.free()
+
+
 func test_lanes_are_shuffled_by_the_host() -> void:
 	var orders: Dictionary[String, bool] = {}
 	for k in 6:
