@@ -45,6 +45,14 @@ extends Node
 ## peer applies it to every player for the round and takes it off at RESULTS.
 ## Practice (`start_practice(id, mutator)`): one round of `id`, normal INTRO/PLAYING/RESULTS,
 ## no points (all 0), no coins (Progression skips `practice` rounds), then straight to LOBBY.
+##
+## Launch beat and preloading: `start_session(rounds, launch)` / `start_practice(id, mutator,
+## launch)` with `launch` > 0 (the lobby's START passes `launch_time`) first sends
+## `_rpc_upcoming(first_id, launch)`: every peer emits `session_launching` (the lobby portal
+## flares) and starts loading the first round's scene on a worker thread; the host leaves the
+## lobby `launch` seconds later. At each RESULTS the host sends the next round's planned id the
+## same way (VOTE: every peer preloads the winner at `vote_decided`), so `Stage.load_minigame`
+## finds the scene loaded (`Stage.preload_minigame`). Round order and randomness are unchanged.
 
 ## VOTE (appended, so the older values keep their numbers): the next round's vote.
 enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM, VOTE }
@@ -70,6 +78,8 @@ signal vote_updated
 signal vote_decided(winner: int, id: StringName)
 ## This round's mutator changed on this peer (&"" = none / taken off).
 signal mutator_changed(id: StringName)
+## Every peer: the host pressed START; the session leaves the lobby in `seconds`.
+signal session_launching(seconds: float)
 
 
 ## Seconds the title card shows before the countdown.
@@ -93,6 +103,9 @@ signal mutator_changed(id: StringName)
 @export var vote_time: float = 8.0
 ## Seconds the winning card shows before the INTRO.
 @export var vote_reveal_time: float = 1.8
+## Seconds between the lobby's START and leaving the lobby (the portal flares; the first round
+## preloads). The menus pass it to start_session / start_practice; scaled by `time_scale`.
+@export var launch_time: float = 0.75
 
 ## Seed for the round order; -1 = random. Host only.
 var order_seed: int = -1
@@ -144,6 +157,14 @@ var vote_candidates: Array[StringName] = []
 var vote_marks: Dictionary[int, int] = {}
 var vote_locked: Dictionary[int, bool] = {}
 var vote_winner: int = -1
+## Every peer: the next round's minigame as far as this peer knows (preloading), &"" = unknown.
+## Set by the launch beat, RESULTS (the planned id; the host may still swap one that no longer
+## fits the player count) and the vote result; cleared by the INTRO.
+var upcoming: StringName = &""
+
+## Host: the launch beat's remaining seconds and what runs when it is over.
+var _launch_left: float = 0.0
+var _launch_action: Callable = Callable()
 
 ## Seconds of play in the current round (scaled), host only.
 var _play_elapsed: float = 0.0
@@ -217,9 +238,11 @@ static func _find_name(names: Array[String], text: String) -> int:
 # --- Public API ------------------------------------------------------------------------
 
 ## Host only. Starts a session of `rounds` rounds with the current roster. Ignored when
-## not in LOBBY, with fewer than `min_players`, or without a Stage in the tree.
-func start_session(rounds: int) -> void:
-	if not Net.is_host() or state != State.LOBBY:
+## not in LOBBY (or already launching), with fewer than `min_players`, or without a Stage in
+## the tree. `launch` > 0: the launch beat first (every peer: `session_launching`, the first
+## round preloads), the first round (or vote) `launch` seconds later; 0: right away.
+func start_session(rounds: int, launch: float = 0.0) -> void:
+	if not Net.is_host() or state != State.LOBBY or is_launching():
 		return
 	if rounds < 1:
 		push_warning("Session.start_session: rounds must be >= 1 (got %d)" % rounds)
@@ -247,11 +270,21 @@ func start_session(rounds: int) -> void:
 		if round_order.is_empty():
 			push_warning("Session.start_session: the minigame registry is empty")
 			return
-	# Before the intro RPC goes out: refuse joiners from now on, and leave lobby mode now.
-	# Turning follow_roster off sends the lobby's last manifest, which must reach clients
-	# before the intro, not after (a late lobby manifest made clients rebuild round 1's
-	# minigame without _setup/_start).
+	# Refuse joiners from START on (the launch beat included).
 	Net.session_in_progress = true
+	var first: StringName = round_order[0] if not round_order.is_empty() else &""
+	_launch(launch, first, _begin_session.bind(rounds))
+
+
+## Host: the session leaves the lobby (after the launch beat).
+func _begin_session(rounds: int) -> void:
+	if Net.roster.size() < min_players or _stage() == null:
+		push_warning("Session: start cancelled, %d players left" % Net.roster.size())
+		_cancel_launch(true)
+		return
+	# Before the intro RPC goes out: leave lobby mode now. Turning follow_roster off sends the
+	# lobby's last manifest, which must reach clients before the intro, not after (a late
+	# lobby manifest made clients rebuild round 1's minigame without _setup/_start).
 	_stage().follow_roster = false
 	if order_mode == GameModes.Order.VOTE:
 		_begin_vote(0, rounds)
@@ -261,9 +294,9 @@ func start_session(rounds: int) -> void:
 
 ## Host only, from LOBBY: plays ONE round of `id` with the current roster (the normal INTRO /
 ## PLAYING / RESULTS flow, no points, no coins), then returns to LOBBY. `mutator`: a mutator id
-## for the round (&"" = none; ignored if the minigame blocks it).
-func start_practice(id: StringName, mutator: StringName = &"") -> void:
-	if not Net.is_host() or state != State.LOBBY:
+## for the round (&"" = none; ignored if the minigame blocks it). `launch`: as in start_session.
+func start_practice(id: StringName, mutator: StringName = &"", launch: float = 0.0) -> void:
+	if not Net.is_host() or state != State.LOBBY or is_launching():
 		return
 	if not MinigameRegistry.has(id):
 		push_warning("Session.start_practice: unknown minigame '%s'" % id)
@@ -283,8 +316,45 @@ func start_practice(id: StringName, mutator: StringName = &"") -> void:
 	_last_mutator = &""
 	round_order = [id]
 	Net.session_in_progress = true
+	_launch(launch, id, _begin_practice)
+
+
+func _begin_practice() -> void:
+	var id: StringName = round_order[0] if not round_order.is_empty() else &""
+	if Net.roster.size() < maxi(1, MinigameCatalog.min_players(id)) or _stage() == null:
+		push_warning("Session: practice cancelled, %d players left" % Net.roster.size())
+		_cancel_launch(true)
+		return
 	_stage().follow_roster = false
 	_send_intro(0, 1, true)
+
+
+## Host: runs `action` now (`seconds` <= 0) or after the launch beat, which every peer hears
+## about first (`session_launching`; `first` preloads).
+func _launch(seconds: float, first: StringName, action: Callable) -> void:
+	if seconds <= 0.0:
+		action.call()
+		return
+	_launch_left = seconds
+	_launch_action = action
+	_rpc_upcoming.rpc(String(first), seconds)
+
+
+## Host: a launch beat is running (START pressed, still in the lobby).
+func is_launching() -> bool:
+	return _launch_action.is_valid()
+
+
+## Host: drops a pending launch beat (`force`: also a start whose players left during the beat);
+## the lobby carries on.
+func _cancel_launch(force: bool = false) -> void:
+	if not force and not is_launching():
+		return
+	_launch_left = 0.0
+	_launch_action = Callable()
+	if Net.is_host() and state == State.LOBBY:
+		Net.session_in_progress = false
+		round_order = []
 
 
 ## Host only: the game setup for the next session, sent to every peer (lobby summary).
@@ -327,6 +397,7 @@ func return_to_lobby() -> void:
 ## Ends any running session and returns to LOBBY (host: on every peer). Also resets the
 ## stage. Safe to call in any state.
 func abort_session() -> void:
+	_cancel_launch()
 	if Net.is_host():
 		if state != State.LOBBY:
 			_rpc_lobby.rpc()
@@ -423,6 +494,12 @@ static func rank_totals(slots: Array[int], totals: Dictionary, wins: Dictionary)
 
 func _physics_process(delta: float) -> void:
 	if state == State.LOBBY:
+		if is_launching():
+			_launch_left -= delta * time_scale
+			if _launch_left <= 0.0:
+				var action := _launch_action
+				_launch_action = Callable()
+				action.call()
 		return
 	phase_time_left = maxf(0.0, phase_time_left - delta * time_scale)
 	end_grace = maxf(0.0, end_grace - delta * time_scale)
@@ -652,6 +729,17 @@ func _end_round(ranking: Array) -> void:
 	for g: Array in clean:
 		sizes.append(g.size())
 	_rpc_results.rpc(Minigame.flatten_groups(clean), points, totals, wins, results_time, sizes)
+	_announce_next()
+
+
+## Host, at RESULTS: every peer starts loading the next round's planned minigame while the
+## results show (VOTE: the vote result does it; practice has no next round).
+func _announce_next() -> void:
+	var next := round_index + 1
+	if state != State.RESULTS or practice or order_mode == GameModes.Order.VOTE \
+			or next >= round_count or next >= round_order.size():
+		return
+	_rpc_upcoming.rpc(String(round_order[next]), 0.0)
 
 
 ## Practice: the same results, every point 0, totals and wins untouched.
@@ -694,6 +782,7 @@ func _go_podium() -> void:
 
 func _on_roster_changed() -> void:
 	if Net.roster.is_empty():
+		_cancel_launch()
 		if state != State.LOBBY:
 			_rpc_lobby()  # we left the game: reset locally
 		return
@@ -756,6 +845,7 @@ func _rpc_setup(rounds: int, order: int, ticked: Array, mutators: int) -> void:
 @rpc("authority", "call_local", "reliable")
 func _rpc_intro(index: int, count: int, id: String, duration: float, is_practice: bool = false, mutator: String = "") -> void:
 	practice = is_practice
+	upcoming = &""
 	_clear_mutator()
 	_clear_vote()
 	if index == 0:
@@ -886,9 +976,12 @@ func _clear_grace() -> void:
 func _rpc_lobby() -> void:
 	if Net.is_host():
 		Net.session_in_progress = false
+	_cancel_launch()
 	_clear_mutator()
 	_clear_vote()
 	practice = false
+	upcoming = &""
+	Stage.drop_preloads()
 	var stage := _stage()
 	if stage:
 		stage.clear()
@@ -982,7 +1075,25 @@ func _rpc_vote_result(winner: int, reveal: float) -> void:
 	phase_duration = reveal
 	phase_time_left = reveal
 	var id: StringName = vote_candidates[winner] if winner >= 0 and winner < vote_candidates.size() else &""
+	_preload_upcoming(id)  # its INTRO follows after the reveal
 	vote_decided.emit(winner, id)
+
+
+## Every peer: the next round will (most likely) be `id` ("" = not known yet); `launch` > 0: the
+## host pressed START and the session leaves the lobby in `launch` seconds.
+@rpc("authority", "call_local", "reliable")
+func _rpc_upcoming(id: String, launch: float) -> void:
+	_preload_upcoming(StringName(id))
+	if launch > 0.0:
+		session_launching.emit(launch)
+
+
+## Notes `id` as the next round and starts loading its scene on a worker thread (not with a
+## `scene_override`: that scene is loaded already).
+func _preload_upcoming(id: StringName) -> void:
+	upcoming = id
+	if id != &"" and scene_override == null:
+		Stage.preload_minigame(id)
 
 
 func _clear_vote() -> void:

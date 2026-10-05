@@ -293,4 +293,4 @@ func _maybe_auto_start() -> void:
 	if _args.has("auto-start") and not _auto_started and stage.minigame is MansionLobby \
 			and Net.roster.size() >= int(_args.get("min-players", "2")):
 		_auto_started = true
-		Session.start_session.call_deferred(maxi(1, int(_args["auto-start"])))
+		Session.start_session.call_deferred(maxi(1, int(_args["auto-start"])), Session.launch_time)  # like START

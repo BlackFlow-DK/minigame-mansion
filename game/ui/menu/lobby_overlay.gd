@@ -238,7 +238,7 @@ func _on_practice_requested(id: StringName, mutator: StringName) -> void:
 		return
 	setup_panel.close()
 	practice_pressed.emit(id, mutator)
-	Session.start_practice(id, mutator)
+	Session.start_practice(id, mutator, Session.launch_time)
 
 
 ## The summary lines: the host's own panel, or what the host sent (clients).

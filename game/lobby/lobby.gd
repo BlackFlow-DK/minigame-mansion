@@ -237,6 +237,8 @@ func _ready() -> void:
 	apply_quality()
 	if not Session.state_changed.is_connected(_on_session_state_changed):
 		Session.state_changed.connect(_on_session_state_changed)
+	if not Session.session_launching.is_connected(_on_session_launching):
+		Session.session_launching.connect(_on_session_launching)
 	if SyncHub.is_networked(multiplayer) and not multiplayer.is_server():
 		send_host(&"_rpc_toy_hello", [])
 
@@ -658,8 +660,15 @@ func _reported_player(slot: Variant, ppos: Variant) -> Player:
 	return p
 
 
+## Leaving the lobby without the launch beat (or once its flare has died down): flare now.
 func _on_session_state_changed(state: int) -> void:
-	if state != Session.State.LOBBY and portal_preview:
+	if state != Session.State.LOBBY and portal_preview and portal_preview.get_flare() < 0.01:
+		portal_preview.flare()
+
+
+## START: the portal flares during Session's launch beat, before the lobby is left.
+func _on_session_launching(_seconds: float) -> void:
+	if portal_preview:
 		portal_preview.flare()
 
 
