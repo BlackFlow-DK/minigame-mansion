@@ -232,6 +232,69 @@ func test_vote_session_flow_with_bots_and_the_local_vote() -> void:
 	assert_true(states.has([S.State.VOTE]), "state_changed(VOTE)")
 
 
+## A leaver during round 1's vote: no podium of the last session's scores, no session coins,
+## back to the LOBBY. During a later round's vote: the podium of this session.
+func test_leaver_during_the_first_vote_returns_to_the_lobby() -> void:
+	_offline(2)
+	Session.configure(2, GameModes.Order.VOTE, [], Mutators.Mode.OFF)
+	Session.scores = {0: 30, 1: 12}  # the last session's, kept for the lobby UI
+	Session.round_wins = {0: 5, 1: 2}
+	var coins := Progression.coins
+	var ends := _rec(Session.session_finished)
+	Session.start_session(2)
+	assert_eq(Session.state, S.State.VOTE, "VOTE before round 1")
+	assert_eq(Session.scores, {0: 0, 1: 0} as Dictionary[int, int], "the session begins at 0 on every peer")
+	assert_eq(Session.round_wins, {0: 0, 1: 0} as Dictionary[int, int], "no wins carried over")
+	Net.remove_bot(1)
+	assert_eq(Session.state, S.State.LOBBY, "LOBBY, not the podium")
+	assert_eq(ends.size(), 0, "no session_finished")
+	assert_eq(Progression.coins, coins, "no session coins")
+	assert_false(Net.session_in_progress, "joiners welcome again")
+
+	Net.add_bot()
+	Session.start_session(2)
+	Session.vote(0, true)
+	if not assert_true(await _wait_state(S.State.PLAYING), "round 1 plays"):
+		return
+	Session.current_minigame.finish([1, 0] as Array[int])
+	if not assert_true(await _wait_state(S.State.VOTE), "VOTE before round 2"):
+		return
+	Net.remove_bot(1)
+	assert_eq(Session.state, S.State.PODIUM, "a round was scored: the podium")
+	assert_eq(ends, [[[0]]], "ranks who is left")
+	assert_eq(Session.scores, {0: 2, 1: 3} as Dictionary[int, int], "this session's totals")
+
+
+## Every peer shortens the vote once everyone locked: the handler a client runs for each mark.
+func test_all_locked_shortens_the_vote_on_every_peer() -> void:
+	_offline(3)
+	Session.time_scale = 1.0
+	Session.vote_time = 8.0
+	Session.configure(2, GameModes.Order.VOTE, [], Mutators.Mode.OFF)
+	Session.start_session(2)
+	assert_eq(Session.state, S.State.VOTE, "VOTE")
+	# What a client receives (no host logic): marks, then locks, one slot at a time.
+	Session._rpc_vote_mark(0, 1, false)
+	Session._rpc_vote_mark(1, 2, true)
+	Session._rpc_vote_mark(2, 0, true)
+	assert_near(Session.phase_time_left, 8.0, 0.001, "slot 0 still open: full time")
+	Session._rpc_vote_mark(0, 1, true)
+	assert_near(Session.phase_time_left, S.VOTE_ALL_LOCKED_TIME, 0.001, "all locked: the short end")
+	await step(2)
+	assert_true(Session.phase_time_left < S.VOTE_ALL_LOCKED_TIME, "and counts down from there")
+	# The host's own path (votes through _host_vote) ends the vote the same way.
+	Session.abort_session()
+	Session.start_session(2)
+	for s: int in Net.roster:
+		Session._host_vote(s, 0, true)
+	assert_near(Session.phase_time_left, S.VOTE_ALL_LOCKED_TIME, 0.001, "host: all locked")
+	for i in 60:
+		if Session.vote_winner >= 0:
+			break
+		await step(1)
+	assert_eq(Session.vote_winner, 0, "decided right after")
+
+
 func test_vote_input_ignores_non_players_and_bad_cards() -> void:
 	_offline(3)
 	Session.configure(2, GameModes.Order.VOTE, [], Mutators.Mode.OFF)

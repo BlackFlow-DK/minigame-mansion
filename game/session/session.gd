@@ -57,6 +57,9 @@ extends Node
 ## VOTE (appended, so the older values keep their numbers): the next round's vote.
 enum State { LOBBY, INTRO, PLAYING, RESULTS, PODIUM, VOTE }
 
+## Seconds of the vote left once every player locked in (every peer applies it).
+const VOTE_ALL_LOCKED_TIME: float = 0.5
+
 signal state_changed(state: State)
 ## `info`: `{ "id": StringName, "title": String, "rule_text": String }`; `index` is 0-based.
 signal round_intro(info: Dictionary, index: int)
@@ -92,7 +95,8 @@ signal session_launching(seconds: float)
 @export var podium_time: float = 8.0
 ## Seconds past the minigame's `time_limit` before Session finishes the round itself.
 @export var time_limit_grace: float = 1.0
-## Fewer players than this: start_session is ignored, a running session ends early.
+## Fewer players than this: start_session is ignored, a running session ends early (the podium;
+## back to LOBBY when no round of it was scored yet).
 @export var min_players: int = 2
 ## Multiplies how fast a session's clocks run: Session's own timers (phases and the
 ## time-limit backstop) and the delta passed to the minigame's `_host_tick`, so a minigame
@@ -165,6 +169,10 @@ var upcoming: StringName = &""
 ## Host: the launch beat's remaining seconds and what runs when it is over.
 var _launch_left: float = 0.0
 var _launch_action: Callable = Callable()
+
+## Rounds of the running session scored so far (reset when it begins). Host decides with it: too
+## few players left before the first round was scored ends in the LOBBY, not the podium.
+var _rounds_scored: int = 0
 
 ## Seconds of play in the current round (scaled), host only.
 var _play_elapsed: float = 0.0
@@ -359,8 +367,12 @@ func _cancel_launch(force: bool = false) -> void:
 
 ## Host only: the game setup for the next session, sent to every peer (lobby summary).
 ## `order`: GameModes.Order; `ticked`: the playlist (ids); `mutators`: Mutators.Mode.
-## Outside a game (or offline) it is just stored.
+## Outside a game (or offline) it is just stored. Ignored once START was pressed (the launch
+## beat) and while a session runs: the round order was built from the setup at START.
 func configure(rounds: int, order: int, ticked: Array, mutators: int) -> void:
+	if state != State.LOBBY or is_launching():
+		push_warning("Session.configure: ignored, a session is starting or running")
+		return
 	var ids: Array = []
 	for id: Variant in ticked:
 		ids.append(str(id))
@@ -626,9 +638,7 @@ func _host_vote(slot: int, index: int, lock: bool) -> void:
 		return
 	if index < 0 or index >= vote_candidates.size():
 		return
-	_rpc_vote_mark.rpc(slot, index, lock)
-	if lock and _all_locked():
-		phase_time_left = minf(phase_time_left, 0.5)
+	_rpc_vote_mark.rpc(slot, index, lock)  # every peer shortens the vote once all locked
 
 
 func _all_locked() -> bool:
@@ -728,6 +738,7 @@ func _end_round(ranking: Array) -> void:
 	var sizes: Array[int] = []
 	for g: Array in clean:
 		sizes.append(g.size())
+	_rounds_scored += 1
 	_rpc_results.rpc(Minigame.flatten_groups(clean), points, totals, wins, results_time, sizes)
 	_announce_next()
 
@@ -788,9 +799,15 @@ func _on_roster_changed() -> void:
 		return
 	if not Net.is_host() or practice:
 		return  # practice plays on with whoever is left (a minigame ends itself when needed)
-	if (state == State.INTRO or state == State.PLAYING or state == State.RESULTS or state == State.VOTE) \
-			and Net.roster.size() < min_players:
-		_go_podium()
+	if Net.roster.size() >= min_players:
+		return  # (the launch beat checks the roster itself when it ends: _begin_session)
+	if state == State.INTRO or state == State.PLAYING or state == State.RESULTS or state == State.VOTE:
+		# The podium ranks this session's rounds; before the first one is scored there is
+		# nothing to rank (and no session coins to pay): back to the lobby.
+		if _rounds_scored > 0:
+			_go_podium()
+		else:
+			_rpc_lobby.rpc()
 
 
 func _on_server_closed() -> void:
@@ -851,11 +868,7 @@ func _rpc_intro(index: int, count: int, id: String, duration: float, is_practice
 	if index == 0:
 		if Net.is_host():
 			Net.session_in_progress = true
-		scores.clear()
-		round_wins.clear()
-		for s: int in Net.roster:
-			scores[s] = 0
-			round_wins[s] = 0
+		_reset_scores()
 	round_index = index
 	round_count = count
 	_play_elapsed = 0.0
@@ -1037,6 +1050,8 @@ func apply_snapshot_extra(new_state: int, extra: Dictionary) -> void:
 func _rpc_vote_start(index: int, count: int, candidates: Array, duration: float) -> void:
 	_clear_mutator()
 	_clear_vote()
+	if index == 0:
+		_reset_scores()  # the session begins with the vote: no last-session scores past here
 	round_count = count
 	vote_index = index
 	for id: Variant in candidates:
@@ -1066,6 +1081,10 @@ func _rpc_vote_mark(slot: int, index: int, lock: bool) -> void:
 	vote_marks[slot] = index
 	if lock:
 		vote_locked[slot] = true
+		# Every peer (the host decides with the same rule): all locked ends the vote early, so a
+		# client's countdown shortens with the host's instead of running the full time.
+		if state == State.VOTE and vote_winner < 0 and _all_locked():
+			phase_time_left = minf(phase_time_left, VOTE_ALL_LOCKED_TIME)
 	vote_updated.emit()
 
 
@@ -1152,6 +1171,17 @@ func _set_phase(new_state: State, duration: float) -> void:
 	phase_duration = duration
 	phase_time_left = duration
 	state_changed.emit(new_state)
+
+
+## Every peer, when a session begins (its first vote or intro): every roster slot at 0, nothing
+## scored yet. Until then `scores` keeps the last session's for the lobby UI.
+func _reset_scores() -> void:
+	scores.clear()
+	round_wins.clear()
+	for s: int in Net.roster:
+		scores[s] = 0
+		round_wins[s] = 0
+	_rounds_scored = 0
 
 
 func _assign_totals(totals: Dictionary, wins: Dictionary) -> void:

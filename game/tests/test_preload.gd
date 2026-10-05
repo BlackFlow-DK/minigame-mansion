@@ -139,6 +139,33 @@ func test_launch_cancelled_when_players_leave_or_abort() -> void:
 	assert_true(await _wait_state(S.State.INTRO, 60), "a new START works")
 
 
+## The round order was built at START: a setup change during the beat (VOTE -> SHUFFLE) or the
+## session is refused, so round 1 is the vote, not an empty round.
+func test_setup_is_locked_from_start_on() -> void:
+	_offline(3)
+	Session.configure(2, GameModes.Order.VOTE, [], Mutators.Mode.OFF)
+	var changed := _rec(Session.setup_changed)
+	var intros := _rec(Session.round_intro)
+	Session.start_session(2, 0.5)
+	assert_true(Session.is_launching(), "launching")
+	Session.configure(2, GameModes.Order.SHUFFLE, [], Mutators.Mode.ALWAYS)
+	assert_eq(Session.order_mode, GameModes.Order.VOTE, "order kept during the beat")
+	assert_eq(Session.mutator_mode, Mutators.Mode.OFF, "mutators kept")
+	assert_eq(changed.size(), 0, "nothing sent")
+	assert_true(await _wait_state(S.State.VOTE), "the vote after the beat")
+	assert_eq(intros.size(), 0, "no round without an id")
+	Session.configure(5, GameModes.Order.PLAYLIST, [&"bumper_sumo"], Mutators.Mode.OFF)
+	assert_eq(Session.order_mode, GameModes.Order.VOTE, "order kept while the session runs")
+	assert_eq(Session.setup_rounds, 2, "rounds kept")
+	Session.vote(0, true)
+	assert_true(await _wait_state(S.State.INTRO), "intro of the winner")
+	assert_true(intros[0][0]["id"] != &"", "a real id")
+	Session.abort_session()
+	Session.configure(5, GameModes.Order.SHUFFLE, [], Mutators.Mode.OFF)
+	assert_eq(Session.order_mode, GameModes.Order.SHUFFLE, "the lobby takes it again")
+	assert_eq(changed.size(), 1, "sent once")
+
+
 # --- Next-round notice ---------------------------------------------------------------------------
 
 func test_results_announce_the_next_round_in_order() -> void:
