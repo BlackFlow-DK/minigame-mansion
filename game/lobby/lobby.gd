@@ -143,6 +143,9 @@ const SEESAW_POS := Vector3(7.0, 0.0, 5.6)
 const BELL_POS := Vector3(5.6, 0.0, -6.7)
 const PHOTO_POS := Vector3(-8.3, 0.0, -8.6)
 const PORTAL_PREVIEW_POS := Vector3(0.0, 3.45, -8.1)
+## Launch beat: the camera's distance to the portal, and how long it stays past the beat.
+const LAUNCH_CAM_DISTANCE := 10.0
+const LAUNCH_CAM_HOLD := 0.6
 ## Toy sounds (game/audio/sfx/toy_*.wav, art/scripts/audio/gen_toys.py), added to the Sfx table.
 const TOY_SOUNDS := {
 	&"toy_bell": {"vol": -3.0, "pitch": 0.02, "max": 2, "gap": 200},
@@ -198,6 +201,8 @@ var _candle_energy: PackedFloat32Array = []
 var _portal_light: OmniLight3D = null
 var _portal_light_color: Color = Color(0.35, 1.0, 0.88)
 var _portal_flare: float = 0.0
+## The camera is easing in on the portal for the launch beat.
+var _launch_cam: bool = false
 var _toys_root: Node3D = null
 ## Candelabra lights (off on LOW quality) and the moonlight spots (off on LOW).
 var _small_lights: Array[OmniLight3D] = []
@@ -370,6 +375,7 @@ func _process(delta: float) -> void:
 	var live := _live_players()
 	_update_portal(delta, live)
 	_update_keys(delta, live)
+	_restore_launch_cam()
 
 
 func _update_portal(delta: float, live: Array[Player]) -> void:
@@ -666,10 +672,27 @@ func _on_session_state_changed(state: int) -> void:
 		portal_preview.flare()
 
 
-## START: the portal flares during Session's launch beat, before the lobby is left.
-func _on_session_launching(_seconds: float) -> void:
+## START: the portal flares during Session's launch beat, before the lobby is left, and this
+## peer's camera eases in on it (the hall camera frames the floor; the landing is off screen).
+## The close-up lasts a little past the beat, so after a cancelled launch (clients are not told)
+## the hall framing comes back by itself; the host restores it at once (`_process`).
+func _on_session_launching(seconds: float) -> void:
 	if portal_preview:
 		portal_preview.flare()
+	var cam := get_node_or_null(^"Camera") as ArenaCamera
+	if cam and portal_preview:
+		cam.focus_on(portal_preview, seconds + LAUNCH_CAM_HOLD, LAUNCH_CAM_DISTANCE)
+		_launch_cam = true
+
+
+## Host: a launch that was cancelled hands the camera straight back to the hall framing.
+func _restore_launch_cam() -> void:
+	if not _launch_cam or not Net.is_host() or Session.is_launching() or Session.state != Session.State.LOBBY:
+		return
+	_launch_cam = false
+	var cam := get_node_or_null(^"Camera") as ArenaCamera
+	if cam and cam.is_focusing():
+		cam.clear_focus()
 
 
 # --- Toys: public helpers --------------------------------------------------------------------------
