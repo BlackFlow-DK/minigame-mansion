@@ -79,16 +79,39 @@ func _lava_round(count: int, seed_value: int) -> Array:
 	return [secs, early, shoved, late]
 
 
+## Lava rounds now often run to the collapse (~37 s): split over three tests to stay inside the
+## runner's per-test time limit; the last one judges all five.
+static var _lava: Array = []   # [secs, early, falls] per round
+
+
+func _lava_batch(seeds: Array) -> void:
+	for s: int in seeds:
+		var r := await _lava_round(8, s)
+		_lava.append([r[0], r[1], r[1] + r[2] + r[3]])
+		_teardown_round()
+
+
+func test_lava_8_bots_last_a() -> void:
+	_lava.clear()
+	await _lava_batch([11, 12])
+
+
+func test_lava_8_bots_last_b() -> void:
+	await _lava_batch([13, 14])
+
+
 func test_lava_8_bots_last() -> void:
+	await _lava_batch([15])
+	if _lava.size() < 5:
+		print("  (only %d lava rounds: run the whole file to judge them)" % _lava.size())
+		return
 	var secs: Array[float] = []
 	var early := 0
 	var falls := 0
-	for s in [11, 12, 13, 14, 15]:
-		var r := await _lava_round(8, s)
+	for r: Array in _lava:
 		secs.append(r[0])
-		early += r[1]
-		falls += r[1] + r[2] + r[3]
-		_teardown_round()
+		early += int(r[1])
+		falls += int(r[2])
 	secs.sort()
 	var mean := 0.0
 	for x in secs:

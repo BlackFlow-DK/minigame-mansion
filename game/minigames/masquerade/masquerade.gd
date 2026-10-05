@@ -20,7 +20,8 @@ extends Minigame
 ## The disguise runs on every peer (MasqDisguise: public cosmetics/size/name-tag APIs only) and
 ## is released on every exit path: round over (the `finished` RPC), stage clear or the minigame
 ## leaving the tree (the Disguise node's _exit_tree); a leaver's node goes with them.
-## Roster bots are driven by MasqBots (NPC brains + suspicion hunts).
+## Roster bots: MasqBots keeps their brains in an NPC mode and decides suspicion hunts; the brains
+## walk, face and shove through the generic hooks (bot_wants_action / bot_aim / bot_action_reach).
 ## Dev args (after `--`): `--masq-demo-unmask=<s>` (slot 1 is unmasked by slot 0 at s seconds),
 ## `--masq-demo-wrong=<s>` (slot 2 shoves the nearest NPC at s seconds) and `--masq-closeup`
 ## (the camera looks at slot 0's mask): screenshots only.
@@ -76,8 +77,11 @@ const FALL_Y := -5.0
 
 ## The music director plays this for the round (a waltz).
 var music_track := &"lobby_waltz"
-## Bot brain hint: never chase or shove on their own (MasqBots drives the bots here).
+## Bot brain hint: never chase on their own (MasqBots decides hunts; the brain's action hooks shove).
 var bot_aggression_scale: float = 0.0
+## Every MasqBots made for this round registers here (the host's, a dev check's own); the bot
+## hooks ask the one that drives the player.
+var bot_drivers: Array = []
 ## Tests: when >= 0, the next Masquerade seeds `rng` and `bot_rng` from it in _ready (then it
 ## goes back to -1), so a whole round (placement, NPC modes, bots) replays.
 static var next_seed: int = -1
@@ -312,6 +316,35 @@ func get_bot_goal(player: Player) -> Vector3:
 		if is_safe(c):
 			return c
 	return Vector3(clampf(from.x, SAFE_MIN.x, SAFE_MAX.x), 0.0, clampf(from.z, SAFE_MIN.y, SAFE_MAX.y))
+
+
+## BotBrain hook: a hunting bot closes in, faces its target and shoves.
+func bot_wants_action(player: Player) -> bool:
+	var d := _driver_of(player)
+	return d != null and d.wants_action(player)
+
+
+## BotBrain hook: the hunted blob.
+func bot_aim(player: Player) -> Vector3:
+	var d := _driver_of(player)
+	return d.aim(player) if d else Vector3.ZERO
+
+
+## BotBrain hook: close in this far before facing and shoving.
+func bot_action_reach() -> float:
+	return MasqBots.SHOVE_DIST
+
+
+## BotBrain hook: no faster than the shove cooldown.
+func bot_action_cooldown() -> float:
+	return shove_cooldown
+
+
+func _driver_of(p: Player) -> MasqBots:
+	for d: Variant in bot_drivers:
+		if d is MasqBots and (d as MasqBots).drives(p):
+			return d
+	return null
 
 
 ## Safe = on the dance floor, inside the room.

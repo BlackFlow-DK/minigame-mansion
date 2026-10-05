@@ -1,13 +1,15 @@
 class_name MasqBots
 extends RefCounted
-## Masquerade's bot driver: makes real players that are bots behave like the NPC dancers most of
-## the time and, now and then, hunt a suspicious blob and shove it. Owner: masquerade minigame.
+## Masquerade's bot minds: make real players that are bots behave like the NPC dancers most of the
+## time and, now and then, hunt a suspicious blob and shove it. Owner: masquerade minigame.
 ##
 ## Each driven blob keeps its own BotBrain, configured as an NPC extra (`configure_extra`
-## wander / dance, the very code the NPC crowd runs), and its controller is `scripted`, so this
-## driver fills its intent every tick: the brain's NPC stroll, or a hunt. A hunt: walk straight
-## at the chosen blob at a brisk stroll, shove when it is in reach and in front, then go back to
-## the NPC pattern from where it stands (5 s give-up).
+## wander / dance, the very code the NPC crowd runs); its controller runs that brain as for any
+## bot. A hunt is the brain's generic action hooks (Masquerade.bot_wants_action / bot_aim /
+## bot_action_reach, answered from here): while a blob hunts, the brain closes in on the chosen
+## blob at a brisk stroll, turns to face it and presses `action` (its own reaction and aim
+## error); the shove (or 5 s, or the target going away) ends the hunt and the brain goes back to
+## the NPC pattern from where it stands.
 ##
 ## Who to hunt comes only from what anybody watching could see (never from who is real):
 ## every blob (players and extras) builds up suspicion when it walks dead straight for long,
@@ -15,7 +17,8 @@ extends RefCounted
 ## suspicion fades. A bot picks among the blobs near it, weighted by suspicion plus a baseline,
 ## so it shoves NPCs as well as players.
 ## Used by the minigame on the host (roster bots) and by the network check for each peer's own
-## player. Deterministic for a given rng seed.
+## player. A human handed to `add` (tests, the network check: its controller is scripted) gets
+## its brain ticked from `tick`. Deterministic for a given rng seed.
 
 ## Seconds between a bot's decisions (random in range).
 const THINK := Vector2(1.6, 3.4)
@@ -26,11 +29,8 @@ var hunt_suspicion_gain: float = 0.12
 const HUNT_RADIUS := 5.5
 ## Weight of a blob with no suspicion at all.
 const BASE_WEIGHT := 0.35
-## Stick length while hunting (the fastest NPC stroll is 0.55).
-const HUNT_STICK := 0.55
-## Shove when the target is this close (m, centre to centre) and within SHOVE_CONE_DEG.
+## The brain closes in to this distance (m, centre to centre) before it faces and shoves.
 const SHOVE_DIST := 1.1
-const SHOVE_CONE_DEG := 28.0
 const HUNT_GIVE_UP := 5.0
 ## Suspicion: sample period (s), fade time constant (s) and the gains.
 const SAMPLE := 0.1
@@ -46,7 +46,7 @@ var game: Minigame = null
 var rng: RandomNumberGenerator = null
 ## Slot -> suspicion score of every blob (players and extras) seen.
 var suspicion: Dictionary[int, float] = {}
-## Hunts started / shoves pressed (stats for tests).
+## Hunts started / shoves made while hunting (stats for tests).
 var hunts: int = 0
 var shoves: int = 0
 
@@ -66,13 +66,17 @@ func _init(minigame: Minigame, random: RandomNumberGenerator, dance_centers: Arr
 	game = minigame
 	rng = random
 	_centers = dance_centers
+	# The minigame's bot hooks ask its drivers (the host's, a dev check's own).
+	var drivers: Variant = game.get(&"bot_drivers") if game else null
+	if drivers is Array:
+		(drivers as Array).append(self)
 	# A wrong shove flashes the shover's true colours to everyone watching.
 	if game and game.has_signal(&"wrong_shove"):
 		game.connect(&"wrong_shove", func(shover_slot: int, _npc_slot: int) -> void: note(shover_slot, GAIN_FLASH))
 
 
 ## Drives `p` from now on with `brain` (its own BotBrain; `BotBrain.of(p)` for roster bots).
-## Configures the brain as an NPC and makes the controller scripted.
+## Configures the brain as an NPC.
 func add(p: Player, brain: BotBrain) -> void:
 	if p == null or brain == null or _driven.has(p):
 		return
@@ -80,13 +84,15 @@ func add(p: Player, brain: BotBrain) -> void:
 	_brains[p.slot] = brain
 	_think[p.slot] = rng.randf_range(THINK.x, THINK.y) + 1.0
 	_be_npc(p)
-	var c := p.get_component(&"controller") as ControllerComponent
-	if c:
-		c.scripted = true
+	p.shove_started.connect(_on_shove_started.bind(p))
 
 
 func driven() -> Array[Player]:
 	return _driven
+
+
+func drives(p: Player) -> bool:
+	return p != null and _brains.has(p.slot) and _driven.has(p)
 
 
 ## Mode the NPC brain of `p` runs (&"wander" / &"dance").
@@ -107,6 +113,8 @@ func tick(delta: float) -> void:
 		if not is_instance_valid(v):
 			continue
 		var p := v as Player
+		if not p.is_bot:
+			_brains[p.slot].fill_intent(p.intent, delta)  # no controller runs it
 		if not p.alive:
 			continue
 		if p.frozen or p.control_locked:
@@ -115,14 +123,33 @@ func tick(delta: float) -> void:
 		if _hunt.has(p.slot):
 			_hunt_tick(p, delta)
 			continue
-		_brains[p.slot].fill_intent(p.intent, delta)
 		_think[p.slot] = float(_think[p.slot]) - delta
 		if float(_think[p.slot]) <= 0.0:
 			_think[p.slot] = rng.randf_range(THINK.x, THINK.y)
 			_decide(p)
 
 
-# --- Hunting --------------------------------------------------------------------------------
+# --- Hunting (answered to the brain through the minigame's hooks) ------------------------------
+
+## Hook answer: `p` is hunting a blob still worth a shove.
+func wants_action(p: Player) -> bool:
+	return _target_of(p) != null
+
+
+## Hook answer: the hunted blob's position (ZERO when not hunting).
+func aim(p: Player) -> Vector3:
+	var t := _target_of(p)
+	return t.global_position if t else Vector3.ZERO
+
+
+func _target_of(p: Player) -> Player:
+	if p == null or not _hunt.has(p.slot):
+		return null
+	var tv: Variant = _hunt[p.slot]
+	if not is_instance_valid(tv) or not (tv as Player).alive or _gone(tv as Player):
+		return null
+	return tv as Player
+
 
 func _decide(p: Player) -> void:
 	var cands: Array[Player] = []
@@ -154,28 +181,18 @@ func _decide(p: Player) -> void:
 			return
 
 
+## A hunt runs until the shove, the target going away, or the give-up time.
 func _hunt_tick(p: Player, delta: float) -> void:
-	var tv: Variant = _hunt[p.slot]
 	_hunt_time[p.slot] = float(_hunt_time[p.slot]) + delta
-	var intent := p.intent
-	intent.clear()
-	if not is_instance_valid(tv) or not (tv as Player).alive or _gone(tv as Player) 			or float(_hunt_time[p.slot]) > HUNT_GIVE_UP:
+	if _target_of(p) == null or float(_hunt_time[p.slot]) > HUNT_GIVE_UP:
 		_end_hunt(p)
-		return
-	var t := tv as Player
-	var to := _flat(t.global_position - p.global_position)
-	var d := to.length()
-	var dir := to / d if d > 0.01 else Vector2(p.facing.x, p.facing.z)
-	var facing := Vector2(p.facing.x, p.facing.z).normalized()
-	if d <= SHOVE_DIST and facing.dot(dir) >= cos(deg_to_rad(SHOVE_CONE_DEG)):
-		var shove := p.get_component(&"shove") as ShoveComponent
-		if shove == null or shove.can_shove():
-			intent.action_pressed = true
-			shoves += 1
-			_end_hunt(p)
-			return
-	# Close in; once near, slow down and turn to face it.
-	intent.move = dir * (HUNT_STICK if d > SHOVE_DIST else 0.2)
+
+
+## The hunter shoved (its brain pressed action and the shove went out): the hunt is over.
+func _on_shove_started(p: Player) -> void:
+	if is_instance_valid(p) and _hunt.has(p.slot):
+		shoves += 1
+		_end_hunt(p)
 
 
 func _end_hunt(p: Player) -> void:

@@ -25,7 +25,7 @@ func _bot_round(count: int, seed_value: int, scale: float) -> Dictionary:
 	brain0.player = ps[0]
 	brain0.minigame = mg
 	add_child(brain0)
-	brain0.configure(seed_value * 100, 1.0 if mg.hider_slots.has(0) else 0.85, 0.0)
+	brain0.configure(seed_value * 100, 1.0 if mg.hider_slots.has(0) else 0.7, 0.0)
 	(ps[0].get_component(&"controller") as ControllerComponent).scripted = true
 	var frames := 0
 	var limit := int((mg.hide_time + mg.seek_time) / scale * 60.0) + 240

@@ -17,8 +17,9 @@ extends Minigame
 ## - Awnings launch the players this peer simulates (their own authority), like the dash's hazards.
 ##
 ## Bots: `get_bot_goal` walks a route graph section by section: along the walkway (front lane) past
-## the stairs, into the chosen route's lane beyond its low end, then up it (the bot brain hops onto
-## every step it walks into: steps are at most 0.9 m with no gap). The route (main stairs or the
+## the stairs, into the chosen route's lane beyond its low end, then up it (the bot brain's jump
+## probes see each step ahead and take off in time: steps are at most 0.9 m with no gap; a step it
+## bumps into anyway gets the blocked hop). The route (main stairs or the
 ## section's alt: awning, crumble, hanging) is picked per bot and section from its skill and the
 ## alt's risk, and re-planned when a crumble closes it. `is_safe` = over a platform (within a hop up
 ## or a short drop) whose top keeps a blob's centre above the water a moment from now, not inside a
@@ -72,6 +73,15 @@ const SAFE_WATER_AHEAD := 1.0
 const HANG_AHEAD := 0.3
 ## Host: seconds between routine bot rethinks.
 const RETHINK_INTERVAL := 0.4
+## Bots: x cells (m) of the piece lookup behind is_safe / support_piece, and how far each piece's
+## footprint is grown into neighbouring cells (covers every inset those use; plus the sway).
+const CELL := 0.5
+const CELL_GROW := 0.2
+
+var _cells: Array = []                    # per bucket: per x cell, the pieces that may cover it
+var _crumble_of := PackedInt32Array()     # piece id -> crumble index (-1 none)
+var _water_t: float = NAN                 # round time the cached safe-water level is for
+var _water_safe: float = 0.0
 ## Camera: the pack is framed whole up to this vertical spread (m), then biased to the local player.
 const CAM_SPREAD := 10.0
 const CAM_MIN_DISTANCE := 14.0
@@ -102,6 +112,9 @@ const CAM_WATER_NEAR := 4.0
 var mutator_blocklist: Array[StringName] = [&"heavy", &"giant"]
 ## Bot brain hint: bots shove a bit less than in the brawls (they have to climb).
 var bot_aggression_scale: float = 0.8
+## Bot brain hint: bots climb with this share of their skill (later to see a step, rougher
+## take-offs, a stale line now and then), so the tide still catches some of them along the way.
+var bot_skill_scale: float = 0.45
 
 ## Every peer: crumble block state by crumble index (CrumbleState).
 var crumble_state: PackedInt32Array = PackedInt32Array()
@@ -728,8 +741,9 @@ func _awning_index(s: int) -> int:
 func support_piece(pos: Vector3, inset: float = -0.1) -> int:
 	var best := -1
 	var best_top := -INF
-	for id: int in _bucket(pos.y):
-		var pc: TideTower.Piece = TideTower.piece(id)
+	var near: Array = _cell(pos.y, pos.x) if inset >= -CELL_GROW else _pieces_of_bucket(pos.y)
+	for pc: TideTower.Piece in near:
+		var id := pc.id
 		if pc.top > pos.y + 0.25 or pc.top <= best_top:
 			continue
 		if not _piece_solid(pc):
@@ -748,8 +762,7 @@ func is_safe(pos: Vector3) -> bool:
 	pos.z = clampf(pos.z, TideTower.Z_BACK + 0.35, TideTower.Z_FRONT - 0.35)
 	var best_top := -INF
 	var best: TideTower.Piece = null
-	for id: int in _bucket(pos.y):
-		var pc: TideTower.Piece = TideTower.piece(id)
+	for pc: TideTower.Piece in _cell(pos.y, pos.x):
 		if pc.top > pos.y + 1.05:
 			if pc.bottom < pos.y + 1.0 and _piece_solid(pc) and _covers_now(pc, pos.x, pos.z, 0.12, _t):
 				return false  # inside a wall
@@ -765,17 +778,20 @@ func is_safe(pos: Vector3) -> bool:
 		best = pc
 	if best == null:
 		return false
-	if best.kind == TideTower.Kind.CRUMBLE and crumble_state[_crumble_ids.find(best.id)] != CrumbleState.SOLID:
+	if best.kind == TideTower.Kind.CRUMBLE and crumble_state[_crumble_of[best.id]] != CrumbleState.SOLID:
 		return false
 	if best.kind == TideTower.Kind.HANGING and not _covers_now(best, pos.x, pos.z, 0.12, _t + HANG_AHEAD * _clock_scale()):
 		return false
-	return best_top + 0.5 > TideTower.water_height(_t + SAFE_WATER_AHEAD * _clock_scale()) + SAFE_WATER_MARGIN
+	if _water_t != _t:
+		_water_t = _t
+		_water_safe = TideTower.water_height(_t + SAFE_WATER_AHEAD * _clock_scale()) + SAFE_WATER_MARGIN
+	return best_top + 0.5 > _water_safe
 
 
 func _piece_solid(pc: TideTower.Piece) -> bool:
 	if pc.kind != TideTower.Kind.CRUMBLE:
 		return true
-	var i := _crumble_ids.find(pc.id)
+	var i := _crumble_of[pc.id]
 	return i < 0 or crumble_state[i] != CrumbleState.FALLEN
 
 
@@ -783,6 +799,20 @@ func _covers_now(pc: TideTower.Piece, x: float, z: float, inset: float, t: float
 	if pc.kind == TideTower.Kind.HANGING:
 		x -= TideTower.sway(pc.section, t, _phase)
 	return pc.covers(x, z, inset)
+
+
+## The pieces that may cover x at height y (bucket of y, x cell; footprints grown by CELL_GROW and,
+## for hanging platforms, their sway), in id order: is_safe / support_piece look only at these.
+func _cell(y: float, x: float) -> Array:
+	var row: Array = _cells[clampi(floori(y / TideTower.LEVEL), 0, _cells.size() - 1)]
+	return row[clampi(floori((x + TideTower.HALF_W) / CELL), 0, row.size() - 1)]
+
+
+func _pieces_of_bucket(y: float) -> Array:
+	var out: Array = []
+	for id: int in _bucket(y):
+		out.append(TideTower.piece(id))
+	return out
 
 
 func _bucket(y: float) -> Array:
@@ -808,6 +838,26 @@ func _index_pieces() -> void:
 			if pc.top >= lo and pc.bottom <= hi:
 				ids.append(pc.id)
 		_buckets.append(ids)
+	# Bot lookups: crumble index by piece id, and per bucket the pieces over each CELL of x.
+	_crumble_of = PackedInt32Array()
+	_crumble_of.resize(TideTower.pieces().size())
+	_crumble_of.fill(-1)
+	for i in _crumble_ids.size():
+		_crumble_of[_crumble_ids[i]] = i
+	_cells.clear()
+	var count := ceili(2.0 * TideTower.HALF_W / CELL)
+	for ids: Array[int] in _buckets:
+		var row: Array = []
+		for c in count:
+			row.append([])
+		for id in ids:
+			var pc := TideTower.piece(id)
+			var grow := CELL_GROW + (TideTower.SWAY_AMP if pc.kind == TideTower.Kind.HANGING else 0.0)
+			var c0 := clampi(floori((pc.x0 - grow + TideTower.HALF_W) / CELL), 0, count - 1)
+			var c1 := clampi(floori((pc.x1 + grow + TideTower.HALF_W) / CELL), 0, count - 1)
+			for c in range(c0, c1 + 1):
+				(row[c] as Array).append(pc)
+		_cells.append(row)
 
 
 # --- Presentation (every peer) ------------------------------------------------------------------------

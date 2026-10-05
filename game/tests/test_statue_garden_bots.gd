@@ -1,7 +1,8 @@
 extends GameTest
 ## Statue Garden bot-only rounds: every slot (slot 0 too, via its own BotBrain) is a bot.
 ## Each round must end with a valid ranking (every slot once) in 30-70 s with some catches
-## (bots have imperfect reflexes); the numbers are printed so the pacing can be judged. Plus a
+## (bots have imperfect reflexes: the brain's skill-based hold reaction to `bot_should_hold`);
+## the numbers are printed so the pacing can be judged. Plus a
 ## slot-bias check over 12 seeded 4-bot rounds at time scale 2 (the phase clock runs twice as
 ## fast, the walking does not), and a check that stopped bots really stand still.
 
@@ -13,12 +14,8 @@ func _bot_round(count: int, seed_value: int, scale: float, quiet: bool = false) 
 	var ps := spawn_arena(count, ID, false)
 	var mg := get_minigame() as StatueGarden
 	mg.rng.seed = seed_value
-	mg.bot_rng.seed = seed_value * 31 + 7
 	mg.time_scale = scale
 	mg.shuffle_lanes()
-	# _start rolled the reflexes from the unseeded rng: roll them again from the seed.
-	for p in ps:
-		mg._bot_reflex[p.slot] = mg.bot_rng.randf()
 	var brain0 := BotBrain.new()
 	brain0.player = ps[0]
 	brain0.minigame = mg
@@ -121,7 +118,8 @@ func test_stopped_bots_stand_still() -> void:
 		await step(int(1.4 / physics_delta()))
 		var caught := watch(mg, &"caught")
 		for p in ps:
-			if p.slot != 0 and mg._bot_stopped.get(p.slot, false):
+			var brain := BotBrain.of(p)
+			if p.slot != 0 and brain and brain.is_held():
 				start[p.slot] = p.global_position
 		var idx := mg.phase_index
 		while mg.phase == StatueGarden.Phase.RED and mg.phase_index == idx and not mg.is_finished():

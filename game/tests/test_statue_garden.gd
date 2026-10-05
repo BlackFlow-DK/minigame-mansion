@@ -255,13 +255,17 @@ func test_bot_goals_go_up_the_lane_then_stand_still() -> void:
 	g = mg.get_bot_goal(ps[2])
 	assert_near(g.z, StatueGarden.STATUE_POS.z + StatueGarden.PLINTH_HALF.y + 0.05, 0.01, "at the plinth face")
 	assert_true(absf(g.x) < StatueGarden.PLINTH_HALF.x, "within the plinth's width")
-	# WARNING: each bot keeps walking until its reflex fires, then its goal is where it stands.
-	assert_true(await _reach(mg, StatueGarden.Phase.WARNING), "WARNING")
-	await step(_frames(mg.warn_time) - 2)
-	assert_true(await _reach(mg, StatueGarden.Phase.RED), "RED")
-	await step(_frames(StatueGarden.BOT_STOP_DELAY.x + StatueGarden.BOT_STOP_JITTER) + 2)
+	# WARNING and RED: every bot is told to hold (its brain stops after its own hold reaction);
+	# GREEN lets them go again.
 	for p in ps:
-		assert_near(mg.get_bot_goal(p), p.global_position, 0.001, "P%d: stand still" % p.slot)
+		assert_false(mg.bot_should_hold(p), "P%d: no hold in GREEN" % p.slot)
+	assert_true(await _reach(mg, StatueGarden.Phase.WARNING), "WARNING")
+	for p in ps:
+		assert_true(mg.bot_should_hold(p), "P%d: hold in WARNING" % p.slot)
+	assert_true(await _reach(mg, StatueGarden.Phase.RED), "RED")
+	for p in ps:
+		assert_true(mg.bot_should_hold(p), "P%d: hold in RED" % p.slot)
+	assert_near(mg.bot_reaction_scale, 1.0, 0.001, "hold reactions at the real clock")
 	assert_false(mg.is_safe(Vector3(7.0, 0.0, 0.0)), "the hedge is not safe")
 	assert_false(mg.is_safe(Vector3(0.0, 0.0, 15.5)), "behind the start hedge is not safe")
 
