@@ -12,8 +12,9 @@ extends Minigame
 ##   revealed (prop pops off, blob, yelp) and caught: `knock_out` reason `found`. A real prop
 ##   jiggles and costs one poke (budget per seeker: poke_base + poke_per_hider * hiders); out of
 ##   pokes, one comes back every refill_time s. Every rustle_interval s every hider shivers and
-##   rustles (sound at its spot); in the last glow_time s hiders glow faintly through walls on
-##   the seekers' screens. A moving prop wobbles: that is the tell.
+##   rustles (sound at its spot); in the last glow_time s (by player count, `glow_by_players`)
+##   hiders glow faintly through walls on the seekers' screens. A moving prop wobbles: that is
+##   the tell.
 ## HUD counter: pokes left for seekers, seconds survived for hiders.
 ##
 ## RANKING (finish(groups, 2.0), tied groups):
@@ -25,6 +26,8 @@ extends Minigame
 ##
 ## Roles rotate: the host remembers (static, app lifetime) who sought last time and how often
 ## each slot has sought, and picks the least-used slots, never last round's seekers if avoidable.
+## The counts start over whenever the set of players changes (someone joined or left), so a
+## newcomer is not made the seeker round after round to "catch up" with the others.
 ##
 ## Host decides everything and tells every peer through reliable call_local RPCs (layout seed,
 ## roles, disguise kinds, phases, pokes, reveals, rustles, glow, the end); presentation and
@@ -68,7 +71,13 @@ const SPOT_SPACING := 1.9
 @export var poke_per_hider: int = 2
 @export var refill_time: float = 10.0
 @export var rustle_interval: float = 15.0
+## Seconds of glow at the end of SEEK this round: set in _rpc_setup from `glow_by_players`.
 @export var glow_time: float = 10.0
+## Glow seconds by player count (index = players, 8+ use the last). The glow is the seekers'
+## catch-up lever: tuned so a seeker scores about what a hider does (bots, 48 rounds per count,
+## docs/balance-v03-b.md). A flat 10 s left a lone seeker (3-5 players) behind and made a pair
+## hunting 4 hiders (6 players) a jackpot.
+@export var glow_by_players: PackedFloat32Array = PackedFloat32Array([10.0, 10.0, 10.0, 15.0, 20.0, 20.0, 5.0, 7.5, 10.0])
 ## Seconds the revealed blob stands there before it is knocked out.
 @export var reveal_delay: float = 0.7
 const POKE_CONE_DEG := 75.0
@@ -134,6 +143,8 @@ static var test_seed: int = -1
 ## App lifetime: who sought last time this minigame ran, and how often each slot has sought.
 static var _last_seekers: Array[int] = []
 static var _seek_count: Dictionary = {}
+## The slots the counts were kept for (sorted).
+static var _rotation_slots: Array[int] = []
 
 
 ## A seeker bot's memory (host).
@@ -345,6 +356,11 @@ static func seeker_count(count: int) -> int:
 static func pick_seekers(slots: Array[int], r: RandomNumberGenerator) -> Array[int]:
 	var n := mini(seeker_count(slots.size()), slots.size())
 	var order: Array[int] = slots.duplicate()
+	order.sort()
+	if order != _rotation_slots:
+		# A different table: everyone starts level (last round's seekers still sit this one out).
+		_rotation_slots = order.duplicate()
+		_seek_count.clear()
 	var roll: Dictionary = {}
 	for s in order:
 		roll[s] = r.randf()
@@ -374,6 +390,7 @@ static func remember_seekers(chosen: Array[int]) -> void:
 static func reset_rotation() -> void:
 	_last_seekers.clear()
 	_seek_count.clear()
+	_rotation_slots.clear()
 
 
 static func last_seekers() -> Array[int]:
@@ -420,6 +437,13 @@ static func _group_by(groups: Array, ordered: Array[int], value: Callable) -> vo
 		current.append(s)
 	if not current.is_empty():
 		groups.append(current)
+
+
+## Seconds the hiders glow at the end of SEEK in a round of `count` players.
+func glow_time_for(count: int) -> float:
+	if glow_by_players.is_empty():
+		return glow_time
+	return glow_by_players[clampi(count, 0, glow_by_players.size() - 1)]
 
 
 ## Starting pokes of each seeker for `hiders` hiders and `seeker_total` seekers.
@@ -604,6 +628,7 @@ func _rpc_setup(seed_value: int, seeker_list: Array, hiders: Array, kinds: Array
 	disguises.clear()
 	for i in hiders.size():
 		hider_slots.append(int(hiders[i]))
+	glow_time = glow_time_for(seekers.size() + hider_slots.size())
 	var budget := poke_budget(hider_slots.size(), seekers.size())
 	for i in seekers.size():
 		var p := _player(seekers[i])
