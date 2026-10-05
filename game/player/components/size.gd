@@ -72,6 +72,27 @@ var _modifiers: Dictionary = {}
 ## Every "<component>:<property>" a modifier ever touched that is not in STATS (kept in sync
 ## after the modifier goes, so its base comes back).
 var _extra_keys: Dictionary = {}
+## Hot path (`_sync_stats` runs every tick for every blob): per STATS row the component, the
+## factor in effect and the base / last written value (NAN = never written), mirrored into
+## `_base` / `_written`. The factors are recomputed only when the size entry, `frozen` or the
+## modifiers change (`_mods_version`), not per tick.
+var _stat_nodes: Array[PlayerComponent] = []
+var _stat_f := PackedFloat64Array()
+var _stat_base := PackedFloat64Array()
+var _stat_written := PackedFloat64Array()
+var _f_entry: Dictionary = {}
+var _f_frozen: bool = false
+var _f_mods: int = -1
+var _mods_version: int = 0
+## `_read_loadout` input it last resolved: [size id, modifiers version] -> entry, scale.
+var _rl_id: Variant = null
+var _rl_mods: int = -1
+var _rl_entry: Dictionary = {}
+var _rl_scale: float = 1.0
+## `_apply_looks` (every frame): the visuals and fx components, looked up once.
+var _looks_cached: bool = false
+var _visuals: PlayerComponent = null
+var _fx: PlayerComponent = null
 
 
 func _ready() -> void:
@@ -113,6 +134,7 @@ func set_modifier(source: StringName, stats: Dictionary, body_scale_factor: floa
 		if not _is_size_stat(str(key)):
 			_extra_keys[str(key)] = true
 	_modifiers[source] = {"stats": clean, "scale": body_scale_factor}
+	_mods_version += 1
 	if player:
 		_read_loadout()
 		_sync_stats()
@@ -123,6 +145,7 @@ func clear_modifier(source: StringName) -> void:
 	if not _modifiers.has(source):
 		return
 	_modifiers.erase(source)
+	_mods_version += 1
 	if player:
 		_read_loadout()
 		_sync_stats()
@@ -197,8 +220,13 @@ func _process(delta: float) -> void:
 
 func _read_loadout() -> void:
 	var id: Variant = size_override if size_override != "" else player.loadout.get("size", CatalogData.DEFAULT_SIZE)
-	var entry := CatalogData.size_entry(id)
-	var want := float(entry["scale"]) * modifier_scale()
+	if _rl_mods != _mods_version or typeof(id) != typeof(_rl_id) or id != _rl_id:
+		_rl_id = id
+		_rl_mods = _mods_version
+		_rl_entry = CatalogData.size_entry(id)
+		_rl_scale = float(_rl_entry["scale"]) * modifier_scale()
+	var entry := _rl_entry
+	var want := _rl_scale
 	if entry["id"] == size_id and _capsule_scale == want and body_scale == want:
 		return
 	size_id = entry["id"]
@@ -223,24 +251,55 @@ func _apply_capsule() -> void:
 
 
 func _apply_looks() -> void:
-	var visuals := player.get_component(&"visuals")
-	if visuals:
+	if not _looks_cached:
+		_looks_cached = true
+		_visuals = player.get_component(&"visuals")
+		var fx := player.get_component(&"fx")
+		_fx = fx if fx and &"head_height" in fx else null
+	if _visuals:
 		var s := Vector3.ONE * shown_scale
-		if visuals.scale != s:
-			visuals.scale = s
-	var fx := player.get_component(&"fx")
-	if fx and &"head_height" in fx:
-		_sync(fx, &"head_height", "fx:head_height", body_scale)
+		if _visuals.scale != s:
+			_visuals.scale = s
+	if _fx:
+		_sync(_fx, &"head_height", "fx:head_height", body_scale)
 	var tag := player.get_node_or_null(^"NameTag")
 	if tag and &"height" in tag:
 		_sync(tag, &"height", "NameTag:height", body_scale)
 
 
+## `_sync` for every STATS row (same rule, see `_sync`), without per-tick lookups.
 func _sync_stats() -> void:
-	for stat: Array in STATS:
-		var c := player.get_component(stat[0])
-		if c:
-			_sync(c, stat[1], stat[3], factor(stat[2]) * modifier_factor(stat[3]))
+	var n := STATS.size()
+	if _stat_nodes.size() != n:
+		_stat_nodes.clear()
+		for stat: Array in STATS:
+			_stat_nodes.append(player.get_component(stat[0]))
+		_stat_f.resize(n)
+		_stat_base.resize(n)
+		_stat_written.resize(n)
+		_stat_written.fill(NAN)
+		_f_mods = -1
+	if _f_mods != _mods_version or _f_frozen != player.frozen or not is_same(_f_entry, _entry):
+		_f_mods = _mods_version
+		_f_frozen = player.frozen
+		_f_entry = _entry
+		for i in n:
+			_stat_f[i] = factor(STATS[i][2]) * modifier_factor(STATS[i][3])
+	for i in n:
+		var c := _stat_nodes[i]
+		if c == null:
+			continue
+		var property: StringName = STATS[i][1]
+		var v: float = c.get(property)
+		if v != _stat_written[i]:  # NAN (never written) differs from everything
+			_stat_base[i] = v
+			_base[STATS[i][3]] = v
+		var want := _stat_base[i] * _stat_f[i]
+		if v != want:
+			c.set(property, want)
+		if want != _stat_written[i]:
+			_stat_written[i] = want
+			_written[STATS[i][3]] = want
 	for key: String in _extra_keys:
 		var parts := key.split(":", true, 1)
 		var c := player.get_component(StringName(parts[0])) if parts.size() == 2 else null

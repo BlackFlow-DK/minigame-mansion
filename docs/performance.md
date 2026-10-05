@@ -319,6 +319,62 @@ frame's load part; machine shared with other agents):
 Hide and Sneak's remainder is `_ready` building the arena (merge, `_setup`), not the resource
 load. Not measured: frame times during RESULTS while the worker thread loads.
 
+### Spike pass (branch `spikes`): what the worst frames were
+
+Attribution, not guesses: a throwaway per-frame probe (not committed; same head/tail bracketing
+as `perf_probe.gd`) logged every frame's split (physics ticks / physics scripts / process
+scripts / rest), node adds, pipeline compiles and the game events of that frame (Fx/Sfx
+`played`, minigame signals); a twin run switched one script group's callbacks off per 1.2 s
+window; temporary timers inside `Player._physics_process` and `Player._emit_local` split the tick
+and the event handlers; `-d --profiling` sampled frames named the functions.
+1. **First-use shader compiles and sound loads** (the big ones, one-off per process, inside the
+   10 s window of every perf run and in the first rounds of a real session). `FxLibrary.build`
+   of an effect never built before creates its ShaderMaterials, which compiles the shader on
+   the main thread: dust_puff 50-60 ms, land_thud 20 ms, hit_stars 66-70 ms, ko_tag 4.4 ms (fresh
+   process, windowed). `Sfx._pick_stream` loaded each .wav on its first play (~1.7 ms each, 75 ms
+   for all). Masquerade's first wrong shove/unmasking: one 90-110 ms physics tick (`_star` 49 ms,
+   `_glow` 21 ms, `_pick_stream` 5.5 ms), then a 5-7-tick catch-up frame. Lava's first knock-out:
+   an 89 ms tick (splash_lava/ko_tag), then a 5-tick frame. **Fix**: `Fx` builds one idle node of
+   every effect into its pool 0.5 s after startup, one per frame; `Sfx` loads every file 0.6 s
+   after startup, 3 per frame (both only with a renderer / audible, so headless tests are
+   unchanged). The hitch moves to the title (or the first 1-2 s of the sandbox).
+2. **The 60 Hz physics tick itself.** Uncapped at 200-600 fps only every 3rd-10th frame runs a
+   tick, so the 1 % low is the worst ticks. Split per tick (loaded machine): Masquerade 6.3 ms =
+   `SizeComponent` 1.5 (6 stats x 28 blobs re-read and re-written every tick through
+   `get_component` / `factor` / `modifier_factor` / dynamic get/set), move_and_slide 1.0-1.2, NPC
+   brains 0.6-0.75, bot brains 0.25, status/movement/jump/shove 0.5-0.6, post_tick 0.5, the rest
+   (visuals, blob shadow, sync, sfx `_physics_process`) ~2. Floor Is Lava 2.6-3.2 ms = bot brains
+   0.8, move_and_slide 0.6-0.7, size 0.45, the rest small. **Fix**: `SizeComponent` keeps the
+   component refs, the factors (recomputed only when the size entry, `frozen` or a modifier
+   changes) and base/written values in packed arrays (same rule, `_base`/`_written` mirrored);
+   size 1.5 -> 0.6 ms per tick in Masquerade, 0.45 -> 0.14 in Lava.
+3. **Event handlers** (per event, loaded machine): eliminated 1.8-4 ms, of which the knock-out
+   pop ghost (`VisualsComponent._spawn_pop_ghost`, a 23-33 node duplicate of the model) is
+   1.3-3.6 ms; jumped/landed 0.23-0.26 ms each (several land on the same tick); Masquerade
+   shove_hit 1.4 ms (disguise flash re-applies the cosmetics). Not changed (see below).
+4. Not the cause: node churn (0.02-0.07 adds per frame outside knock-outs), pipeline compiles
+   (Godot's ubershaders compile in the background: 0-16 per run, no stall), GC of freed tiles,
+   tile cracks/falls (Fx/Sfx only, cheap once warm), RPC bursts (offline). The remaining worst
+   frames are "rest" (render submit + OS wait) of 15-70 ms with no event and normal render CPU:
+   other processes on the machine.
+
+A/B, interleaved (main `e6608c3` vs `spikes`), LOW, 8 players, 3 pairs each, median, ms; the
+machine ran ~13 other Godot processes (balance batches), so averages are ~2.5x the quiet numbers
+in the brief and single 1 % lows scatter by +-50 %:
+
+| game | avg before -> after | 1 % low before -> after | ratio | worst-1 % physics scripts |
+|---|---|---|---|---|
+| floor_is_lava | 5.16 -> 5.07 | 14.79 -> 10.03 | 2.87 -> 1.98 | 5.23 -> 4.36 |
+| masquerade | 9.90 -> 8.43 | 30.94 -> 16.08 | 3.13 -> 1.91 | 20.42 -> 7.12 |
+| portrait_panic | 5.72 -> 5.25 | 16.54 -> 23.40 | 2.89 -> 4.46 | 10.17 -> 4.09 |
+| rising_tide | 5.79 -> 5.29 | 11.31 -> 10.31 | 1.95 -> 1.95 | 5.62 -> 4.73 |
+
+Portrait Panic's after-1 % low is two runs with 13.5 ms of "rest" (OS) in the worst frames; its
+physics part of the worst frames halved. Left as is (owners): the knock-out pop ghost (pool or
+pre-build it per player: visuals), the bot/NPC brains (~30 % of a Lava tick), the
+per-component `post_tick` calls `Player` makes for 13 components per blob though 3 implement it
+(player.gd), and GodotPhysics move_and_slide (Jolt would be the bigger lever: project setting).
+
 ### Startup, memory, exe
 
 - Release exe launch -> title drawn (6 alternating runs each, loaded machine): median **6.9 s ->
