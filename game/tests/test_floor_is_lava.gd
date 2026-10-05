@@ -1,4 +1,4 @@
-extends GameTest
+﻿extends GameTest
 ## Floor Is Lava: tiles crack under grounded players and fall `crack_delay` later, players
 ## in the lava are knocked out, the late collapse ends every round, bots can play it.
 
@@ -183,6 +183,7 @@ func test_tile_cracks_then_falls_on_time_and_loses_its_collider() -> void:
 func test_running_across_tiles_does_not_crack_them_but_standing_does() -> void:
 	var ps := spawn_arena(8, ID)
 	var g := _game()
+	g._rng.seed = 41  # _start rolled it from randi(): the same round whatever ran before
 	var cracked := watch(g, &"tile_cracked")
 	ps[0].place_at(Transform3D(Basis.IDENTITY, g.get_tile_position(g.tile_at(Vector3(-6.4, 0.0, 0.0)))))
 	await step(int(g.grace_time * 60.0) - 5)
@@ -199,7 +200,9 @@ func test_running_across_tiles_does_not_crack_them_but_standing_does() -> void:
 		if absf(g.get_tile_position(e[0]).z) < 1.0:
 			under_runner += 1
 	assert_eq(under_runner, 0, "no tile on the runner's path cracked")
-	# Then stand still: the tile under the runner cracks after touch_time.
+	# Then stand still: the tile under the runner cracks after touch_time. Let it skid to a stop
+	# first (it can slide over a tile edge), then take the tile it stands on.
+	await step(20, func(_i: int) -> void: ps[0].intent.move = Vector2.ZERO)
 	var tile := g.tile_at(ps[0].global_position)
 	await step(int(g.touch_time * 60.0) + 10, func(_i: int) -> void: ps[0].intent.move = Vector2.ZERO)
 	assert_true(_has_index(cracked, tile), "standing still cracks the tile")
