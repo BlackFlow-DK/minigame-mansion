@@ -88,7 +88,7 @@ func test_title_focus_chain_and_hierarchy() -> void:
 	assert_true(t.join_button.get_combined_minimum_size().y > t.settings_button.get_combined_minimum_size().y + 6.0,
 		"primary buttons are clearly bigger than secondary ones")
 	assert_eq(t.version_label.text, "v" + str(ProjectSettings.get_setting("application/config/version")), "version from project.godot")
-	assert_eq(str(ProjectSettings.get_setting("application/config/version")), "0.2", "version 0.2")
+	assert_eq(str(ProjectSettings.get_setting("application/config/version")), "0.3", "version 0.3")
 	assert_true(t.coin_balance.is_visible_in_tree(), "coin balance on the title")
 	# Grid moves: Down from Play offline lands on Wardrobe, Right goes to How to play.
 	assert_eq(t.offline_button.get_node(t.offline_button.focus_neighbor_bottom), t.wardrobe_button, "offline -> wardrobe")
