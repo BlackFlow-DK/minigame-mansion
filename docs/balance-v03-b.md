@@ -191,24 +191,15 @@ hiders in 57-69 % of rounds, ghosts catch more than half the runners in 62-77 %.
 points; meeting 65 % on first place needs a ranking rule change (e.g. the hunters share first
 place when they catch more than half), which is a design call: left for the orchestrator.
 
-## Tooling (needs, not done: `tools/` and `game/tools/` are orchestrator-owned)
+## Tooling
 
-Worked around with a subclass of the runner in `game/build/balb/` (gitignored, not committed):
-1. **Mixed sizes per seat** (the stock `-Size` sets every seat alike, so a size bias can't show).
-2. **A per-round machine line** with roles and in-game state read at `round_finished`
-   (seekers/hiders, original ghosts, catches, scores, KOs with the shover), so role balance,
-   role assignment per seat and size-by-role can be computed. Today only per-seat totals print.
-3. **The runner overwrites a minigame's own bot setup**: it calls `brain.configure(seed)` at the
-   round intro, after `_setup`; Hide and Sneak configures its bots in `_setup`, so stock batches
-   measured random-skill hiders instead of the game's sharp ones. Fix: configure before
-   `_setup`, or let a minigame opt out.
-4. Static rotations (Hide and Sneak, now Ghost Tag) carry over between player counts in one
-   batch process; with the reset-on-new-table fix this is now harmless.
+Folded into `tools/balance-batch.ps1` and `game/tools/balance/balance_runner.gd` (see
+`docs/balance.md`, "How to re-run"): `-Size mixed`, `-RoundJson`, and the bot personalities are
+now set before the minigame's `_setup`. These batches were measured with a gitignored runner
+subclass that did the same.
 
 ## How to re-run
 
-The driver is `game/build/balb/driver.tscn` (not committed). With the stock tool, the closest is:
-
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\balance-batch.ps1 -Minigame ghost_tag -Players 4 -Rounds 48 -Seed 1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\balance-batch.ps1 -Minigame hide_and_sneak -Players 4 -Rounds 48 -Seed 1 -Size mixed -RoundJson -Out build\balance\hide.txt
 ```

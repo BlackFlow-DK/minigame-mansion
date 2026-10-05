@@ -4,7 +4,9 @@ extends Node
 ##   godot_console --headless --fixed-fps 60 --path game res://tools/balance/balance_batch.tscn --
 ##       --minigame=<id>|all --players=2,4,8 --rounds=30 --seed=1 [--verbose]
 ##       [--set=shove.force=8;minigame.collapse_start=25]   (experiments, see runner.overrides)
-##       [--size=normal|small|big] (every seat's body)  [--full] (keep presentation running)
+##       [--size=normal|small|big|mixed] (every seat's body; mixed: rotated over the seats)
+##       [--round-json] (a ROUND_JSON line per round: roles, scores, sizes, KOs)  [--full]
+##       (keep presentation running)
 ## Prints `balance_runner.gd`'s report per (minigame, player count) plus one BALANCE_JSON line
 ## each, then quits (exit 1 on bad arguments or when a round never ended).
 
@@ -20,6 +22,7 @@ func _ready() -> void:
 	var overrides := {}
 	var lean := true
 	var body_size := "normal"
+	var round_json := false
 	for arg in OS.get_cmdline_user_args():
 		var kv := arg.trim_prefix("--").split("=", true, 1)
 		var key := kv[0]
@@ -41,9 +44,15 @@ func _ready() -> void:
 				seed_value = value.to_int()
 			"verbose":
 				verbose = true
+			"round-json":
+				round_json = true
 			"full":
 				lean = false
 			"size":
+				if not ["normal", "small", "big", "mixed"].has(value):
+					printerr("balance: bad --size '%s' (normal, small, big, mixed)" % value)
+					get_tree().quit(1)
+					return
 				body_size = value
 			"set":
 				# "shove.force=8;minigame.collapse_start=25" (values in Godot syntax)
@@ -68,6 +77,7 @@ func _ready() -> void:
 	runner.overrides = overrides
 	runner.lean = lean
 	runner.body_size = body_size
+	runner.round_json = round_json
 	if not overrides.is_empty():
 		print("balance: overrides %s" % str(overrides))
 	add_child(runner)
