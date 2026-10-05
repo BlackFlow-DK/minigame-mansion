@@ -1,4 +1,4 @@
-class_name BotBrain
+﻿class_name BotBrain
 extends Node
 ## The bot brain: fills the same PlayerIntent a human controller would.
 ## The bot's ControllerComponent instances this script as its child `BotBrain` and calls
@@ -183,7 +183,7 @@ const HIGH_WALL_GIVE_UP := 0.6
 ## Seconds to notice a hold coming on (stop) / going off (go): by skill, plus random jitter.
 const HOLD_STOP := Vector2(1.04, 0.2)
 const HOLD_STOP_JITTER := 0.4
-const HOLD_GO := Vector2(0.8, 0.3)
+const HOLD_GO := Vector2(0.8, 0.35)
 const HOLD_GO_JITTER := 0.25
 ## Seconds from the action hook's yes (seen at a think) to the press, x 0.8..1.25.
 const ACTION_REACTION := Vector2(0.4, 0.1)
@@ -304,6 +304,7 @@ var _plan_speed: float = 0.0       # least speed along the plan for a planned ga
 var _radius_cache: float = 0.0
 var _pass_samples: int = 0
 var _phase: int = 0                # this brain's budget frames (from its seed)
+var _ticks: int = 0                # physics frames this brain ticked since configure (budget clock)
 var _hooked: Minigame = null
 # Hooks (looked up once per minigame).
 var _hooks_game: Minigame = null
@@ -382,6 +383,7 @@ func configure(seed_value: int, skill_value: float = -1.0, aggression_value: flo
 	_danger_reaction = _lerp_skill(DANGER_REACTION) * _rng.randf_range(0.8, 1.25)
 	_configured = true
 	_phase = _rng_b.randi() % BUDGET_SLOTS
+	_ticks = 0
 	_hold_known = false
 	_act_cd = 0.0
 	acts = 0
@@ -420,6 +422,7 @@ func configure_extra(mode: StringName, seed_value: int, center: Vector3 = Vector
 	state = State.NONE
 	_configured = true
 	_phase = _rng_b.randi() % BUDGET_SLOTS
+	_ticks = 0
 	_hold_known = false
 	_end_act()
 
@@ -1009,6 +1012,8 @@ func _frame_begin() -> void:
 	var f := Engine.get_physics_frames()
 	_solo = f == _seen_frame
 	_seen_frame = f
+	if not _solo:
+		_ticks += 1
 	if f != _budget_frame:
 		_budget_frame = f
 		_thinks_left = THINKS_PER_FRAME
@@ -1019,8 +1024,10 @@ func _frame_begin() -> void:
 func _take_budget(think: bool) -> bool:
 	if _solo or not budget_enabled:
 		return true
-	# This bot's own frames only (a phase from its seed, never its slot: no bot is always first).
-	if (_seen_frame + _phase) % BUDGET_SLOTS != (0 if think else BUDGET_SLOTS / 2):
+	# This bot's own frames only (a phase from its seed, never its slot: no bot is always first),
+	# counted from its configure, not the engine's frame count: the same round plays out the same
+	# whatever ran before it (a filtered test run matches the full suite).
+	if (_ticks + _phase) % BUDGET_SLOTS != (0 if think else BUDGET_SLOTS / 2):
 		return false
 	if think:
 		if _thinks_left <= 0:
