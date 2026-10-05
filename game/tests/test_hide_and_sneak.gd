@@ -311,8 +311,10 @@ func test_rustle_every_interval_and_glow_at_the_end() -> void:
 	await step(int(mg.rustle_interval / 10.0 * 60.0) + 3)
 	assert_eq(rustles.size(), 1, "first rustle at %d s" % int(mg.rustle_interval))
 	assert_false(mg.glow_on, "no glow yet")
+	assert_eq(mg.glow_time, mg.glow_time_for(4), "4 players: their glow time")
 	await step(int((mg.seek_time - mg.glow_time - mg.rustle_interval) / 10.0 * 60.0) + 3)
-	assert_eq(rustles.size(), 3, "rustles at 15, 30, 45 s")
+	var want := int((mg.seek_time - mg.glow_time) / mg.rustle_interval)
+	assert_eq(rustles.size(), want, "a rustle every %d s until the glow" % int(mg.rustle_interval))
 	assert_true(mg.glow_on, "hiders glow in the last %d s" % int(mg.glow_time))
 
 

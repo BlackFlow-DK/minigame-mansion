@@ -3,8 +3,9 @@ extends Minigame
 ## Ghost Tag: infection tag in the mansion attic at night, 60 s.
 ##
 ## Rules (the host decides, every peer is told by reliable call_local RPCs):
-## - One random player starts as THE GHOST (two with 7-8 players). The others get a 3 s head
-##   start: the ghost is frozen ("The ghost wakes in 3...").
+## - One player starts as THE GHOST (two with 7-8 players; a rotation, see `pick_ghosts`). The
+##   others get a 3 s head start: the ghost is frozen ("The ghost wakes in 3...").
+## - Body sizes keep only `size_speed_keep` of their speed factor here (a chase is all speed).
 ## - A ghost touching a living blob (flat centre distance under `touch_distance`) or landing a
 ##   shove on one CATCHES it: both freeze for a 0.6 s "boo!", then the victim is a ghost too and
 ##   rises for `rise_time` (1 s, still frozen) before it can hunt.
@@ -61,6 +62,9 @@ const PROPS := "res://assets/models/props/"
 @export var touch_distance: float = 1.0
 ## Ghost speed over the living.
 @export var ghost_speed_bonus: float = 1.06
+## How much of the body size's speed factor applies here (1 = all, 0 = none): with all of it a
+## big runner (0.88x) was caught 77 % of the time against 55 % for normal and small (4 players).
+@export var size_speed_keep: float = 0.5
 ## A ghost's knockback multiplier (living shoves only nudge it).
 @export var ghost_knockback: float = 0.35
 ## Stun (s) a ghost gets from any hit.
@@ -68,7 +72,9 @@ const PROPS := "res://assets/models/props/"
 ## Seconds the end is held (frozen) before the results.
 @export var end_grace: float = 2.0
 ## How much a catch by a ghost's chain counts for the original ghost (its own catches count 1).
-@export var chain_credit: float = 1.0
+## 0.75 (was 1.0): with full chain credit the starting ghosts scored 1.08-1.18x the average
+## player at 8 players; 0.75: 1.02-1.14x at 8, 0.96-1.04x at 4 (bots, 48-round batches).
+@export var chain_credit: float = 0.75
 ## Bots: how much a fleeing bot prefers junctions over ring corners (cells of ghost distance).
 @export var flee_open_weight: float = 8.0
 ## Bots: a lone ghost bot senses living blobs within this path distance (m), or in plain sight
@@ -88,6 +94,12 @@ var time_scale: float = 1.0
 var rng := RandomNumberGenerator.new()
 ## Tests: seeds the next instance's rng in _ready (before _setup draws the ghosts); -1 = random.
 static var seed_next: int = -1
+## App lifetime: who started as the ghost last time and how often each slot has (the counts
+## start over when the set of players changes). Least-used slots go first, never last round's
+## ghosts if avoidable, random among equals: over a session everyone haunts about equally often.
+static var _last_ghosts: Array[int] = []
+static var _haunt_count: Dictionary = {}
+static var _rotation_slots: Array[int] = []
 ## The attic layout (every peer).
 var map: GhostMap = GhostMap.new()
 
@@ -120,6 +132,7 @@ var _rethink_living: float = 0.0
 var _ghost_field := PackedInt32Array()
 var _ghost_field_frame: int = -1000
 var _dev_pose: String = ""
+var _prowl_salt: int = 0
 
 # Every peer.
 var _slots: Array[int] = []
@@ -189,6 +202,7 @@ func _start() -> void:
 	_t = 0.0
 	_second = 0
 	_running = true
+	_prowl_salt = rng.randi()
 	if _dev_pose == "mid" or _dev_pose == "late":
 		_rpc_wake.rpc()
 		var living := _living_slots()
@@ -205,16 +219,39 @@ static func ghost_count_for(player_count: int) -> int:
 	return 2 if player_count >= 7 else 1
 
 
-## Host: the starting ghosts, drawn from `slots` with `r`.
+## Host: the starting ghosts among `slots` (rotation above; `r` breaks ties). Remembers the pick.
 static func pick_ghosts(slots: Array[int], r: RandomNumberGenerator) -> Array[int]:
-	var pool := slots.duplicate()
-	var out: Array[int] = []
-	for i in mini(ghost_count_for(slots.size()), pool.size()):
-		var k := r.randi() % pool.size()
-		out.append(pool[k])
-		pool.remove_at(k)
+	var order: Array[int] = slots.duplicate()
+	order.sort()
+	if order != _rotation_slots:
+		_rotation_slots = order.duplicate()
+		_haunt_count.clear()
+	var roll: Dictionary = {}
+	for s in order:
+		roll[s] = r.randf()
+	order.sort_custom(func(a: int, b: int) -> bool:
+		var ca: int = _haunt_count.get(a, 0)
+		var cb: int = _haunt_count.get(b, 0)
+		if ca != cb:
+			return ca < cb
+		var la := _last_ghosts.has(a)
+		var lb := _last_ghosts.has(b)
+		if la != lb:
+			return lb
+		return roll[a] < roll[b])
+	var out: Array[int] = order.slice(0, mini(ghost_count_for(slots.size()), order.size()))
 	out.sort()
+	_last_ghosts = out.duplicate()
+	for s in out:
+		_haunt_count[s] = int(_haunt_count.get(s, 0)) + 1
 	return out
+
+
+## Tests: forget the rotation.
+static func reset_rotation() -> void:
+	_last_ghosts.clear()
+	_haunt_count.clear()
+	_rotation_slots.clear()
 
 
 # --- Host: the round -------------------------------------------------------------------------
@@ -588,7 +625,12 @@ func _physics_process(_delta: float) -> void:
 			continue
 		var move := p.get_component(&"movement") as MovementComponent
 		if move:
-			move.max_speed = _base_speed[p.slot] * (ghost_speed_bonus if ghosts.get(p.slot, false) else 1.0)
+			# The size component multiplies this by the body's speed factor; a pure chase is
+			# decided by speed, so only part of it counts here (size_speed_keep).
+			var size := p.get_component(&"size") as SizeComponent
+			var f := size.factor("speed") if size else 1.0
+			var keep := pow(f, size_speed_keep - 1.0) if f > 0.0 else 1.0
+			move.max_speed = _base_speed[p.slot] * keep * (ghost_speed_bonus if ghosts.get(p.slot, false) else 1.0)
 
 
 ## Ghost knockback and stun on `slot` (every peer).
@@ -766,8 +808,10 @@ func _prowl_goal(me: Player, field: PackedInt32Array) -> Vector3:
 			var gp := _player(g)
 			if gp:
 				score += minf(gp.global_position.distance_to(pt), 12.0)
-		# a little per-ghost taste so two prowlers do not pick the same point
-		score += float((me.slot * 7 + k) % 5) * 0.5
+		# a little per-ghost taste so two prowlers do not pick the same point; drawn per round
+		# (a fixed slot-based taste sent one seat's ghost the same way every round: with 2
+		# players seat 0 won 79 % of 48 rounds)
+		score += float(posmod(hash([_prowl_salt, me.slot, k]), 5)) * 0.5
 		if score > best_score:
 			best_score = score
 			best = k

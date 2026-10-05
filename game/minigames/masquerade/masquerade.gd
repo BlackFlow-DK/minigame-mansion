@@ -74,6 +74,12 @@ const FALL_Y := -5.0
 @export var fake_shove_rate: float = 0.06
 ## Share of NPCs that dance (the rest wander).
 @export var dance_share: float = 0.4
+## Roster bots' hunt eagerness (MasqBots.hunt_chance and hunt_suspicion_gain) by player count
+## (index = players; 8+ use the last). Calmer with 2-3 players: one shove ends a duel (at full
+## eagerness 44 % of 2-player rounds were over in under 20 s). Full eagerness from 4 up: the
+## old big-round calming (0.69 at 8) let half the 8-player rounds run to the 75 s limit.
+## Bots, 48 rounds per count: docs/balance-v03-b.md.
+@export var bot_hunt_scale: PackedFloat32Array = PackedFloat32Array([1.0, 1.0, 0.55, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0])
 
 ## The music director plays this for the round (a waltz).
 var music_track := &"lobby_waltz"
@@ -226,8 +232,7 @@ func _start() -> void:
 	if not finished.is_connected(_on_finished):
 		finished.connect(_on_finished)
 	bots = MasqBots.new(self, bot_rng, DANCE_CENTERS)
-	# More hunters find people faster: calmer bots in big rounds (8 bots end in ~30-60 s).
-	var calm := clampf(5.5 / maxf(players.size(), 1.0), 0.55, 1.0)
+	var calm := bot_hunt_scale_for(players.size())
 	bots.hunt_chance *= calm
 	bots.hunt_suspicion_gain *= calm
 	for p in players:
@@ -345,6 +350,13 @@ func _driver_of(p: Player) -> MasqBots:
 		if d is MasqBots and (d as MasqBots).drives(p):
 			return d
 	return null
+
+
+## Bot hunt eagerness for `count` players (bot_hunt_scale).
+func bot_hunt_scale_for(count: int) -> float:
+	if bot_hunt_scale.is_empty():
+		return 1.0
+	return bot_hunt_scale[clampi(count, 0, bot_hunt_scale.size() - 1)]
 
 
 ## Safe = on the dance floor, inside the room.
