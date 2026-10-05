@@ -35,6 +35,8 @@ signal checkpoint_reached(slot: int, index: int)
 signal player_finished(slot: int, place: int, time: float)
 ## Every peer: the host saw `slot` fall in (it respawns after `respawn_delay`).
 signal fell(slot: int)
+## Every peer, once the host's start layout is applied: the slots in spawn-point order.
+signal spawn_layout_applied(slots: PackedInt32Array)
 ## On the peer that owns the player: a hazard (`hammer`, `log`, `sweeper`, `bumper`) hit it.
 signal local_hit(slot: int, kind: StringName)
 
@@ -120,6 +122,12 @@ const ORDINALS: Array[String] = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"
 
 ## Bot brain hint: bots shove a little less than in the brawls (a race, and rafts are slippery).
 var bot_aggression_scale: float = 0.7
+## Share of the body size's speed factor kept in the race (1 = all, 0 = every size runs at
+## normal speed; jump, shove and knockback still follow the size). Balance (mixed sizes, 48
+## rounds each, wins small / normal / big): the full factor (small 1.15, big 0.88) gave 34/28/13 %
+## with 4 players and 23/9/6 % with 8; share 0.4 still 18/13/7 % with 8; share 0 28/25/22 % and
+## 13/9/16 %.
+@export var size_speed_share: float = 0.0
 ## Bot brain hint: bots race with this share of their skill (they run flat out, but misjudge
 ## more: late to see a hammer coming, a stale line, a mistimed raft jump), so a decent human
 ## beats them and they do not all arrive together.
@@ -133,6 +141,9 @@ var finish_order: Array[int] = []
 var finish_times: Dictionary[int, float] = {}
 ## Host: falls it decided (the network check reads it).
 var falls: int = 0
+## Every peer: slot -> its spawn point index (host-sent start layout) and the point count.
+var spawn_index: Dictionary[int, int] = {}
+var spawn_count: int = 8
 
 var _t: float = 0.0
 var _t_vis: float = 0.0
@@ -173,6 +184,8 @@ var _strip: Control = null
 var _dots: Dictionary[int, Control] = {}
 var _dash_at: float = INF
 var _fade_mats: Dictionary = {}
+var _layout_received: bool = false
+var _base_speed: Dictionary[int, float] = {}
 
 @onready var _camera: ArenaCamera = $ArenaCamera as ArenaCamera
 
@@ -206,10 +219,23 @@ func _setup(setup_players: Array[Player]) -> void:
 	finish_order.clear()
 	finish_times.clear()
 	_places.clear()
+	_base_speed.clear()
+	var slots := PackedInt32Array()
 	for p in setup_players:
 		checkpoints[p.slot] = -1
 		_places[p.slot] = 0
+		slots.append(p.slot)
+		var move := p.get_component(&"movement") as MovementComponent
+		if move:
+			_base_speed[p.slot] = move.max_speed  # frozen: the size factor is not applied yet
 	_build_strip(setup_players)
+	# The start layout: slot order until the host's shuffle lands (players are frozen till GO).
+	if not _layout_received:
+		_apply_layout(slots)
+	if multiplayer.is_server():
+		var order := Array(slots)
+		order.shuffle()
+		_rpc_spawn_layout.rpc(PackedInt32Array(order))
 
 
 func _start() -> void:
@@ -312,7 +338,7 @@ func _end(grace: float) -> void:
 
 func _respawn(p: Player) -> void:
 	_sink_until.erase(p.slot)
-	var xf := DashCourse.respawn_xform(checkpoints.get(p.slot, -1), p.slot)
+	var xf := _respawn_xform(p.slot)
 	p.respawn_at(xf)
 	_prev_pos[p.slot] = xf.origin
 	_no_fall_until[p.slot] = _t + RESPAWN_GRACE
@@ -328,8 +354,13 @@ static func _fallen(pos: Vector3) -> bool:
 
 func _progress_of(p: Player) -> float:
 	if _sink_until.has(p.slot):
-		return DashCourse.progress(DashCourse.respawn_xform(checkpoints.get(p.slot, -1), p.slot).origin)
+		return DashCourse.progress(_respawn_xform(p.slot).origin)
 	return DashCourse.progress(p.global_position)
+
+
+## Where `slot` respawns now (its last checkpoint, at its own spawn index).
+func _respawn_xform(slot: int) -> Transform3D:
+	return DashCourse.respawn_xform(checkpoints.get(slot, -1), spawn_index.get(slot, slot % 8), spawn_count)
 
 
 func _on_finished(_ranking: Array[int]) -> void:
@@ -338,12 +369,29 @@ func _on_finished(_ranking: Array[int]) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_tune_speeds()
 	if not _running:
 		return
 	_t = minf(_t + delta * _clock_scale(), _freeze_at)
 	_update_movers(_t)
 	if not is_finished():
 		_local_hits(delta)
+
+
+## Every peer (only the authority's copy matters): run speeds with `size_speed_share` of the
+## body size's speed factor. The size component multiplies what is written here by its factor.
+func _tune_speeds() -> void:
+	if is_equal_approx(size_speed_share, 1.0):
+		return
+	for p in players:
+		if not is_instance_valid(p) or not _base_speed.has(p.slot):
+			continue
+		var move := p.get_component(&"movement") as MovementComponent
+		var size := p.get_component(&"size") as SizeComponent
+		if move == null or size == null:
+			continue
+		var s := maxf(size.factor("speed"), 0.01)
+		move.max_speed = _base_speed[p.slot] * lerpf(1.0, s, size_speed_share) / s
 
 
 ## Seconds on the round clock (every peer).
@@ -453,6 +501,25 @@ func _rpc_begin(seed_value_: int, t0: float) -> void:
 	round_began.emit(seed_value_, t0)
 
 
+## The host's start layout: `slots[i]` stands on spawn point i of `slots.size()` (a random
+## order, so no seat always gets the same spot). Sent from `_setup` (players frozen till GO).
+@rpc("authority", "call_local", "reliable")
+func _rpc_spawn_layout(slots: PackedInt32Array) -> void:
+	_layout_received = true
+	_apply_layout(slots)
+	spawn_layout_applied.emit(slots)
+
+
+func _apply_layout(slots: PackedInt32Array) -> void:
+	spawn_count = slots.size()
+	spawn_index.clear()
+	for i in slots.size():
+		spawn_index[slots[i]] = i
+	for p in players:
+		if is_instance_valid(p) and spawn_index.has(p.slot):
+			p.place_at(global_transform * DashCourse.spawn_xform(spawn_index[p.slot], spawn_count))
+
+
 @rpc("authority", "call_local", "reliable")
 func _rpc_checkpoint(slot: int, index: int) -> void:
 	checkpoints[slot] = index
@@ -522,7 +589,8 @@ func get_bot_goal(player: Player) -> Vector3:
 	var slot := player.slot
 	if finish_times.has(slot):
 		return Vector3(-3.15 + 0.9 * (slot % 8), 0.0, DashCourse.FINISH_Z - 4.0)
-	var taste := _hash01(slot * 7919 + int(_t / 5.0) * 104729)
+	# Salted with the round's seed: unsalted, a slot had the same tastes (lines) every round.
+	var taste := _hash01(slot * 7919 + int(_t / 5.0) * 104729 + _seed * 31)
 	var z := pos.z
 	if z > 20.4:
 		for row: Array in DashCourse.SLALOM_GAPS:

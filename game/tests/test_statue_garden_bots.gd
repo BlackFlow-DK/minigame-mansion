@@ -10,7 +10,8 @@ const ID := &"statue_garden"
 
 
 ## Runs one bot-only round; returns [seconds, winner slot (-1 time-up), catches, ranking].
-func _bot_round(count: int, seed_value: int, scale: float, quiet: bool = false) -> Array:
+## `brain_seeds` (optional): the personality seed per slot (else seed_value * 100 + slot).
+func _bot_round(count: int, seed_value: int, scale: float, quiet: bool = false, brain_seeds: Array[int] = []) -> Array:
 	var ps := spawn_arena(count, ID, false)
 	var mg := get_minigame() as StatueGarden
 	mg.rng.seed = seed_value
@@ -20,12 +21,12 @@ func _bot_round(count: int, seed_value: int, scale: float, quiet: bool = false) 
 	brain0.player = ps[0]
 	brain0.minigame = mg
 	add_child(brain0)
-	brain0.configure(seed_value * 100)
+	brain0.configure(brain_seeds[0] if not brain_seeds.is_empty() else seed_value * 100)
 	(ps[0].get_component(&"controller") as ControllerComponent).scripted = true
 	for p in ps:
 		var c := p.get_component(&"controller") as ControllerComponent
 		if c.brain:
-			(c.brain as BotBrain).configure(seed_value * 100 + p.slot)
+			(c.brain as BotBrain).configure(brain_seeds[p.slot] if not brain_seeds.is_empty() else seed_value * 100 + p.slot)
 	var catches := watch(mg, &"caught")
 	var wins := watch(mg, &"won")
 	var frames := 0
@@ -78,21 +79,46 @@ func test_8_bots_seed_2() -> void:
 	_check_pacing(await _bot_round(8, 2, 1.0))
 
 
-func test_no_slot_bias_over_12_rounds() -> void:
-	var wins: Array[int] = [0, 0, 0, 0]
-	var total := 0.0
-	var timeouts := 0
-	for k in 12:
-		var r := await _bot_round(4, 100 + k, 2.0, true)
+## The 12 rounds run in blocks of 3 (one test each: every test has 60 s, and the slower walk of
+## the balance pass made one 12-round test too long on a loaded machine); the last block asserts.
+## Personalities rotate over the slots (4 per block of 4 rounds, each slot plays each once), so
+## the check measures seats, not which slot drew the sharpest bot (as balance_runner does).
+static var _bias_wins: Array[int] = [0, 0, 0, 0]
+static var _bias_rounds: int = 0
+static var _bias_timeouts: int = 0
+static var _bias_total: float = 0.0
+
+
+func _bias_block(first: int) -> void:
+	for k in range(first, first + 3):
+		var seeds: Array[int] = []
+		for s in 4:
+			seeds.append(7000 + 10 * (k / 4) + (s + k) % 4)
+		var r := await _bot_round(4, 100 + k, 2.0, true, seeds)
+		if not is_inside_tree():
+			return
 		if int(r[1]) >= 0:
-			wins[int(r[1])] += 1
+			_bias_wins[int(r[1])] += 1
 		else:
-			timeouts += 1
-		total += float(r[0])
+			_bias_timeouts += 1
+		_bias_total += float(r[0])
+		_bias_rounds += 1
 		_teardown_round()
-	print("  statue 12 x 4 bots (scale 2): wins per slot %s, %d time-ups, mean %.1f s" % [wins, timeouts, total / 12.0])
+
+
+func test_no_slot_bias_block_0() -> void: await _bias_block(0)
+func test_no_slot_bias_block_1() -> void: await _bias_block(3)
+func test_no_slot_bias_block_2() -> void: await _bias_block(6)
+
+
+func test_no_slot_bias_over_12_rounds() -> void:
+	await _bias_block(9)
+	print("  statue %d x 4 bots (scale 2): wins per slot %s, %d time-ups, mean %.1f s" % [
+		_bias_rounds, _bias_wins, _bias_timeouts, _bias_total / maxi(_bias_rounds, 1)])
+	if _bias_rounds < 12:
+		return  # filtered to this block alone: nothing pooled to judge
 	for s in 4:
-		assert_true(wins[s] <= 6, "slot %d won %d of 12" % [s, wins[s]])
+		assert_true(_bias_wins[s] <= 6, "slot %d won %d of 12" % [s, _bias_wins[s]])
 
 
 ## A bot whose stop has fired keeps still through RED (no fidgeting, wandering or shoving),

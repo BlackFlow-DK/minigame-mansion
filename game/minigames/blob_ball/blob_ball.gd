@@ -1,13 +1,14 @@
 class_name BlobBall
 extends Minigame
 ## Blob Ball. Two teams, one huge light beach ball, two goals. Walk into the ball to nudge
-## it, shove it to launch it. First to 3 goals wins, else most goals at 90 s; a draw then goes
-## to a 20 s golden goal, and if nobody scores it is a tie (everyone one tied group).
+## it, shove it to launch it. First to 3 goals wins, else most goals at 50 s; a draw then goes
+## to a 15 s golden goal, and if nobody scores it is a tie (everyone one tied group).
 ##
 ## Teams: `assign_teams(2)` in `_setup` (host). Team 0 (ORANGE) defends the left goal (x < 0)
 ## and attacks +X; team 1 (BLUE) the other way. With an odd player count the smaller team's
 ## shoves launch the ball `small_team_kick_bonus` times harder.
-## The pitch scales with the player count (2-3: 16 x 10 m, 4-5: 19 x 11.5 m, 6-8: 22 x 13 m).
+## The pitch scales with the player count (2-3: 16 x 10 m, 4-5: 19 x 11.5 m, 6-8: 22 x 13 m;
+## goal mouths GOAL_WIDTHS).
 ##
 ## Ball netcode (BlobBallSim is a pure deterministic integrator, run by every peer):
 ## - The HOST owns the ball. It steps it every physics frame, resolves contacts with the blobs
@@ -55,10 +56,18 @@ const FORMATIONS: Array = [
 	[Vector2(-2.6, -3.0), Vector2(-2.6, 3.0), Vector2(-5.2, 0.0), Vector2(-8.3, 0.0)],
 ]
 
+## Goal mouth width (m) on the small, middle and big pitch. Balance: 3.6 / 3.8 / 4.0 (the 1.4 m
+## ball leaves 2.2-2.6 m to aim at) gave bots 1.2-1.5 goals in a 60 s match and a 25-29 % chance
+## of ending level.
+const GOAL_WIDTHS: Array[float] = [4.4, 4.6, 4.8]
+
 # --- Rules -----------------------------------------------------------------------------------
-@export var match_time: float = 90.0
+## Balance (bots, 48 rounds a cell): 90 s + 20 s golden goal ran 4-8 player rounds 92-101 s on
+## average (1.9-2.4 goals); 60 s + 15 s with the wider GOAL_WIDTHS ~69-71 s; 50 s + 15 s
+## ~58-61 s (median 58). First to 2 instead allowed 15 s blowouts. docs/balance-v03-a.md.
+@export var match_time: float = 50.0
 @export var goals_to_win: int = 3
-@export var golden_goal_time: float = 20.0
+@export var golden_goal_time: float = 15.0
 ## Seconds everyone is frozen after a goal (the celebration), then the kick-off reset.
 @export var celebrate_time: float = 2.0
 ## Seconds frozen at the kick-off spots before play resumes.
@@ -75,7 +84,9 @@ const FORMATIONS: Array = [
 @export var kick_reach: float = 0.85
 ## Seconds after a shove starts in which the ball may still come into reach.
 @export var kick_window: float = 0.15
-## Shoves of the smaller team (odd player counts) launch the ball this much harder.
+## Shoves of the smaller team (odd player counts) launch the ball this much harder. (Balance:
+## bots' smaller side wins ~1 in 3 decided odd-count rounds, 1 v 2 about 1 in 4; scaling the
+## bonus with the size ratio, up to x1.41 for a 1 v 2, did not move that.)
 @export var small_team_kick_bonus: float = 1.15
 ## A ball coming in faster than this (m/s) bumps the blob it hits.
 @export var bump_speed: float = 6.0
@@ -199,11 +210,11 @@ func configure_pitch(count: int) -> void:
 		return
 	_built = true
 	if count <= 3:
-		sim.configure(16.0, 10.0, 3.6)
+		sim.configure(16.0, 10.0, GOAL_WIDTHS[0])
 	elif count <= 5:
-		sim.configure(19.0, 11.5, 3.8)
+		sim.configure(19.0, 11.5, GOAL_WIDTHS[1])
 	else:
-		sim.configure(22.0, 13.0, 4.0)
+		sim.configure(22.0, 13.0, GOAL_WIDTHS[2])
 	_pitch_root = Node3D.new()
 	_pitch_root.name = "Pitch"
 	add_child(_pitch_root)

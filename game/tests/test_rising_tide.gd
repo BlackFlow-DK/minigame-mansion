@@ -52,7 +52,7 @@ func test_tower_loads_with_8_spawns_on_the_ground() -> void:
 		return
 	assert_eq(ps.size(), 8, "8 players spawned")
 	assert_near(mg.time_limit, 75.0, 0.001, "75 s backstop")
-	assert_true(TideTower.water_end_time() > 60.0 and TideTower.water_end_time() < 70.0, "the water tops out in 60-70 s (%.1f)" % TideTower.water_end_time())
+	assert_true(TideTower.water_end_time() > 52.0 and TideTower.water_end_time() < 60.0, "the water tops out in 52-60 s (%.1f)" % TideTower.water_end_time())
 	var points := mg.get_spawn_points()
 	assert_eq(points.size(), 8, "8 spawn markers")
 	var lanes := {}
@@ -178,7 +178,7 @@ func test_water_height_is_deterministic_with_breathers() -> void:
 		assert_eq(TideTower.breather_at(b0 + 1.0), i, "breather %d running" % i)
 		assert_eq(TideTower.breather_at(b0 - 0.5), -1, "not yet")
 	var late := TideTower.breather_start(1) + 6.0
-	assert_near(TideTower.water_height(late + 1.0) - TideTower.water_height(late), TideTower.WATER_RATE1, 0.02, "fast at the end (0.5 m/s)")
+	assert_near(TideTower.water_height(late + 1.0) - TideTower.water_height(late), TideTower.WATER_RATE1, 0.02, "fast at the end (0.6 m/s)")
 	var end_t := TideTower.water_end_time()
 	assert_near(TideTower.water_height(end_t), TideTower.WATER_TOP, 0.001, "tops out at the end time")
 	assert_true(TideTower.water_height(end_t - 0.5) < TideTower.WATER_TOP, "still rising just before")

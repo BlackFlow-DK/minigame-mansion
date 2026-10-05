@@ -56,8 +56,10 @@ func test_course_loads_with_8_even_spawns() -> void:
 	var xs: Array[float] = []
 	for i in points.size():
 		var o := points[i].origin
-		assert_near(o.z, DashCourse.SPAWN_Z, 0.001, "spawn %d on the start row" % i)
+		assert_true(o.z > DashCourse.START_Z + 0.5 and o.z < DashCourse.PEN_BACK_Z - 0.5, "spawn %d in the start pen" % i)
 		assert_near(o, DashCourse.spawn_xform(i).origin, 0.001, "spawn %d matches DashCourse.spawn_xform" % i)
+		assert_near(Vector2(o.x, o.z - DashCourse.FIRST_CHOKE_Z).length(), DashCourse.SPAWN_ARC_R, 0.001,
+			"spawn %d is the same run from the first choke" % i)
 		var f := points[i].basis * Vector3.MODEL_FRONT
 		assert_near(f, Vector3(0.0, 0.0, -1.0), 0.001, "spawn %d faces down the course" % i)
 		assert_true(mg.is_safe(o), "spawn %d is safe" % i)
@@ -65,7 +67,14 @@ func test_course_loads_with_8_even_spawns() -> void:
 	for k in 4:
 		assert_near(points[k].origin.x, -points[7 - k].origin.x, 0.001, "spawns %d and %d mirror each other" % [k, 7 - k])
 	for k in 7:
-		assert_near(points[k + 1].origin.x - points[k].origin.x, 1.1, 0.001, "evenly spaced")
+		assert_near(points[k + 1].origin.distance_to(points[k].origin), DashCourse.SPAWN_SPACING, 0.01, "evenly spaced")
+	# _setup's start layout: every slot on its own point of the 8-point arc.
+	var used: Dictionary = {}
+	for p in ps:
+		var i: int = mg.spawn_index.get(p.slot, -1)
+		assert_true(i >= 0 and i < 8 and not used.has(i), "P%d has its own spawn index (%d)" % [p.slot, i])
+		used[i] = true
+		assert_near(p.global_position, DashCourse.spawn_xform(i, 8).origin, 0.05, "P%d stands on spawn point %d" % [p.slot, i])
 	await step(30)
 	for p in ps:
 		assert_true(p.global_position.y > -0.1 and p.global_position.y < 0.3, "P%d stands on the floor (y=%.2f)" % [p.slot, p.global_position.y])
@@ -78,6 +87,29 @@ func test_course_loads_with_8_even_spawns() -> void:
 	assert_false(mg.is_safe(Vector3(3.0, 0.0, 29.0)), "and hedges either side")
 	assert_true(mg.is_safe(Vector3(0.0, 0.0, 26.3 + 2.0)), "between hedge rows is open")
 	assert_false(mg.is_safe(Vector3(4.4, 0.0, 0.0)), "the course edge is unsafe")
+
+
+## Balance: a race, so body size does not change run speed (jump, shove and knockback still do).
+func test_run_speed_ignores_body_size() -> void:
+	var mg := await _arena(3)
+	assert_near(mg.size_speed_share, 0.0, 0.001, "no size speed in the dash")
+	(players[0].get_component(&"size") as SizeComponent).set_size_override("small")
+	(players[2].get_component(&"size") as SizeComponent).set_size_override("big")
+	# Three lanes across the start pen (flat, nothing in the way), running along +X for 1 s.
+	for i in 3:
+		_put(players[i], Vector3(-3.5, 0.0, DashCourse.PEN_BACK_Z - 0.8 - 1.2 * i))
+	await step(10)
+	await step(60, func(_i: int) -> void:
+		for p in players:
+			p.intent.move = Vector2.RIGHT)
+	var run: Array[float] = []
+	for p in players:
+		run.append(p.global_position.x + 3.5)
+	assert_near(run[0], run[1], 0.05, "small runs as far as normal (%s)" % str(run))
+	assert_near(run[2], run[1], 0.05, "big runs as far as normal (%s)" % str(run))
+	var big_jump := (players[2].get_component(&"jump") as JumpComponent).jump_height
+	var normal_jump := (players[1].get_component(&"jump") as JumpComponent).jump_height
+	assert_true(big_jump < normal_jump, "the size still sets the jump (%.2f < %.2f)" % [big_jump, normal_jump])
 
 
 func test_hazards_are_deterministic_functions_of_seed_and_time() -> void:

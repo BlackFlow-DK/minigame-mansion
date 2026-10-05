@@ -31,6 +31,7 @@ var _checkpoints: Array[String] = []
 var _finishes: Array[String] = []
 var _falls: Array[String] = []
 var _local_hits: int = 0
+var _layout: String = ""
 var _brain: Node = null
 var _minigame: MansionDash = null
 var _cmds_done: int = 0
@@ -80,6 +81,7 @@ func _on_players_spawned(spawned: Array) -> void:
 		m.player_finished.connect(func(slot: int, place: int, time: float) -> void: _finishes.append("%d:%d@%.3f" % [slot, place, time]))
 		m.fell.connect(func(slot: int) -> void: _falls.append(str(slot)))
 		m.local_hit.connect(func(_slot: int, _kind: StringName) -> void: _local_hits += 1)
+		m.spawn_layout_applied.connect(func(slots: PackedInt32Array) -> void: _layout = str(Array(slots)))
 	for v: Variant in spawned:
 		var p := v as Player
 		if p.slot != Net.local_slot():
@@ -210,7 +212,7 @@ func _write() -> void:
 		"scene": stage.minigame.scene_file_path if stage.minigame else "",
 		"players": ps, "events": _events, "ranking": _ranking, "seed": _seed, "samples": _samples,
 		"checkpoints": _checkpoints, "finishes": _finishes, "falls": _falls, "host_falls": host_falls,
-		"local_hits": _local_hits, "cmds_done": _cmds_done,
+		"local_hits": _local_hits, "cmds_done": _cmds_done, "layout": _layout,
 	}
 	var f := FileAccess.open(_dir.path_join(_name + ".json"), FileAccess.WRITE)
 	if f:

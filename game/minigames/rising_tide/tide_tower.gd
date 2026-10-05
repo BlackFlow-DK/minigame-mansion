@@ -62,7 +62,9 @@ const ALT_RISK: Array[int] = [2, 2, 3]
 
 const WATER_START := -2.0
 const WATER_RATE0 := 0.18
-const WATER_RATE1 := 0.5
+## Balance: 0.5 topped out at 64.2 s, so nearly every 4-8 player round ran 66 s (past the
+## 30-60 s target); 0.6 tops out at 57.9 s (only the late climb gets faster: +1 m at 30 s).
+const WATER_RATE1 := 0.6
 const WATER_ACCEL_TIME := 45.0
 const BREATHERS: Array[float] = [6.6, 13.8]
 const BREATHER_TIME := 2.0

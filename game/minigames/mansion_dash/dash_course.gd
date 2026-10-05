@@ -25,6 +25,11 @@ const CORE_LO := 0.4
 const CORE_HI := 0.6
 
 const SPAWN_Z := 34.0
+## The start arc (see spawn_xform): the first slalom row's middle gap, the arc radius and the
+## spacing between neighbours. The arc runs z 33.2 .. 34.5 for 8 blobs.
+const FIRST_CHOKE_Z := 29.0
+const SPAWN_ARC_R := 5.5
+const SPAWN_SPACING := 1.1
 const START_Z := 32.5
 const PEN_BACK_Z := 36.5
 const FINISH_Z := -38.0
@@ -186,17 +191,24 @@ static func progress(pos: Vector3) -> float:
 	return clampf(START_Z - pos.z, 0.0, TOTAL)
 
 
-## Spawn `i` of 8: one even row behind the start line, facing down the course (-Z).
-static func spawn_xform(i: int) -> Transform3D:
-	return Transform3D(Basis(Vector3.UP, PI), Vector3(-3.85 + 1.1 * i, 0.0, SPAWN_Z))
+## Spawn `i` of `count`, facing down the course (-Z): the blobs stand SPAWN_SPACING apart on an
+## arc of SPAWN_ARC_R round the first slalom choke (x 0, z FIRST_CHOKE_Z), centred, so every
+## start is the same run to the choke. (Balance: the old straight row x -3.85 + 1.1 i put 2-4
+## players all left of the middle choke, and the outermost seat placed worst: mean place
+## 2.67 vs 2.38 for the seat nearest the middle over 192 four-player rounds.)
+static func spawn_xform(i: int, count: int = 8) -> Transform3D:
+	var a := (float(i) - 0.5 * float(maxi(count, 1) - 1)) * SPAWN_SPACING / SPAWN_ARC_R
+	return Transform3D(Basis(Vector3.UP, PI), Vector3(SPAWN_ARC_R * sin(a), 0.0, FIRST_CHOKE_Z + SPAWN_ARC_R * cos(a)))
 
 
-## Where `slot` respawns after a fall with `checkpoint` reached (-1: the start).
-static func respawn_xform(checkpoint: int, slot: int) -> Transform3D:
+## Where the blob with spawn index `i` of `count` respawns after a fall with `checkpoint`
+## reached (-1: its start spot); checkpoint rows are centred for `count` too.
+static func respawn_xform(checkpoint: int, i: int, count: int = 8) -> Transform3D:
 	if checkpoint < 0:
-		return spawn_xform(slot % 8)
+		return spawn_xform(i, count)
 	var z: float = RESPAWN_Z[mini(checkpoint, RESPAWN_Z.size() - 1)]
-	return Transform3D(Basis(Vector3.UP, PI), Vector3(-3.15 + 0.9 * (slot % 8), ground_y(z) + 0.05, z))
+	var x := (float(i) - 0.5 * float(maxi(count, 1) - 1)) * 0.9
+	return Transform3D(Basis(Vector3.UP, PI), Vector3(x, ground_y(z) + 0.05, z))
 
 
 ## Highest checkpoint index whose line `pos` is past (-1: none).

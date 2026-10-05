@@ -89,7 +89,7 @@ const FALL_Y := -4.0
 ## The first GREEN after the countdown is never short.
 @export var first_green_min: float = 3.0
 @export var warn_time: float = 0.45
-@export var red_range: Vector2 = Vector2(1.5, 3.0)
+@export var red_range: Vector2 = Vector2(2.0, 3.2)
 ## Seconds at the start of RED in which a blob may still skid to a stop.
 @export var red_grace: float = 0.25
 ## Seconds the winner's celebration holds the round (Minigame.finish grace).
@@ -105,12 +105,24 @@ const LAG_TOLERANCE := 0.05
 const MAX_VIEW_LAG := 0.35
 
 ## Tuning applied to every player on every peer in _setup: a tiptoe pace (the 26 m lawn at
-## full speed would be crossed in two greens; at this pace it takes three or four).
-const WALK_SPEED := 2.2
+## full speed would be crossed in two greens; at this pace it takes five or six).
+## Balance (bots): 2.2 with RED 1.5-3 s ended 8-bot rounds in 25-36 s (median 32); 1.5 with
+## RED 2-3.2 s gives 33-61 s (median 42), 4 bots ~44 s, 2 bots ~45 s.
+const WALK_SPEED := 1.5
+## Share of the body size's speed factor kept on the lawn (1 = all, 0 = every size tiptoes at
+## WALK_SPEED). Balance: with the whole factor (small 1.15, big 0.88) small blobs won 45 % of
+## 4-player rounds and big 6 %.
+@export var size_speed_share: float = 0.0
 const SHOVE_COOLDOWN := 0.5
 
 ## Bots walk to a point this far ahead in their lane, curving to the plinth at the end.
 const BOT_LOOKAHEAD := 5.0
+## Bots aim this far inside the plinth's face on the last stretch, so they walk into it.
+const BOT_TOUCH_PUSH := 0.5
+## Bots beside an obstacle's side point (closer than BOT_DETOUR_NEAR) head this far past its
+## centre instead (toward the statue).
+const BOT_DETOUR_NEAR := 1.0
+const BOT_DETOUR_PAST := 1.0
 ## Bot hint read by BotBrain (0..1, how often bots chase and whether they shove), per phase:
 ## a little mischief in GREEN, the shove-before-RED trick in WARNING, never in RED.
 var bot_aggression_scale: float = 0.0
@@ -123,11 +135,17 @@ var music_track := &"none"
 
 ## Test/dev only: multiplies how fast the host's phase clock runs.
 var time_scale: float = 1.0
+## Bots' hold reactions as a share of the brain's defaults (BotBrain.HOLD_STOP / HOLD_GO):
+## the WARNING's tune stop and head creak are a loud, practised cue, so they react quicker than
+## to a generic hold. Balance: at 1.0 two mid-skill bots were caught ~3 times each per round and
+## half the 2-bot rounds ran to the time limit; at 0.7 nobody was caught; 0.9 gives ~0.6 catches
+## per bot per round (1 with 2 bots) and still catches the slow ones.
+var bot_hold_reaction: float = 0.9
 ## Bot brain hint: their hold reactions (late to stop at WARNING, late to go at GREEN) follow
 ## the phase clock.
 var bot_reaction_scale: float:
 	get:
-		return 1.0 / maxf(time_scale, 0.01)
+		return bot_hold_reaction / maxf(time_scale, 0.01)
 ## Host randomness (phase lengths, lane order, ties). Tests may seed it.
 var rng := RandomNumberGenerator.new()
 
@@ -520,8 +538,10 @@ func _lane_goal(player: Player) -> Vector3:
 	var pos := player.global_position
 	var front := STATUE_POS.z + PLINTH_HALF.y
 	if pos.z < front + 3.5:
-		# Last stretch: straight at the plinth face.
-		return Vector3(clampf(pos.x, -PLINTH_HALF.x + 0.4, PLINTH_HALF.x - 0.4), 0.0, front + 0.05)
+		# Last stretch: straight at the plinth face, aiming past it into the plinth: the brain counts
+		# a goal within its arrival radius (0.6 m) as reached and stops, and a goal just in front of
+		# the face let it stop short of the touch distance (bots stood at the plinth till time-up).
+		return Vector3(clampf(pos.x, -PLINTH_HALF.x + 0.4, PLINTH_HALF.x - 0.4), 0.0, front - BOT_TOUCH_PUSH)
 	var lx := lane_x(lane_of.get(player.slot, 0), lane_count)
 	var z := maxf(pos.z - BOT_LOOKAHEAD, front + 0.05)
 	# Lanes converge on the plinth over the last 10 m.
@@ -561,6 +581,13 @@ func _around_obstacles(from: Vector3, to: Vector3) -> Vector3:
 	var pick := left if absf(left.x - to.x) + absf(left.x - from.x) < absf(right.x - to.x) + absf(right.x - from.x) else right
 	if not is_safe(pick):
 		pick = right if pick == left else left
+	if Vector2(pick.x - from.x, pick.z - from.z).length() < BOT_DETOUR_NEAR:
+		# Already beside it: on past the obstacle. (The side point itself is within the brain's
+		# arrival radius, so it counts as reached, and from there the line to the lane goal could
+		# still clip the obstacle: the same side point again, and the bot stood still till time-up.)
+		var past := Vector3(pick.x, 0.0, centre.z - BOT_DETOUR_PAST)
+		if is_safe(past):
+			return past
 	return pick
 
 
@@ -648,6 +675,20 @@ func _rpc_over(winner: int) -> void:
 		RoundUI.push_banner("Time's up!", 1.4)
 		Sfx.play(&"round_end")
 	won.emit(winner)
+
+
+## Every peer (only the authority's copy matters): the tiptoe pace with `size_speed_share` of
+## the body size's speed factor (the size component multiplies what is written here).
+func _physics_process(_delta: float) -> void:
+	for p in players:
+		if not is_instance_valid(p):
+			continue
+		var move := p.get_component(&"movement") as MovementComponent
+		if move == null:
+			continue
+		var size := p.get_component(&"size") as SizeComponent
+		var f := maxf(size.factor("speed"), 0.01) if size else 1.0
+		move.max_speed = WALK_SPEED * lerpf(1.0, f, size_speed_share) / f
 
 
 # --- Presentation (every peer) --------------------------------------------------------------------
