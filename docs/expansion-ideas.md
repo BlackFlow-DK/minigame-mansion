@@ -92,6 +92,17 @@ Round modifiers (cheap variety multiplier, one line per minigame):
 - **Replay capture** [later]: record inputs for bug reports.
 - **Auto-updater** [later]: the exe checks a shared folder or GitHub release for a newer version.
 
+## Left open after v0.3
+
+- Shared "size-neutral speed" hint: Crown Keeper, Mansion Dash, Statue Garden and Ghost Tag each carry their own per-frame opt-out of the body-size speed factors. A minigame hint read by `SizeComponent` would replace all four (and fix the corner case where a written value equal to the component's last write is not rescaled).
+- Rising Tide: big blobs win 10-20 points more often with only 2-3 players (`docs/balance-v03-a.md`).
+- Portrait Panic: big blobs win about 6 points more often than small ones when crowding the target tiles (`docs/balance-v03-b.md`).
+- Blob Ball 3v4: the short team wins about 35 % of decided rounds. An NPC teammate needs extras that can shove and that the ball, team and bot-role code know about.
+- Hide and Sneak / Ghost Tag: survivors share 1st place, so hiders and runners hold 1st in most rounds while points per player stay even. A ranking rule such as "hunters share 1st when they catch more than half" would even out who gets the round win.
+- Game setup panel can briefly show a value Session refused during the launch beat.
+- Physics: switching to Jolt would speed up `move_and_slide`, but changes how shoves feel; needs its own balance pass.
+- Charge-throw for Snowball Fight needs `intent.action_held`.
+
 ## Rejected
 
 - **Random character sizes** [no, changed]: randomness would feel unfair in a competitive round; a chosen size with trade-offs keeps the fun and the fairness.
