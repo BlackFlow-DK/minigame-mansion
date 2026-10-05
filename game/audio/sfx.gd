@@ -90,6 +90,13 @@ var _rng := RandomNumberGenerator.new()
 ## False when headless: everything (voices, limits, signals) runs except the actual play(),
 ## because a stream still playing at quit is reported as a leaked resource.
 var _audible: bool = true
+## Pre-warm (audible only): files still to load, a few per frame, starting PREWARM_DELAY s
+## after startup, so a sound's first play does not read its .wav from disk (~1-2 ms each,
+## several at once when a round's first knock-out or unmasking sets off a burst).
+const PREWARM_DELAY := 0.6
+const PREWARM_PER_FRAME := 3
+var _prewarm: Array[StringName] = []
+var _prewarm_wait: float = PREWARM_DELAY
 
 
 func _ready() -> void:
@@ -114,6 +121,25 @@ func _ready() -> void:
 		p.bus = BUS_SFX
 		add_child(p)
 		_pool_2d.append(p)
+	if _audible:
+		for sound: StringName in sounds:
+			for f: Variant in sounds[sound].get("files", [sound]):
+				if not _prewarm.has(StringName(f)):
+					_prewarm.append(StringName(f))
+	set_process(not _prewarm.is_empty())
+
+
+## Pre-warm: loads PREWARM_PER_FRAME sound files per frame into the stream cache.
+func _process(delta: float) -> void:
+	_prewarm_wait -= delta
+	if _prewarm_wait > 0.0:
+		return
+	for i in PREWARM_PER_FRAME:
+		if _prewarm.is_empty():
+			break
+		_load_stream(_prewarm.pop_front())
+	if _prewarm.is_empty():
+		set_process(false)
 
 
 ## Release every playing stream on quit, so no stream is still held by the audio server
@@ -371,17 +397,23 @@ func _pick_stream(sound: StringName, cfg: Dictionary) -> AudioStream:
 	if files.is_empty():
 		return null
 	var file := StringName(files[_rng.randi_range(0, files.size() - 1)])
-	if not _streams.has(file):
-		var path := SFX_DIR + String(file) + ".wav"
-		var loaded := load(path) as AudioStream if ResourceLoader.exists(path) else null
-		# Keep a path-less copy: Godot 4.7 leaks a stream that is still playing when the game
-		# quits; a cached (path) resource turns that into an "ERROR: resources still in use"
-		# line at exit, a copy only into a harmless leak warning.
-		_streams[file] = loaded.duplicate() as AudioStream if loaded else null
+	_load_stream(file)
 	var stream: AudioStream = _streams[file]
 	if stream == null:
 		_warn_once(StringName("file:" + file), "Sfx: missing sound file '%s'" % file)
 	return stream
+
+
+## Loads `file` into the stream cache (null when the file is missing), once.
+func _load_stream(file: StringName) -> void:
+	if _streams.has(file):
+		return
+	var path := SFX_DIR + String(file) + ".wav"
+	var loaded := load(path) as AudioStream if ResourceLoader.exists(path) else null
+	# Keep a path-less copy: Godot 4.7 leaks a stream that is still playing when the game
+	# quits; a cached (path) resource turns that into an "ERROR: resources still in use"
+	# line at exit, a copy only into a harmless leak warning.
+	_streams[file] = loaded.duplicate() as AudioStream if loaded else null
 
 
 ## A free player for `sound`: restarts the oldest voice of `sound` when it has `max_voices`

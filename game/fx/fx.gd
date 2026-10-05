@@ -11,6 +11,11 @@ extends Node
 ## may turn it (shove_whoosh faces its local +Z), scale it, or `hold()` it on a target.
 ## Headless (tests, servers) it only raises `played` and returns null, unless
 ## `headless_spawn` is set.
+## Pre-warm: with a renderer, one idle node of every effect is built into the pool shortly
+## after startup, one effect per frame (PREWARM_DELAY, then `_process`). The first build of an
+## effect creates its shader materials, which compiles the shader on the main thread (20-70 ms
+## for dust_puff, land_thud, hit_stars): done here, that hitch lands on the title screen
+## instead of on the first shove / landing of the first round.
 
 ## Raised on every successful play() call, also headless. Tests and tools listen to it.
 signal played(effect: StringName, at: Vector3, color: Color)
@@ -20,6 +25,8 @@ const POOL_MAX := 10
 ## Look quality (LOW, MEDIUM, HIGH) -> most live nodes per effect, particle count factor.
 const POOL_MAX_BY_QUALITY: Array[int] = [4, 8, POOL_MAX]
 const AMOUNT_BY_QUALITY: Array[float] = [0.5, 0.75, 1.0]
+## Seconds after startup before the pre-warm starts (the title's first frames go first).
+const PREWARM_DELAY := 0.5
 
 ## Master switch (a settings menu may turn effects off).
 var enabled: bool = true
@@ -30,11 +37,32 @@ var _headless: bool = DisplayServer.get_name() == "headless"
 var _idle: Dictionary[StringName, Array] = {}
 var _live: Dictionary[StringName, Array] = {}
 var _warned: Dictionary[StringName, bool] = {}
+## Effects still to pre-warm (see PREWARM_DELAY) and the seconds left before it starts.
+var _prewarm: Array[StringName] = []
+var _prewarm_wait: float = PREWARM_DELAY
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group(Look.QUALITY_GROUP)
+	if not _headless:
+		_prewarm.assign(FxLibrary.NAMES)
+	set_process(not _prewarm.is_empty())
+
+
+## Pre-warm: one effect per frame into the idle pool (only effects with no node yet).
+func _process(delta: float) -> void:
+	_prewarm_wait -= delta
+	if _prewarm_wait > 0.0:
+		return
+	var effect: StringName = _prewarm.pop_front()
+	var idle: Array = _idle.get_or_add(effect, [])
+	if idle.is_empty() and (_live.get(effect, []) as Array).is_empty():
+		var fx := _build(effect)
+		if fx:
+			idle.append(fx)
+	if _prewarm.is_empty():
+		set_process(false)
 
 
 ## Look quality switch: idle nodes built for another quality are rebuilt on their next use.
@@ -124,13 +152,21 @@ func _take(effect: StringName) -> FxEffect:
 		fx.stop()  # goes to idle through _on_done
 		idle.erase(fx)
 	if fx == null:
-		fx = FxLibrary.build(effect)
+		fx = _build(effect)
 		if fx == null:
 			return null
-		_cap_particles(fx)
-		fx.done.connect(_on_done)
-		add_child(fx)
 	live.append(fx)
+	return fx
+
+
+## A new idle node of `effect`, capped for the quality, child of this node (null if unknown).
+func _build(effect: StringName) -> FxEffect:
+	var fx := FxLibrary.build(effect)
+	if fx == null:
+		return null
+	_cap_particles(fx)
+	fx.done.connect(_on_done)
+	add_child(fx)
 	return fx
 
 
