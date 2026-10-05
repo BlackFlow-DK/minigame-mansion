@@ -426,3 +426,96 @@ func test_lights_follow_quality() -> void:
 	assert_eq(mg.looks().disc_count(), 8, "LOW: a glow disc per blob instead")
 	Look.set_quality(was)
 	await step(1)
+
+
+# --- Leavers (review fixes) ----------------------------------------------------------------------
+
+## The only ghost leaves before catching anyone: a living runner takes over as the ghost (on
+## every peer: announced, the ghost look, frozen while it rises), it can catch, the round goes on.
+func test_last_ghost_leaving_hands_the_ghost_to_a_runner() -> void:
+	spawn_arena(4, ID)
+	var mg := _mg()
+	mg.set_starting_ghosts([1] as Array[int])
+	await step(HEAD_FRAMES + 2)
+	var converted := watch(mg, &"converted")
+	Net.remove_bot(1)
+	await step(2)
+	assert_false(mg.is_finished(), "the round goes on")
+	assert_eq(mg.knocked_out, [1] as Array[int], "leaver recorded")
+	var ghosts: Array[int] = []
+	for s: int in [0, 2, 3]:
+		if mg.is_ghost(s):
+			ghosts.append(s)
+	if not assert_eq(ghosts.size(), 1, "one runner became the ghost"):
+		return
+	var g := ghosts[0]
+	var gp := stage.get_player(g)
+	assert_eq(converted.size(), 1, "through the normal conversion")
+	assert_true(mg.looks().is_ghost_look(g), "it looks like a ghost")
+	assert_true(mg.caught_at.has(g), "it stopped surviving (ranked like a catch now)")
+	assert_true(gp.frozen, "frozen while it rises")
+	await step(int(mg.rise_time * 60.0) + 4)
+	assert_false(gp.frozen, "risen: it hunts")
+	var victim: Player = null
+	for s: int in [0, 2, 3]:
+		if s != g:
+			victim = stage.get_player(s)
+			break
+	var caught := watch(mg, &"caught")
+	_put(victim, gp.global_position + Vector3(0.9, 0, 0))
+	await step(1)
+	assert_eq(caught.size(), 1, "the new ghost catches")
+	if not caught.is_empty():
+		assert_eq(caught[0][0], g, "by the new ghost")
+
+
+## The ghost leaves during the head start: the new ghost stays frozen until the head start is over.
+func test_ghost_leaving_in_the_head_start_waits_for_the_wake() -> void:
+	spawn_arena(3, ID)
+	var mg := _mg()
+	mg.set_starting_ghosts([2] as Array[int])
+	await step(30)
+	Net.remove_bot(2)
+	await step(2)
+	var g := 0 if mg.is_ghost(0) else 1
+	assert_true(mg.is_ghost(g), "a runner took over")
+	await step(HEAD_FRAMES - 60)
+	assert_true(stage.get_player(g).frozen, "still frozen in the head start")
+	await step(40)
+	assert_false(stage.get_player(g).frozen, "free once the ghosts wake")
+
+
+## The only ghost leaves a two-player round: nobody is left to chase, the round ends through the
+## minigame's own end (tied groups, the end RPC lifts the curse, the grace).
+func test_ghost_leaving_two_players_ends_the_round_properly() -> void:
+	spawn_arena(2, ID)
+	var mg := _mg()
+	mg.set_starting_ghosts([1] as Array[int])
+	await step(HEAD_FRAMES + 2)
+	var over := watch(mg, &"round_over")
+	Net.remove_bot(1)
+	await step(2)
+	assert_true(mg.is_finished(), "over")
+	assert_eq(over.size(), 1, "through the end RPC")
+	assert_eq(mg.finish_groups, [[0], [1]], "the survivor first, the ghost who caught nobody last")
+	assert_near(mg.finish_grace, mg.end_grace, 0.001, "with the end grace")
+	assert_true(mg.over, "every peer knows it is over")
+	assert_true(mg.looks().ghost_look_slots().is_empty(), "no ghost look left")
+
+
+## The runner leaves a two-player round: the round ends through the minigame's end too (no
+## flat base finish), and the ghost's sheet comes off for the results.
+func test_runner_leaving_two_players_ends_the_round_properly() -> void:
+	spawn_arena(2, ID)
+	var mg := _mg()
+	mg.set_starting_ghosts([0] as Array[int])
+	await step(HEAD_FRAMES + 2)
+	var over := watch(mg, &"round_over")
+	Net.remove_bot(1)
+	await step(2)
+	assert_true(mg.is_finished(), "over")
+	assert_eq(over.size(), 1, "through the end RPC")
+	assert_true(mg.caught_at.has(1), "the leaver counts as caught")
+	assert_near(mg.finish_grace, mg.end_grace, 0.001, "with the end grace")
+	assert_false(mg.looks().is_ghost_look(0), "the curse lifts")
+	assert_near(_speed(players[0]), 6.0, 0.001, "ghost tuning restored")

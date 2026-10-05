@@ -39,6 +39,8 @@ const LANTERN_POOL := Vector2(3.3, 1.0)
 const GHOST_POOL := Vector2(2.1, 0.8)
 
 var _players: Array[Player] = []
+## The slot of each `_players` entry (a leaver's node is freed: its slot is still known here).
+var _player_slots: Array[int] = []
 ## slot -> true while the ghost look is on.
 var _ghost: Dictionary[int, bool] = {}
 ## slot -> Array of [GeometryInstance3D, transparency, material_overlay, cast_shadow]
@@ -102,6 +104,9 @@ func _exit_tree() -> void:
 ## Every peer, at _setup: the round's players get lanterns.
 func track(players: Array[Player]) -> void:
 	_players = players.duplicate()
+	_player_slots.clear()
+	for p in _players:
+		_player_slots.append(p.slot if is_instance_valid(p) else -1)
 	for p in _players:
 		if is_instance_valid(p) and not _lanterns.has(p.slot):
 			_give_lantern(p)
@@ -145,19 +150,22 @@ func ghost_look_slots() -> Array[int]:
 
 ## Removes the ghost look of `slot` (exactly the saved values come back).
 func restore(slot: int) -> void:
+	# (a leaver's model may be freed already: check before casting)
 	if _saved.has(slot):
 		for e: Array in _saved[slot]:
+			if not is_instance_valid(e[0]):
+				continue
 			var g := e[0] as GeometryInstance3D
-			if is_instance_valid(g):
-				g.transparency = e[1]
-				g.material_overlay = e[2]
-				g.cast_shadow = e[3]
+			g.transparency = e[1]
+			g.material_overlay = e[2]
+			g.cast_shadow = e[3]
 		_saved.erase(slot)
 	if _hidden.has(slot):
 		for e: Array in _hidden[slot]:
+			if not is_instance_valid(e[0]):
+				continue
 			var n := e[0] as Node3D
-			if is_instance_valid(n):
-				n.visible = e[1]
+			n.visible = e[1]
 		_hidden.erase(slot)
 	if _sheets.has(slot):
 		var s := _sheets[slot]
@@ -222,8 +230,12 @@ func _process(delta: float) -> void:
 	var holes := PackedVector4Array()
 	for h in _static_holes:
 		holes.append(h)
-	for p in _players:
-		if not is_instance_valid(p):
+	for i in _players.size():
+		var p: Player = _players[i] if is_instance_valid(_players[i]) else null
+		if p == null or not p.is_inside_tree():
+			# a leaver (removed, then freed): its light or glow goes with it
+			if i < _player_slots.size():
+				_drop_light(_player_slots[i])
 			continue
 		var s := p.slot
 		var ghost: bool = _ghost.get(s, false)
@@ -342,6 +354,16 @@ func _give_lantern(p: Player) -> void:
 		root.add_child(lantern)
 		lantern.position = Vector3(-0.42, 0.5, 0.08)
 	_lanterns[p.slot] = lantern
+
+
+## Removes `slot`'s light and glow disc (a player who left).
+func _drop_light(slot: int) -> void:
+	if _lights.has(slot):
+		_lights[slot].queue_free()
+		_lights.erase(slot)
+	if _discs.has(slot):
+		_discs[slot].queue_free()
+		_discs.erase(slot)
 
 
 func _drop_lantern(slot: int) -> void:

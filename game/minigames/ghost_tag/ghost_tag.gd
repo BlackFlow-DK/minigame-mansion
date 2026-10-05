@@ -13,6 +13,9 @@ extends Minigame
 ##   pushes it a little (`ghost_knockback`) and stuns it `ghost_shove_stun` s, during which it
 ##   cannot catch: a defence, not a kill.
 ## - The round ends at 60 s, or as soon as nobody is left alive (end grace 2 s).
+## - Leavers: a living one counts as caught (no credit). When every ghost has left (and nobody is
+##   turning), a random runner takes over as the ghost (ranked as caught at that moment, frozen
+##   while it rises and through the head start); with one runner left the round ends.
 ##
 ## Ranking (`rank_groups`, every player gets a "time" and the higher time ranks better):
 ## - survivors: the full round (60 s): they share first place (one tied group);
@@ -288,6 +291,11 @@ func _host_tick(delta: float) -> void:
 		var p := _player(s)
 		if p == null or not p.alive:
 			_rpc_catch.rpc(-1, s, _t, _living_slots().size() - 1)
+	# every ghost left the game: a runner takes over (or the round ends)
+	if not _has_live_ghost() and _boos.is_empty() and _rises.is_empty() and not _living_slots().is_empty():
+		_replace_ghost()
+		if over or is_finished():
+			return
 	if awake:
 		_check_touches()
 	var sec := int(_t)
@@ -347,6 +355,78 @@ func _on_shove_hit(victim_slot: int, shover: Player) -> void:
 	if shover.frozen or _in_boo(shover.slot):
 		return
 	catch(shover, _player(victim_slot))
+
+
+## Host: a player who left mid-round (Stage knocks them out, then removes them). Recorded and
+## out as in the base, but the base's "one left: finish" is not used: `_host_tick` counts a
+## living leaver as caught, hands the ghost on when the last ghost left, and ends the round
+## through `end_round` (tied groups, the end RPC that lifts the curse on every peer).
+func knock_out(player: Player, reason: StringName = &"") -> void:
+	if is_finished() or over or player == null or not player.alive or player.is_extra:
+		super(player, reason)
+		return
+	knocked_out.append(player.slot)
+	player.eliminate(reason if reason != &"" else &"knocked_out")
+	if not Net.is_host():
+		return
+	var left := 0
+	for p in players:
+		if is_instance_valid(p) and p.alive and not p.is_extra:
+			left += 1
+	if left <= 1:
+		_catch_leaver(player.slot)
+		end_round()
+
+
+## Host: a living leaver counts as caught now (no credit), as `_host_tick` would do next frame.
+func _catch_leaver(slot: int) -> void:
+	if is_living(slot):
+		_rpc_catch.rpc(-1, slot, _t, _living_slots().size() - 1)
+
+
+## True while some ghost (starting or turned, rising or not) is still in the game.
+func _has_live_ghost() -> bool:
+	for s in _slots:
+		if ghosts.get(s, false):
+			var p := _player(s)
+			if p and p.alive:
+				return true
+	return false
+
+
+## Host: every ghost left the game and nobody is turning: a random living runner becomes the
+## ghost (frozen like a freshly turned one, until the head start is over too), announced on
+## every peer. With one runner (or none) left there is nobody to chase: the round ends.
+func _replace_ghost() -> void:
+	var living: Array[int] = []
+	for s in _living_slots():
+		var p := _player(s)
+		if p and p.alive:
+			living.append(s)
+	if living.size() <= 1:
+		end_round()
+		return
+	var s: int = living[rng.randi_range(0, living.size() - 1)]
+	_rpc_haunt.rpc(s, _t)
+	_rpc_convert.rpc(s, -1, false)
+	_rises.append([s, maxf(rise_time, head_start - _t) if not awake else rise_time])
+	set_role_text(s, "You are the GHOST")
+
+
+## Every peer: `slot` takes over as the ghost (the ghosts left the game). It stops surviving
+## now (ranked like a runner caught at `at`) and stands still while its sheet grows.
+@rpc("authority", "call_local", "reliable")
+func _rpc_haunt(slot: int, at: float) -> void:
+	caught_at[slot] = at
+	RoundUI.push_counter(slot, int(at))
+	if not over:
+		_freeze(slot, true)
+	var p := _player(slot)
+	RoundUI.push_banner("The ghost fled! %s haunts now!" % _name_of(p), 1.8)
+	if p and _camera:
+		_camera.add_shake(0.2)
+	if Net.is_host():
+		request_bot_rethink()
 
 
 ## Host: ends the round now with the ranking rule (also called at the time limit).

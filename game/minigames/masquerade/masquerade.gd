@@ -81,6 +81,10 @@ const FALL_Y := -5.0
 ## Bots, 48 rounds per count: docs/balance-v03-b.md.
 @export var bot_hunt_scale: PackedFloat32Array = PackedFloat32Array([1.0, 1.0, 0.55, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0])
 
+## Mutators that would unmask the players: Session applies them to the real players only, never
+## to the NPC dancers, so a size mutator (on top of the disguise's "normal" size override) or a
+## movement one (turbo, slippery; heavy's knockback) would set every human apart from the crowd.
+var mutator_blocklist: Array[StringName] = [&"giant", &"tiny", &"turbo", &"slippery", &"heavy"]
 ## The music director plays this for the round (a waltz).
 var music_track := &"lobby_waltz"
 ## Bot brain hint: never chase on their own (MasqBots decides hunts; the brain's action hooks shove).
@@ -310,6 +314,20 @@ func _finish_round() -> void:
 	if is_finished():
 		return
 	finish(compute_ranking(), end_grace)
+
+
+## Host: knocks `player` out (unmasked, fell, or left the game: Stage knocks a leaver out, then
+## removes them). Recorded and out as in the base, but the end goes through `_finish_round`
+## (survivors tied by points, the unmasked in order, the end grace), never the base's flat
+## ranking without grace.
+func knock_out(player: Player, reason: StringName = &"") -> void:
+	if is_finished() or player == null or not player.alive or player.is_extra:
+		super(player, reason)
+		return
+	knocked_out.append(player.slot)
+	player.eliminate(reason if reason != &"" else &"knocked_out")
+	if unfound().size() <= (1 if players.size() >= 2 else 0):
+		_finish_round()
 
 
 ## Where a bot wants to be: a stroll target like an NPC's (within 4 m, on the floor).
