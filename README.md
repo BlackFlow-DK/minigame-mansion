@@ -17,12 +17,30 @@ Everyone must be on the same network. Full guide: [docs/playtest.md](docs/playte
 |---|---|---|
 | Move | WASD / arrows | Left stick |
 | Jump | Space | A |
-| Shove | E / left mouse | X |
+| Shove / action (throw, tag, grab) | E / left mouse | X |
+| Emotes | 1–4 | D-pad |
 | Pause | Esc | Start |
 
 ## Minigames
 
-Floor Is Lava, Bumper Sumo, Hot Potato, Coin Scramble, Cannon Alley, Paint Splat, Spotlight Chairs. More in [docs/expansion-ideas.md](docs/expansion-ideas.md).
+Seventeen, of different kinds:
+
+- **Survive:** Floor Is Lava, Bumper Sumo, Cannon Alley, Spotlight Chairs, Rising Tide
+- **Keep-away:** Hot Potato, Crown Keeper
+- **Score:** Coin Scramble, Paint Splat, Portrait Panic
+- **Races:** Mansion Dash, Statue Garden
+- **Ball and throwing:** Blob Ball, Snowball Fight
+- **Hide, seek and bluff:** Hide and Sneak, Masquerade, Ghost Tag
+
+## Game setup
+
+The host picks how a session runs from **Game setup** in the lobby: **Shuffle** (random minigames), **Playlist** (pick your own), or **Vote** (everyone votes between rounds). Optional **mutators** change the rules for a round (for example giant blobs or a slippery floor), and **Practice** lets you try any single minigame. The lobby itself has toys to mess with while you wait.
+
+**Settings → Quality** has Low, Medium and High; pick Low on a school laptop.
+
+Everyone needs the same version of the exe: a v0.3 game cannot be joined from v0.2.
+
+More ideas in [docs/expansion-ideas.md](docs/expansion-ideas.md).
 
 ## Building from source
 
